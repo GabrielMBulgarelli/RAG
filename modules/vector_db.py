@@ -87,6 +87,7 @@ class VectorDBManager:
             )
             # Add new documents (this will append to existing)
             self.vectorstore.add_documents(texts)
+            self.vectorstore.persist()
             logger.info("Updated existing vector database")
         else:
             # Create new database
@@ -95,6 +96,7 @@ class VectorDBManager:
                 embedding=self.embeddings,
                 persist_directory=config.vector_db_dir
             )
+            self.vectorstore.persist()
             logger.info("Created new vector database")
         
         return self.vectorstore

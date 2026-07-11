@@ -4,13 +4,13 @@ A simple Retrieval-Augmented Generation application with advanced capabilities f
 
 ## Features
 
-- 🔍 Document processing and retrieval
-- 🤖 LLM-powered question answering
-- 📚 Support for multiple document formats (PDF, TXT)
-- 💾 Vector database storage with ChromaDB
-- 🧠 Conversation memory and context awareness
-- 🌐 Web interface with Gradio
-- 📊 Document management and system monitoring
+- Document processing and retrieval
+- LLM-powered question answering
+- Support for multiple document formats (PDF, TXT)
+- Vector database storage with ChromaDB
+- Conversation memory and context awareness
+- Web interface with Gradio
+- Document management and system monitoring
 
 ## Prerequisites
 
@@ -24,7 +24,7 @@ A simple Retrieval-Augmented Generation application with advanced capabilities f
 
 1. Clone the repository:
 ```bash
-git clone <repository-url>
+git clone https://github.com/GabrielMBulgarelli/RAG
 cd RAG
 ```
 
@@ -123,10 +123,90 @@ rm -rf chroma_db/*
 
 This project is adapted from the [AI Workshop 2025 GenAI Session](https://github.com/Antonio-Tresol/ai_workshop_2025_gen_ai_session). Please refer to the original project's license terms when using this code.
 
+## Planned acceptance checklist
+
+The following items reflect the pending acceptance criteria still to be implemented.
+
+### Ingestion
+- [ ] TXT supported
+- [ ] Stable document and chunk IDs
+- [ ] Unchanged reindex creates no duplicates
+- [ ] Modified files replace stale chunks
+- [ ] Deleted files remove chunks
+- [ ] Duplicate filenames remain distinct by path
+- [ ] Failed ingestion preserves prior usable version
+- [ ] Page/filename metadata present
+- [ ] Atomic manifest writes
+- [ ] Manifest/Chroma reconciliation
+
+### Agentic workflow
+- [ ] Follow-up rewriting only when needed
+- [ ] Catalog, clarification, and out-of-scope avoid retrieval
+- [ ] Simple search uses a direct bounded path
+- [ ] Complex search may create a bounded plan
+- [ ] Strategy selection changes retrieval
+- [ ] Evidence assessment changes execution
+- [ ] Retry only when justified
+- [ ] Default retry never exceeds one
+- [ ] Every path terminates
+- [ ] Supported, limited, unsupported, clarification, catalog, and out-of-scope outcomes
+
+### Retrieval and citations
+- [ ] Semantic, BM25, and hybrid retrieval
+- [ ] Reciprocal rank fusion
+- [ ] Scores retained
+- [ ] ID-based deduplication
+- [ ] Filename filters
+- [ ] Subquery provenance
+- [ ] Every citation maps to a retrieved chunk
+- [ ] Correct filename/page
+- [ ] Unknown citation IDs rejected
+- [ ] Unsupported answers do not fabricate citations
+- [ ] No second model call invents sources/confidence
+
+### Trace
+- [ ] Structured public events
+- [ ] Counts, decisions, and durations where practical
+- [ ] No private chain-of-thought
+
+### Evaluation
+- [ ] Development and held-out splits
+- [ ] Dense, BM25, hybrid, and agentic systems
+- [ ] Recall@5, MRR@5, nDCG@5
+- [ ] Route and strategy accuracy
+- [ ] Retry precision/recall
+- [ ] Citation precision/coverage
+- [ ] Abstention/conflict accuracy
+- [ ] Termination rate
+- [ ] Mean and p95 latency
+- [ ] LLM calls per query
+- [ ] Stored experiment configuration
+- [ ] Failure taxonomy
+
+### UI
+- [ ] Gradio retained
+- [ ] Upload/index/reindex/delete/rebuild
+- [ ] Progress, status, page/chunk counts, errors
+- [ ] Clear/export chat
+- [ ] Citations and excerpts
+- [ ] Route, strategy, subqueries, retry, evidence, trace
+- [ ] Evaluation comparison and failed cases
+- [ ] Diagnostics
+- [ ] No uncalibrated confidence percentage
+- [ ] No hidden reasoning
+
+### Initial quality gates
+- [ ] Route accuracy ≥ 0.90
+- [ ] Workflow termination = 1.00
+- [ ] Citation integrity = 1.00
+- [ ] Retrieval Recall@5 ≥ 0.85
+- [ ] Unanswerable abstention accuracy ≥ 0.85
+- [ ] No path exceeds configured retry/subquery limits
+- [ ] Ordinary CI does not require Ollama
+
 ## Acknowledgments
 
 - Built with [LangChain](https://python.langchain.com/)
 - Uses [Ollama](https://ollama.com/) for local LLM
 - Interface powered by [Gradio](https://gradio.app/)
-- Based on the [AI Workshop 2025 GenAI Session](https://github.com/Antonio-Tresol/ai_workshop_2025_gen_ai_session) by Antonio Tresol
 - Special thanks to Antonio-Tresol for providing the foundation for this implementation

@@ -1,0 +1,63 @@
+[project]
+name = "rag"
+version = "0.1.0"
+description = "Local bounded Agentic RAG evaluation workbench"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "chromadb>=0.6.3,<0.7.0",
+    "gradio>=5.16.0,<6.0.0",
+    "langchain-chroma>=0.2.1,<0.3.0",
+    "langchain-community>=0.3.16,<0.4.0",
+    "langchain-core>=0.3.32,<0.4.0",
+    "langchain-ollama>=0.2.2,<0.3.0",
+    "langchain-text-splitters>=0.3.8,<0.4.0",
+    "langgraph>=0.2.73,<0.3.0",
+    "numpy",
+    "pydantic>=2.7.4,<3.0.0",
+    "pydantic-settings",
+    "pypdf>=5.2.0,<6.0.0",
+    "rank-bm25",
+]
+
+[dependency-groups]
+dev = [
+    "datasets>=5.0.0",
+    "pyright",
+    "pytest",
+    "pytest-cov",
+    "ruff",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+exclude = ["references"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501"]
+
+[tool.pyright]
+pythonVersion = "3.12"
+typeCheckingMode = "basic"
+include = ["modules", "tests"]
+exclude = ["references"]
+venvPath = "."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+addopts = "--strict-config --strict-markers --cov=modules --cov-report=term-missing --cov-fail-under=20"
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = [
+    "ollama: requires a live local Ollama service and models",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["modules"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true

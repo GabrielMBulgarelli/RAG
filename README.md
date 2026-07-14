@@ -14,10 +14,10 @@ A simple Retrieval-Augmented Generation application with advanced capabilities f
 
 ## Prerequisites
 
-- Python 3.10 or higher
+- [UV](https://docs.astral.sh/uv/)
 - [Ollama](https://ollama.com/) installed and running
 - Required models:
-  - llama3.1
+  - qwen3.5:9b
   - nomic-embed-text
 
 ## Installation
@@ -28,9 +28,10 @@ git clone https://github.com/GabrielMBulgarelli/RAG
 cd RAG
 ```
 
-2. Run the setup script:
+2. Install the managed Python interpreter and project environment:
 ```bash
-python modules/setup.py
+uv python install 3.12
+uv sync
 ```
 
 3. Install and start Ollama:
@@ -38,7 +39,7 @@ python modules/setup.py
 - Install and start the application
 - Pull required models:
 ```bash
-ollama pull llama3.1
+ollama pull qwen3.5:9b
 ollama pull nomic-embed-text
 ```
 
@@ -50,7 +51,7 @@ ollama pull nomic-embed-text
 
 2. Start the application:
 ```bash
-python modules/run.py
+uv run python -m modules.run
 ```
 
 3. Access the web interface:
@@ -61,9 +62,10 @@ python modules/run.py
 
 ```
 RAG/
-├── requirements.txt       # Project dependencies
+├── pyproject.toml         # Project metadata, dependencies, and quality configuration
+├── uv.lock                # Reproducible dependency lock
 ├── sources/              # Document storage
-├── chroma_db/           # Vector database
+├── data/chroma/          # Vector database
 ├── logs/                # Application logs
 └── modules/
     ├── app.py           # Main application
@@ -78,10 +80,9 @@ RAG/
 
 ## Configuration
 
-Edit `modules/config.py` to customize:
-- Model settings (`llm_model`, `embedding_model`, `temperature`)
-- Vector DB settings (`chunk_size`, `chunk_overlap`, `k_retrieval`)
-- Application settings (`app_title`, `app_description`)
+Copy `.env.example` to `.env` and customize the `RAG_`-prefixed settings.
+Unknown or invalid settings are rejected before Ollama or Chroma clients are
+constructed.
 
 ## Features in Detail
 
@@ -108,11 +109,9 @@ Edit `modules/config.py` to customize:
 ollama serve
 ```
 
-2. If dependencies conflict:
+2. If dependencies need to be refreshed:
 ```bash
-python -m venv venv
-.\venv\Scripts\activate
-pip install -r requirements.txt
+uv sync
 ```
 
 3. To reset the vector database:

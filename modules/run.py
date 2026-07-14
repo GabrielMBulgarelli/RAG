@@ -1,104 +1,65 @@
-#!/usr/bin/env python3
-"""
-RAG Application Runner
-Checks dependencies and starts the application
-"""
+"""Package-safe application launcher with actionable prerequisite checks."""
 
-import subprocess
+from __future__ import annotations
+
 import sys
-import os
-import time
-from pathlib import Path
+from collections.abc import Callable, Sequence
+from urllib.error import URLError
+from urllib.request import urlopen
 
-def check_requirements():
-    """Check if all requirements are met"""
-    issues = []
-    
-    # Check if requirements.txt exists
-    if not Path("requirements.txt").exists():
-        issues.append("requirements.txt not found")
-    
-    # Check if sources directory exists
-    if not Path("sources").exists():
-        issues.append("sources/ directory not found")
-    
-    # Check if Python packages are installed
-    try:
-        import langchain_community
-        import langchain_ollama
-        import chromadb
-        import gradio
-        import langgraph
-    except ImportError as e:
-        issues.append(f"Missing Python package: {str(e).split()[-1]}")
-    
-    # Check if Ollama is running
-    try:
-        import requests
-        response = requests.get("http://localhost:11434", timeout=2)
-        if response.status_code != 200:
-            issues.append("Ollama server not responding")
-    except:
-        issues.append("Ollama server not accessible")
-    
-    return issues
+from .config import Settings, config
 
-def start_ollama_if_needed():
-    """Start Ollama server if it's not running"""
-    try:
-        import requests
-        requests.get("http://localhost:11434", timeout=2)
-        print("✅ Ollama server is running")
-        return True
-    except:
-        print("🔧 Starting Ollama server...")
+
+def collect_runtime_diagnostics(
+    settings: Settings,
+    *,
+    check_ollama: bool = True,
+) -> list[str]:
+    """Return unmet runtime prerequisites without constructing service clients."""
+    diagnostics: list[str] = []
+    if check_ollama:
         try:
-            subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            time.sleep(3)  # Wait for server to start
-            
-            # Check again
-            requests.get("http://localhost:11434", timeout=2)
-            print("✅ Ollama server started")
-            return True
-        except:
-            print("❌ Failed to start Ollama server")
-            print("💡 Please run 'ollama serve' manually in another terminal")
-            return False
+            with urlopen(f"{settings.ollama_base_url.rstrip('/')}/api/tags", timeout=2):
+                pass
+        except (OSError, URLError):
+            diagnostics.append(
+                f"Ollama is unavailable at {settings.ollama_base_url}. "
+                "Start it with `ollama serve` and pull the configured models."
+            )
+    return diagnostics
 
-def main():
-    """Main runner function"""
-    print("🚀 Starting RAG Application...")
-    print("=" * 50)
-    
-    # Check requirements
-    issues = check_requirements()
-    
-    if issues:
-        print("❌ Setup issues found:")
-        for issue in issues:
-            print(f"   • {issue}")
-        print("\n💡 Run setup first:")
-        print("   python setup.py")
+
+def _print_diagnostics(diagnostics: Sequence[str]) -> None:
+    print("RAG application cannot start:", file=sys.stderr)
+    for diagnostic in diagnostics:
+        print(f"- {diagnostic}", file=sys.stderr)
+
+
+def main(
+    *,
+    settings: Settings = config,
+    check_ollama: bool = True,
+    app_runner: Callable[[], int] | None = None,
+) -> int:
+    """Validate prerequisites, then lazily import and launch the application."""
+    diagnostics = collect_runtime_diagnostics(settings, check_ollama=check_ollama)
+    if diagnostics:
+        _print_diagnostics(diagnostics)
         return 1
-    
-    # Start Ollama if needed
-    if not start_ollama_if_needed():
-        print("⚠️  Continuing without Ollama (some features may not work)")
-    
-    # Start the application
-    print("🌐 Starting web application...")
-    try:
-        from app import main as app_main
-        return app_main()
-    except ImportError:
-        print("❌ app.py not found or has import errors")
-        return 1
-    except KeyboardInterrupt:
-        print("\n👋 Application stopped by user")
-        return 0
-    except Exception as e:
-        print(f"❌ Failed to start application: {e}")
-        return 1
+
+    if app_runner is None:
+        try:
+            from .app import main as app_runner
+        except ImportError as error:
+            print(
+                "RAG application dependencies are unavailable. Run `uv sync` and retry. "
+                f"Import error: {error}",
+                file=sys.stderr,
+            )
+            return 1
+
+    return app_runner()
+
 
 if __name__ == "__main__":
-    exit(main())
+    raise SystemExit(main())

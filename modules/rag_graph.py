@@ -1,256 +1,444 @@
-from typing import TypedDict, List, Dict, Any, Annotated
+"""Bounded LangGraph workflow for the local RAG application."""
+
+from __future__ import annotations
+
+import re
+from time import perf_counter
+from typing import TypedDict, cast
+from uuid import uuid4
+
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_ollama import ChatOllama
-from langchain.prompts import ChatPromptTemplate
-from langchain.schema import BaseMessage, HumanMessage, AIMessage
-from langgraph.graph import StateGraph, END
-from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.checkpoint.memory import MemorySaver
-from pydantic import BaseModel, Field
-import json
-from datetime import datetime
+from langgraph.graph import END, START, StateGraph
 
-from config import config
-from vector_db import VectorDBManager
-from tools import get_available_tools
-from error_handler import handle_errors, logger
+from modules.citations import build_cited_context, validate_citations
+from modules.config import config
+from modules.models import (
+    CitationSource,
+    EvidenceGrade,
+    EvidenceStatus,
+    QueryDecomposition,
+    RAGResult,
+    RetrievalHit,
+    RetrievalStrategy,
+    Route,
+    RouteDecision,
+    TraceEvent,
+)
+from modules.retrieval import Retriever
+from modules.vector_db import VectorDBManager
 
-class ConversationState(TypedDict):
-    """State for the conversation graph"""
-    messages: Annotated[List[BaseMessage], "The conversation messages"]
-    user_query: str
-    retrieved_docs: List[Dict[str, Any]]
-    final_answer: str
-    conversation_history: List[Dict[str, Any]]
-    metadata: Dict[str, Any]
 
-class StructuredResponse(BaseModel):
-    """Schema for structured LLM responses"""
-    answer: str = Field(description="The main answer to the user's question")
-    confidence: float = Field(description="Confidence level (0-1) in the answer")
-    sources_used: List[str] = Field(description="List of sources used in the response")
-    follow_up_questions: List[str] = Field(description="Suggested follow-up questions")
+class RAGState(TypedDict):
+    query: str
+    history: list[dict[str, str]]
+    rewritten_query: str
+    route: Route
+    strategy: RetrievalStrategy
+    queries: list[str]
+    hits: list[RetrievalHit]
+    grade: EvidenceGrade
+    retry_count: int
+    answer: str
+    sources: list[CitationSource]
+    filters: dict[str, str]
+    trace: list[TraceEvent]
+    result: RAGResult
+
+
+def decide_after_grading(status: EvidenceStatus, retry_count: int) -> str:
+    if status in {EvidenceStatus.SUFFICIENT, EvidenceStatus.LIMITED}:
+        return "answer"
+    return "retry" if retry_count < config.max_retries else "abstain"
+
+
+def _text(response: object) -> str:
+    return str(getattr(response, "content", response)).strip()
+
+
+def is_contextual_follow_up(query: str) -> bool:
+    normalized = query.strip().lower()
+    contextual_patterns = (
+        r"^(and|also|but|then)\b",
+        r"^what about\b",
+        r"\b(it|its|they|them|their|that|those|this|these|former|latter)\b",
+    )
+    return any(re.search(pattern, normalized) for pattern in contextual_patterns)
+
+
+def _trace(state: RAGState, event: TraceEvent) -> list[TraceEvent]:
+    return [*state.get("trace", []), event]
+
 
 class RAGGraph:
-    def __init__(self, vector_db_manager: VectorDBManager):
-        self.vector_db_manager = vector_db_manager
-        self.llm = ChatOllama(
+    def __init__(self, vector_db: VectorDBManager, llm: ChatOllama | None = None):
+        self.vector_db = vector_db
+        self.llm = llm or ChatOllama(
             model=config.llm_model,
+            base_url=config.ollama_base_url,
             temperature=config.temperature,
-            base_url=config.ollama_base_url
         )
-        
-        # Set up tools
-        self.tools = get_available_tools(vector_db_manager)
-        self.llm_with_tools = self.llm.bind_tools(self.tools)
-        
-        # Create graph
-        self.graph = self._create_graph()
-        self.checkpointer = MemorySaver()
-        self.compiled_graph = self.graph.compile(checkpointer=self.checkpointer)
-    
-    def _create_graph(self) -> StateGraph:
-        """Create the conversation graph"""
-        graph = StateGraph(ConversationState)
-        
-        # Add nodes
-        graph.add_node("retrieve", self._retrieve_node)
-        graph.add_node("generate", self._generate_node)
-        graph.add_node("tools", ToolNode(self.tools))
-        graph.add_node("structured_output", self._structured_output_node)
-        
-        # Add edges
-        graph.set_entry_point("retrieve")
-        graph.add_edge("retrieve", "generate")
-        graph.add_conditional_edges(
-            "generate",
-            tools_condition,
-            {
-                "tools": "tools",
-                "end": "structured_output"
-            }
-        )
-        graph.add_edge("tools", "generate")
-        graph.add_edge("structured_output", END)
-        
-        return graph
-    
-    @handle_errors
-    def _retrieve_node(self, state: ConversationState) -> ConversationState:
-        """Retrieve relevant documents"""
-        query = state["user_query"]
-        
-        try:
-            retriever = self.vector_db_manager.get_retriever()
-            docs = retriever.get_relevant_documents(query)
-            
-            retrieved_docs = []
-            for doc in docs:
-                retrieved_docs.append({
-                    "content": doc.page_content,
-                    "metadata": doc.metadata,
-                    "source": doc.metadata.get("filename", "Unknown")
-                })
-            
-            state["retrieved_docs"] = retrieved_docs
-            logger.info(f"Retrieved {len(retrieved_docs)} documents for query: {query}")
-            
-        except Exception as e:
-            logger.error(f"Error in retrieve node: {e}")
-            state["retrieved_docs"] = []
-        
-        return state
-    
-    @handle_errors
-    def _generate_node(self, state: ConversationState) -> ConversationState:
-        """Generate response using LLM"""
-        query = state["user_query"]
-        docs = state["retrieved_docs"]
-        messages = state.get("messages", [])
-        
-        # Prepare context from retrieved documents
-        context = "\n\n".join([
-            f"Source: {doc['source']}\nContent: {doc['content']}"
-            for doc in docs[:config.k_retrieval]
-        ])
-        
-        # Create prompt
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are a helpful AI assistant with access to a knowledge base and various tools.
-            
-Use the provided context to answer questions accurately. If you need additional information 
-or want to perform specific actions, use the available tools.
+        self.retriever = Retriever(vector_db.setup())
+        self.memory: dict[str, list[dict[str, str]]] = {}
+        self.graph = self._compile()
 
-Context from knowledge base:
-{context}
+    def _structured(self, schema: type, prompt: str):
+        return self.llm.with_structured_output(schema, method="json_schema").invoke(
+            [SystemMessage(content=prompt)], think=False
+        )
 
-Guidelines:
-- Provide accurate, helpful responses based on the context
-- Use tools when appropriate to enhance your response
-- If you can't find relevant information, say so honestly
-- Include sources when referencing specific information
-- Be conversational and engaging"""),
-            ("human", "{query}")
-        ])
-        
-        # Format the prompt
-        formatted_messages = prompt.format_messages(
-            context=context,
-            query=query
-        )
-        
-        # Add conversation history
-        if messages:
-            formatted_messages = messages + formatted_messages
-        
-        # Generate response
-        response = self.llm_with_tools.invoke(formatted_messages)
-        
-        # Update messages
-        new_messages = messages + [
-            HumanMessage(content=query),
-            response
-        ]
-        state["messages"] = new_messages
-        
-        return state
-    
-    @handle_errors
-    def _structured_output_node(self, state: ConversationState) -> ConversationState:
-        """Generate structured output"""
-        messages = state["messages"]
-        docs = state["retrieved_docs"]
-        
-        if not messages:
-            state["final_answer"] = "No response generated."
-            return state
-        
-        # Get the last AI message
-        last_message = messages[-1]
-        if hasattr(last_message, 'content'):
-            answer = last_message.content
-        else:
-            answer = str(last_message)
-        
-        # Create structured response
-        sources_used = [doc["source"] for doc in docs] if docs else []
-        
-        try:
-            # Use LLM to generate structured output
-            structured_llm = self.llm.with_structured_output(StructuredResponse)
-            
-            structure_prompt = f"""
-            Based on this conversation response, create a structured output:
-            
-            Response: {answer}
-            Sources used: {sources_used}
-            
-            Provide confidence level, sources, and suggest follow-up questions.
-            """
-            
-            structured_response = structured_llm.invoke(structure_prompt)
-            
-            state["final_answer"] = structured_response.answer
-            state["metadata"] = {
-                "confidence": structured_response.confidence,
-                "sources_used": structured_response.sources_used,
-                "follow_up_questions": structured_response.follow_up_questions,
-                "timestamp": datetime.now().isoformat()
+    def _rewrite(self, state: RAGState) -> dict:
+        started = perf_counter()
+        history = state.get("history", [])
+        query = state["query"]
+        should_rewrite = bool(history) and is_contextual_follow_up(query)
+        if not should_rewrite:
+            return {
+                "rewritten_query": query,
+                "retry_count": 0,
+                "trace": _trace(
+                    state,
+                    TraceEvent(
+                        stage="rewrite",
+                        decision="not_needed",
+                        duration_ms=(perf_counter() - started) * 1000,
+                    ),
+                ),
             }
-            
-        except Exception as e:
-            logger.warning(f"Failed to generate structured output: {e}")
-            state["final_answer"] = answer
-            state["metadata"] = {
-                "sources_used": sources_used,
-                "timestamp": datetime.now().isoformat()
-            }
-        
-        return state
-    
-    @handle_errors
-    def process_query(self, query: str, conversation_id: str = "default") -> Dict[str, Any]:
-        """Process a user query through the graph"""
-        
-        # Initial state
-        initial_state = ConversationState(
-            messages=[],
-            user_query=query,
-            retrieved_docs=[],
-            final_answer="",
-            conversation_history=[],
-            metadata={}
+        transcript = "\n".join(f"{item['role']}: {item['content']}" for item in history[-6:])
+        prompt = (
+            "Rewrite the latest user question so it stands alone. Preserve its intent "
+            "and named entities. Return only the rewritten question.\n\n"
+            f"Conversation:\n{transcript}\nuser: {query}"
         )
-        
-        # Run the graph
-        config_dict = {"configurable": {"thread_id": conversation_id}}
-        
-        result = self.compiled_graph.invoke(initial_state, config=config_dict)
-        
+        rewritten = _text(self.llm.invoke([HumanMessage(content=prompt)], think=False))
         return {
-            "answer": result["final_answer"],
-            "sources": [doc["source"] for doc in result["retrieved_docs"]],
-            "metadata": result.get("metadata", {}),
-            "conversation_id": conversation_id
+            "rewritten_query": rewritten,
+            "retry_count": 0,
+            "trace": _trace(
+                state,
+                TraceEvent(
+                    stage="rewrite",
+                    decision="rewritten",
+                    duration_ms=(perf_counter() - started) * 1000,
+                ),
+            ),
         }
-    
-    def get_conversation_history(self, conversation_id: str = "default") -> List[Dict]:
-        """Get conversation history for a thread"""
-        try:
-            config_dict = {"configurable": {"thread_id": conversation_id}}
-            history = []
-            
-            for state in self.compiled_graph.get_state_history(config=config_dict):
-                if state.values.get("messages"):
-                    for msg in state.values["messages"]:
-                        if isinstance(msg, (HumanMessage, AIMessage)):
-                            history.append({
-                                "type": "human" if isinstance(msg, HumanMessage) else "ai",
-                                "content": msg.content,
-                                "timestamp": datetime.now().isoformat()
-                            })
-            
-            return history[-10:]  # Return last 10 messages
-            
-        except Exception as e:
-            logger.error(f"Error getting conversation history: {e}")
-            return []
+
+    def _route(self, state: RAGState) -> dict:
+        started = perf_counter()
+        document_count = len(self.vector_db.document_names())
+        prompt = f"""Classify this request for a local document assistant.
+Routes: catalog asks which documents are indexed; clarification is too ambiguous;
+out_of_scope is unrelated to document QA; simple_search is one direct fact;
+complex_search requires comparison, synthesis, multiple facts, or evidence from
+multiple named articles or sources. Mentions of articles or publications do not
+make a request catalog; catalog is only for listing the indexed corpus.
+Use semantic for direct searches, hybrid for keyword-sensitive or complex searches,
+and none for non-search routes. The corpus contains {document_count} documents.
+Request: {state["rewritten_query"]}"""
+        decision = cast(RouteDecision, self._structured(RouteDecision, prompt))
+        strategy = decision.strategy
+        if decision.route in {Route.CATALOG, Route.CLARIFICATION, Route.OUT_OF_SCOPE}:
+            strategy = RetrievalStrategy.NONE
+        elif decision.route == Route.COMPLEX_SEARCH:
+            strategy = RetrievalStrategy.HYBRID
+        return {
+            "route": decision.route,
+            "strategy": strategy,
+            "trace": _trace(
+                state,
+                TraceEvent(
+                    stage="route",
+                    decision=f"{decision.route.value}:{strategy.value}",
+                    duration_ms=(perf_counter() - started) * 1000,
+                ),
+            ),
+        }
+
+    def _after_route(self, state: RAGState) -> str:
+        return state["route"].value
+
+    def _direct(self, state: RAGState) -> dict:
+        answer = (
+            "Please clarify what document or topic you want me to search."
+            if state["route"] == Route.CLARIFICATION
+            else "I can only answer questions supported by the indexed documents."
+        )
+        return {
+            "answer": answer,
+            "grade": EvidenceGrade(
+                status=EvidenceStatus.INSUFFICIENT,
+                reason="No retrieval was appropriate for this route.",
+            ),
+        }
+
+    def _catalog(self, _state: RAGState) -> dict:
+        names = self.vector_db.document_names()
+        answer = (
+            "Indexed documents:\n" + "\n".join(f"- {name}" for name in names)
+            if names
+            else "No documents are indexed yet."
+        )
+        status = EvidenceStatus.SUFFICIENT if names else EvidenceStatus.INSUFFICIENT
+        return {
+            "answer": answer,
+            "grade": EvidenceGrade(status=status, reason="Catalog inspected."),
+        }
+
+    def _decompose(self, state: RAGState) -> dict:
+        started = perf_counter()
+        result = cast(
+            QueryDecomposition,
+            self._structured(
+                QueryDecomposition,
+                "Break this complex document question into one to four independent retrieval "
+                "queries. Do not answer it.\nQuestion: " + state["rewritten_query"],
+            ),
+        )
+        queries = result.queries[: config.max_subqueries]
+        return {
+            "queries": queries,
+            "trace": _trace(
+                state,
+                TraceEvent(
+                    stage="decompose",
+                    selected_count=len(queries),
+                    duration_ms=(perf_counter() - started) * 1000,
+                ),
+            ),
+        }
+
+    def _retrieve(self, state: RAGState) -> dict:
+        started = perf_counter()
+        queries = state.get("queries") or [state["rewritten_query"]]
+        by_id: dict[str, RetrievalHit] = {}
+        candidate_count = 0
+        for query in queries:
+            for hit in self.retriever.search(
+                query,
+                strategy=state["strategy"].value,
+                k=config.max_context_chunks,
+                filters=state.get("filters"),
+            ):
+                candidate_count += 1
+                hit = hit.model_copy(update={"subqueries": sorted({*hit.subqueries, query})})
+                old = by_id.get(hit.chunk_id)
+                if old is None or hit.score > old.score:
+                    by_id[hit.chunk_id] = hit
+                elif old is not None:
+                    by_id[hit.chunk_id] = old.model_copy(
+                        update={"subqueries": sorted({*old.subqueries, *hit.subqueries})}
+                    )
+        hits = sorted(by_id.values(), key=lambda item: (-item.score, item.chunk_id))
+        selected = hits[: config.max_context_chunks]
+        return {
+            "hits": selected,
+            "trace": _trace(
+                state,
+                TraceEvent(
+                    stage="retrieve",
+                    decision=state["strategy"].value,
+                    candidate_count=candidate_count,
+                    selected_count=len(selected),
+                    retry_count=state.get("retry_count", 0),
+                    duration_ms=(perf_counter() - started) * 1000,
+                ),
+            ),
+        }
+
+    def _grade(self, state: RAGState) -> dict:
+        started = perf_counter()
+        hits = state.get("hits", [])
+        if not hits:
+            return {
+                "grade": EvidenceGrade(status=EvidenceStatus.INSUFFICIENT, reason="No evidence."),
+                "trace": _trace(
+                    state,
+                    TraceEvent(
+                        stage="grade",
+                        decision=EvidenceStatus.INSUFFICIENT.value,
+                        candidate_count=0,
+                        retry_count=state.get("retry_count", 0),
+                        duration_ms=(perf_counter() - started) * 1000,
+                    ),
+                ),
+            }
+        context, _ = build_cited_context(hits)
+        grade = cast(
+            EvidenceGrade,
+            self._structured(
+                EvidenceGrade,
+                f"""Grade whether the evidence answers the question. Use sufficient for full
+support, limited for a useful partial answer, and insufficient otherwise. List only
+relevant [C#] labels. Question: {state["rewritten_query"]}\nEvidence:\n{context}""",
+            ),
+        )
+        return {
+            "grade": grade,
+            "trace": _trace(
+                state,
+                TraceEvent(
+                    stage="grade",
+                    decision=grade.status.value,
+                    candidate_count=len(hits),
+                    selected_count=len(grade.relevant_labels),
+                    retry_count=state.get("retry_count", 0),
+                    duration_ms=(perf_counter() - started) * 1000,
+                ),
+            ),
+        }
+
+    def _after_grade(self, state: RAGState) -> str:
+        return decide_after_grading(state["grade"].status, state["retry_count"])
+
+    def _refine(self, state: RAGState) -> dict:
+        started = perf_counter()
+        prompt = (
+            "Rewrite as one more precise retrieval query. Return only the query.\n"
+            + state["rewritten_query"]
+        )
+        refined = _text(self.llm.invoke([HumanMessage(content=prompt)], think=False))
+        retry_count = state["retry_count"] + 1
+        return {
+            "queries": [refined],
+            "retry_count": retry_count,
+            "trace": _trace(
+                state,
+                TraceEvent(
+                    stage="retry",
+                    decision="refine_query",
+                    retry_count=retry_count,
+                    duration_ms=(perf_counter() - started) * 1000,
+                ),
+            ),
+        }
+
+    def _answer(self, state: RAGState) -> dict:
+        context, sources = build_cited_context(state["hits"])
+        qualifier = (
+            "Clearly say the answer is limited. "
+            if state["grade"].status == EvidenceStatus.LIMITED
+            else ""
+        )
+        prompt = f"""Answer only from the evidence. {qualifier}Cite every factual claim with
+its exact [C#] label. Do not invent labels, filenames, confidence, or a sources list.
+Question: {state["rewritten_query"]}\nEvidence:\n{context}"""
+        return {
+            "answer": _text(self.llm.invoke([HumanMessage(content=prompt)], think=False)),
+            "sources": sources,
+        }
+
+    def _abstain(self, _state: RAGState) -> dict:
+        return {
+            "answer": "I could not find enough evidence in the indexed documents to answer.",
+            "sources": [],
+        }
+
+    def _validate(self, state: RAGState) -> dict:
+        started = perf_counter()
+        answer, cited = validate_citations(state["answer"], state.get("sources", []))
+        if state["route"] == Route.CLARIFICATION:
+            termination = "clarification"
+        elif state["route"] == Route.CATALOG:
+            termination = "catalog"
+        elif state["route"] == Route.OUT_OF_SCOPE:
+            termination = "out_of_scope"
+        elif state["grade"].status == EvidenceStatus.INSUFFICIENT:
+            termination = "unsupported"
+        elif state["grade"].status == EvidenceStatus.LIMITED:
+            termination = "limited"
+        else:
+            termination = "supported"
+        trace = _trace(
+            state,
+            TraceEvent(
+                stage="terminate",
+                decision=state["grade"].status.value,
+                retry_count=state.get("retry_count", 0),
+                duration_ms=(perf_counter() - started) * 1000,
+                termination=termination,
+            ),
+        )
+        result = RAGResult(
+            answer=answer,
+            standalone_query=state.get("rewritten_query", state.get("query", "")),
+            route=state["route"],
+            strategy=state["strategy"],
+            retry_count=state.get("retry_count", 0),
+            evidence_status=state["grade"].status,
+            sources=cited,
+            subqueries=state.get("queries", []),
+            retrieval_hits=state.get("hits", []),
+            trace=trace,
+        )
+        return {"answer": answer, "sources": cited, "trace": trace, "result": result}
+
+    def _compile(self):
+        graph = StateGraph(RAGState)
+        for name, node in {
+            "rewrite": self._rewrite,
+            "route_request": self._route,
+            "catalog": self._catalog,
+            "direct": self._direct,
+            "decompose": self._decompose,
+            "retrieve": self._retrieve,
+            "grade_evidence": self._grade,
+            "refine": self._refine,
+            "generate_answer": self._answer,
+            "abstain": self._abstain,
+            "validate": self._validate,
+        }.items():
+            graph.add_node(name, node)
+        graph.add_edge(START, "rewrite")
+        graph.add_edge("rewrite", "route_request")
+        graph.add_conditional_edges(
+            "route_request",
+            self._after_route,
+            {
+                "catalog": "catalog",
+                "clarification": "direct",
+                "out_of_scope": "direct",
+                "simple_search": "retrieve",
+                "complex_search": "decompose",
+            },
+        )
+        graph.add_edge("decompose", "retrieve")
+        graph.add_edge("retrieve", "grade_evidence")
+        graph.add_conditional_edges(
+            "grade_evidence",
+            self._after_grade,
+            {
+                "answer": "generate_answer",
+                "retry": "refine",
+                "abstain": "abstain",
+            },
+        )
+        graph.add_edge("refine", "retrieve")
+        for node in ("catalog", "direct", "generate_answer", "abstain"):
+            graph.add_edge(node, "validate")
+        graph.add_edge("validate", END)
+        return graph.compile(checkpointer=MemorySaver())
+
+    def process_query(
+        self,
+        query: str,
+        session_id: str | None = None,
+        filters: dict[str, str] | None = None,
+    ) -> dict:
+        session_id = session_id or str(uuid4())
+        history = self.memory.setdefault(session_id, [])
+        state = self.graph.invoke(
+            {"query": query, "history": history, "filters": filters or {}, "trace": []},
+            config={"configurable": {"thread_id": session_id}},
+        )
+        result: RAGResult = state["result"]
+        history.extend(
+            [{"role": "user", "content": query}, {"role": "assistant", "content": result.answer}]
+        )
+        del history[:-12]
+        return result.model_dump(mode="json")
+
+    def clear(self, session_id: str) -> None:
+        self.memory.pop(session_id, None)

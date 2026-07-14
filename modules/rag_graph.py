@@ -26,7 +26,7 @@ from modules.models import (
     RouteDecision,
     TraceEvent,
 )
-from modules.retrieval import Retriever
+from modules.retrieval import Retriever, select_candidates
 from modules.vector_db import VectorDBManager
 
 
@@ -214,25 +214,55 @@ Request: {state["rewritten_query"]}"""
         started = perf_counter()
         queries = state.get("queries") or [state["rewritten_query"]]
         by_id: dict[str, RetrievalHit] = {}
-        candidate_count = 0
+        retrieved_count = 0
         for query in queries:
-            for hit in self.retriever.search(
+            batch = self.retriever.search(
                 query,
                 strategy=state["strategy"].value,
-                k=config.max_context_chunks,
+                semantic_k=config.semantic_candidates,
+                sparse_k=config.sparse_candidates,
+                fusion_limit=config.max_candidates,
+                selection_limit=config.max_candidates,
                 filters=state.get("filters"),
-            ):
-                candidate_count += 1
+            )
+            retrieved_count += batch.retrieved_count
+            for hit in batch.hits:
                 hit = hit.model_copy(update={"subqueries": sorted({*hit.subqueries, query})})
                 old = by_id.get(hit.chunk_id)
-                if old is None or hit.score > old.score:
+                if old is None:
                     by_id[hit.chunk_id] = hit
-                elif old is not None:
+                else:
+                    component_values = {
+                        "semantic_score": max(
+                            value
+                            for value in (old.semantic_score, hit.semantic_score)
+                            if value is not None
+                        )
+                        if old.semantic_score is not None or hit.semantic_score is not None
+                        else None,
+                        "sparse_score": max(
+                            value
+                            for value in (old.sparse_score, hit.sparse_score)
+                            if value is not None
+                        )
+                        if old.sparse_score is not None or hit.sparse_score is not None
+                        else None,
+                        "fused_score": max(
+                            value
+                            for value in (old.fused_score, hit.fused_score)
+                            if value is not None
+                        )
+                        if old.fused_score is not None or hit.fused_score is not None
+                        else None,
+                    }
                     by_id[hit.chunk_id] = old.model_copy(
-                        update={"subqueries": sorted({*old.subqueries, *hit.subqueries})}
+                        update={
+                            "score": max(old.score, hit.score),
+                            **component_values,
+                            "subqueries": sorted({*old.subqueries, *hit.subqueries}),
+                        }
                     )
-        hits = sorted(by_id.values(), key=lambda item: (-item.score, item.chunk_id))
-        selected = hits[: config.max_context_chunks]
+        selected = select_candidates(list(by_id.values()), limit=config.max_context_chunks)
         return {
             "hits": selected,
             "trace": _trace(
@@ -240,7 +270,9 @@ Request: {state["rewritten_query"]}"""
                 TraceEvent(
                     stage="retrieve",
                     decision=state["strategy"].value,
-                    candidate_count=candidate_count,
+                    candidate_count=retrieved_count,
+                    retrieved_count=retrieved_count,
+                    fused_count=len(by_id),
                     selected_count=len(selected),
                     retry_count=state.get("retry_count", 0),
                     duration_ms=(perf_counter() - started) * 1000,

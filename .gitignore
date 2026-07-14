@@ -1,14 +1,23 @@
 # Python
 __pycache__/
+**/__pycache__/
 *.py[cod]
 *$py.class
+.pytest_cache/
+.ruff_cache/
+.pyright/
+.coverage
+htmlcov/
 
 # Virtual Environment
 venv/
 env/
+.venv/
 
 # ChromaDB
 chroma_db/
+data/*
+!data/.gitkeep
 
 # IDE
 .vscode/
@@ -17,6 +26,22 @@ chroma_db/
 # Logs
 logs/
 *.log
+
+# Evaluation artifacts
+/evals/
+/evals/results/
+
+# Agent project notes
+/ACCEPTANCE_CRITERIA.md
+/CODEX.md
+/GITIGNORE_ADDITIONS.md
+/IMPLEMENTATION_PLAN.md
+/REFERENCE_GUIDE.md
+/REQUIREMENTS.md
+/START_CODEX.md
+
+# Documentation outputs
+/docs/
 
 # Environment variables
 .env

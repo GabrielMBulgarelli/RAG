@@ -52,13 +52,23 @@ class RetrievalHit(BaseModel):
     semantic_score: float | None = None
     sparse_score: float | None = None
     fused_score: float | None = None
+    selection_score: float | None = None
     subqueries: list[str] = Field(default_factory=list)
+
+
+class RetrievalBatch(BaseModel):
+    hits: list[RetrievalHit] = Field(default_factory=list)
+    retrieved_count: int = Field(ge=0)
+    fused_count: int = Field(ge=0)
+    selected_count: int = Field(ge=0)
 
 
 class TraceEvent(BaseModel):
     stage: str
     decision: str | None = None
     candidate_count: int | None = Field(default=None, ge=0)
+    retrieved_count: int | None = Field(default=None, ge=0)
+    fused_count: int | None = Field(default=None, ge=0)
     selected_count: int | None = Field(default=None, ge=0)
     retry_count: int = Field(default=0, ge=0, le=1)
     duration_ms: float = Field(ge=0)

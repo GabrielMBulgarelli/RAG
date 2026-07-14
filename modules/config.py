@@ -1,46 +1,75 @@
-import os
-from dataclasses import dataclass
-from typing import Optional
+"""Validated application settings."""
+
 from pathlib import Path
+from typing import Self
+from urllib.parse import urlparse
 
-@dataclass
-class RAGConfig:
-    # Model settings
-    llm_model: str = "llama3.1"
+from pydantic import Field, field_validator, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+class Settings(BaseSettings):
+    """Strict settings loaded from ``RAG_`` environment variables."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="RAG_",
+        env_file=PROJECT_ROOT / ".env",
+        env_file_encoding="utf-8",
+        extra="forbid",
+        strict=True,
+        validate_default=True,
+    )
+
+    ollama_base_url: str = "http://localhost:11434"
+    llm_model: str = "qwen3.5:9b"
     embedding_model: str = "nomic-embed-text"
-    temperature: float = 0.7
-    
-    # Vector DB settings
-    chunk_size: int = 500
-    chunk_overlap: int = 50
-    k_retrieval: int = 3
-    
-    # Paths
-    root_dir: Path = Path(__file__).parent.parent
-    sources_dir: str = str(root_dir / "sources")
-    vector_db_dir: str = str(root_dir / "chroma_db")
-    logs_dir: str = str(root_dir / "logs")
+    temperature: float = Field(default=0.7, ge=0.0, le=2.0)
 
-    # App settings
+    sources_dir: Path = PROJECT_ROOT / "sources"
+    data_dir: Path = PROJECT_ROOT / "data"
+    chroma_dir: Path = PROJECT_ROOT / "data" / "chroma"
+    manifest_path: Path = PROJECT_ROOT / "data" / "manifest.json"
+    trace_dir: Path = PROJECT_ROOT / "data" / "traces"
+    logs_dir: Path = PROJECT_ROOT / "logs"
+
+    chunk_size: int = Field(default=700, gt=0)
+    chunk_overlap: int = Field(default=100, ge=0)
+    semantic_candidates: int = Field(default=10, gt=0)
+    sparse_candidates: int = Field(default=10, gt=0)
+    max_candidates: int = Field(default=20, gt=0)
+    max_context_chunks: int = Field(default=6, gt=0)
+    max_subqueries: int = Field(default=4, ge=1, le=4)
+    max_retries: int = Field(default=1, ge=0, le=1)
+
+    gradio_host: str = "127.0.0.1"
+    gradio_port: int = Field(default=7860, ge=1, le=65535)
+    gradio_share: bool = False
+    log_level: str = "INFO"
+
     app_title: str = "Complete RAG Assistant"
     app_description: str = "AI assistant with advanced RAG capabilities"
-    
-    # Ollama settings
-    ollama_base_url: str = "http://localhost:11434"
-    
-    @classmethod
-    def from_env(cls) -> 'RAGConfig':
-        """Load configuration from environment variables"""
-        return cls(
-            llm_model=os.getenv('LLM_MODEL', cls.llm_model),
-            embedding_model=os.getenv('EMBEDDING_MODEL', cls.embedding_model),
-            temperature=float(os.getenv('TEMPERATURE', cls.temperature)),
-            chunk_size=int(os.getenv('CHUNK_SIZE', cls.chunk_size)),
-            chunk_overlap=int(os.getenv('CHUNK_OVERLAP', cls.chunk_overlap)),
-            k_retrieval=int(os.getenv('K_RETRIEVAL', cls.k_retrieval)),
-            sources_dir=os.getenv('SOURCES_DIR', cls.sources_dir),
-            vector_db_dir=os.getenv('VECTOR_DB_DIR', cls.vector_db_dir),
-            ollama_base_url=os.getenv('OLLAMA_BASE_URL', cls.ollama_base_url)
-        )
+    k_retrieval: int = Field(default=3, gt=0)
 
-config = RAGConfig.from_env()
+    @field_validator("ollama_base_url")
+    @classmethod
+    def validate_ollama_base_url(cls, value: str) -> str:
+        parsed = urlparse(value)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("ollama_base_url must be an HTTP(S) URL")
+        return value.rstrip("/")
+
+    @model_validator(mode="after")
+    def validate_chunk_overlap(self) -> Self:
+        if self.chunk_overlap >= self.chunk_size:
+            raise ValueError("chunk_overlap must be smaller than chunk_size")
+        return self
+
+    @property
+    def vector_db_dir(self) -> str:
+        """Compatibility path for the existing Chroma integration."""
+        return str(self.chroma_dir)
+
+
+config = Settings()

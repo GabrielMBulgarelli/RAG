@@ -31,7 +31,8 @@ DOCUMENT_HEADERS = [
 TRACE_HEADERS = [
     "Stage",
     "Decision",
-    "Candidates",
+    "Retrieved",
+    "Fused",
     "Selected",
     "Retry",
     "Termination",
@@ -44,6 +45,7 @@ SCORE_HEADERS = [
     "Semantic",
     "Sparse",
     "Fused",
+    "Selection",
     "Matched subqueries",
 ]
 METRIC_NAMES = [
@@ -224,7 +226,10 @@ class RAGApplication:
             [
                 event.get("stage", ""),
                 event.get("decision") or "",
-                event.get("candidate_count") if event.get("candidate_count") is not None else "",
+                event.get("retrieved_count", event.get("candidate_count"))
+                if event.get("retrieved_count", event.get("candidate_count")) is not None
+                else "",
+                event.get("fused_count") if event.get("fused_count") is not None else "",
                 event.get("selected_count") if event.get("selected_count") is not None else "",
                 event.get("retry_count", 0),
                 event.get("termination") or "",
@@ -243,6 +248,7 @@ class RAGApplication:
                 hit.get("semantic_score"),
                 hit.get("sparse_score"),
                 hit.get("fused_score"),
+                hit.get("selection_score"),
                 ", ".join(hit.get("subqueries", [])),
             ]
             for hit in result.get("retrieval_hits", [])

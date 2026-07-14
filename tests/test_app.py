@@ -83,7 +83,15 @@ def test_export_is_public_and_trace_and_scores_preserve_observability(tmp_path: 
         "retry_count": 1,
         "evidence_status": "limited",
         "sources": [{"label": "C1", "chunk_id": "c1", "filename": "a.pdf", "page": 2}],
-        "trace": [{"stage": "retrieve", "duration_ms": 12.5}],
+        "trace": [
+            {
+                "stage": "retrieve",
+                "retrieved_count": 20,
+                "fused_count": 12,
+                "selected_count": 6,
+                "duration_ms": 12.5,
+            }
+        ],
         "retrieval_hits": [
             {
                 "chunk_id": "c1",
@@ -92,6 +100,7 @@ def test_export_is_public_and_trace_and_scores_preserve_observability(tmp_path: 
                 "semantic_score": 0.8,
                 "sparse_score": 4.0,
                 "fused_score": 0.03,
+                "selection_score": 0.77,
                 "subqueries": ["one"],
             }
         ],
@@ -111,8 +120,9 @@ def test_export_is_public_and_trace_and_scores_preserve_observability(tmp_path: 
         "public_trace",
     }
     assert "prompt" not in json.dumps(exported)
-    assert app.trace_rows(result) == [["retrieve", "", "", "", 0, "", 12.5]]
+    assert app.trace_rows(result) == [["retrieve", "", 20, 12, 6, 0, "", 12.5]]
     assert app.score_rows(result)[0][3:6] == [0.8, 4.0, 0.03]
+    assert app.score_rows(result)[0][6] == 0.77
     assert app.score_rows(result)[0][-1] == "one"
 
 

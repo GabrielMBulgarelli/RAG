@@ -176,6 +176,8 @@ class RAGApplication:
                 "Select a document ID to delete.",
                 [],
                 self.document_selector_update(),
+                "",
+                gr.update(visible=False),
             )
         deleted = self.vector_db.delete_document(document_id)
         self._reset_graph()
@@ -184,7 +186,28 @@ class RAGApplication:
             if deleted
             else f"Document {document_id} was not found."
         )
-        return self.document_rows(), status, [], self.document_selector_update()
+        return (
+            self.document_rows(),
+            status,
+            [],
+            self.document_selector_update(),
+            "",
+            gr.update(visible=False),
+        )
+
+    def prepare_deletion(self, document_id: str | None):
+        if not document_id:
+            return "Select a document before reviewing deletion.", gr.update(visible=False)
+        record = self.vector_db.manifest().documents.get(document_id)
+        filename = record.filename if record else document_id
+        return (
+            f"Delete **{filename}** (`{document_id}`) and its indexed chunks?",
+            gr.update(visible=True),
+        )
+
+    @staticmethod
+    def cancel_deletion():
+        return "", gr.update(visible=False)
 
     def rebuild_index(self, progress: gr.Progress = gr.Progress(track_tqdm=False)):
         progress(None, desc="Rebuilding collection, parsing and chunking documents")
@@ -320,7 +343,10 @@ class RAGApplication:
             error = f"{type(exc).__name__}: {exc}"
             messages = history + [
                 {"role": "user", "content": message},
-                {"role": "assistant", "content": "The local RAG service is unavailable. Refresh Diagnostics and retry."},
+                {
+                    "role": "assistant",
+                    "content": "The local RAG service is unavailable. Refresh Diagnostics and retry.",
+                },
             ]
             return "", messages, {}, self.answer_status({}, error=error), error, [], [], []
         result.setdefault("standalone_query", message.strip())
@@ -359,7 +385,11 @@ class RAGApplication:
             return f"❌ **Unavailable.** The query could not complete: {error}"
         evidence = result.get("evidence_status")
         termination = next(
-            (event.get("termination") for event in reversed(result.get("trace", [])) if event.get("termination")),
+            (
+                event.get("termination")
+                for event in reversed(result.get("trace", []))
+                if event.get("termination")
+            ),
             None,
         )
         if evidence == "sufficient" or termination == "supported":
@@ -444,7 +474,12 @@ class RAGApplication:
             else ([], [], "No stored evaluation result exists yet.")
         )
 
-    def run_evaluation_ui(self, split: str, systems: list[str] | str):
+    def run_evaluation_ui(self, split: str, systems: list[str] | str | None):
+        if not systems:
+            return [], [], "Select at least one evaluation system."
+        requested = [systems] if isinstance(systems, str) else list(systems)
+        if not requested:
+            return [], [], "Select at least one evaluation system."
         dataset = PROJECT_ROOT / "evals" / "mvp_cases.jsonl"
         if "REVIEW_REQUIRED_" in dataset.read_text(encoding="utf-8"):
             return (
@@ -452,7 +487,7 @@ class RAGApplication:
                 [],
                 "Replace `REVIEW_REQUIRED_*` gold chunk IDs after indexing the reviewed corpus before live evaluation.",
             )
-        selected = list(SYSTEMS) if systems == "all" or "all" in systems else list(systems)
+        selected = list(SYSTEMS) if "all" in requested else requested
         try:
             output = run_evaluation(dataset, selected, split)  # type: ignore[arg-type]
         except (RuntimeError, ValueError) as exc:
@@ -566,8 +601,13 @@ class RAGApplication:
                     label="Document ID to delete", choices=[row[2] for row in self.document_rows()]
                 )
                 with gr.Row():
-                    delete_button = gr.Button("Delete selected document")
+                    delete_button = gr.Button("Review deletion")
                     refresh_button = gr.Button("Refresh document status")
+                with gr.Group(visible=False) as delete_confirmation:
+                    delete_confirmation_text = gr.Markdown()
+                    with gr.Row():
+                        cancel_delete = gr.Button("Cancel")
+                        confirm_delete = gr.Button("Confirm deletion", variant="stop")
                 ingestion_status = gr.Markdown()
                 errors = gr.Dataframe(
                     headers=["Document", "Operation", "Error type", "Message"], interactive=False
@@ -637,11 +677,26 @@ class RAGApplication:
             rebuild_button.click(self.rebuild_index, None, document_outputs)
             reconcile_button.click(self.reconcile_manifest_index, None, document_outputs)
             delete_button.click(
-                self.delete_selected, selected_id, document_outputs
+                self.prepare_deletion,
+                selected_id,
+                [delete_confirmation_text, delete_confirmation],
             )
-            refresh_button.click(
-                self.refresh_documents, None, [documents, readiness, selected_id]
+            cancel_delete.click(
+                self.cancel_deletion,
+                None,
+                [delete_confirmation_text, delete_confirmation],
             )
+            selected_id.change(
+                self.cancel_deletion,
+                None,
+                [delete_confirmation_text, delete_confirmation],
+            )
+            confirm_delete.click(
+                self.delete_selected,
+                selected_id,
+                [*document_outputs, delete_confirmation_text, delete_confirmation],
+            )
+            refresh_button.click(self.refresh_documents, None, [documents, readiness, selected_id])
             for trigger in (send.click, message.submit):
                 trigger(
                     self.chat,

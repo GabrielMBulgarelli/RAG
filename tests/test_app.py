@@ -61,11 +61,13 @@ def test_document_callbacks_delete_reindex_and_rebuild(tmp_path: Path) -> None:
     (tmp_path / "manual.txt").write_text("changed", encoding="utf-8")
     app = RAGApplication(vector_db=manager)  # type: ignore[arg-type]
 
-    rows, status, _, selector = app.delete_selected("doc-1")
+    rows, status, _, selector, confirmation, confirmation_update = app.delete_selected("doc-1")
     assert rows == []
     assert selector["choices"] == []
     assert manager.deleted == ["doc-1"]
     assert "Deleted" in status
+    assert confirmation == ""
+    assert confirmation_update["visible"] is False
 
     manager.deleted.clear()
     rows, status, errors, selector = app.reindex_changed()
@@ -186,9 +188,7 @@ def test_answer_status_distinguishes_supported_abstention_and_errors(tmp_path: P
     app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
 
     assert "Supported" in app.answer_status({"evidence_status": "sufficient"})
-    assert "Abstention" in app.answer_status(
-        {"evidence_status": "insufficient", "trace": []}
-    )
+    assert "Abstention" in app.answer_status({"evidence_status": "insufficient", "trace": []})
     assert "Unavailable" in app.answer_status({}, error="connection refused")
 
 
@@ -201,6 +201,57 @@ def test_reconciliation_action_refreshes_document_controls(tmp_path: Path) -> No
     assert "1 orphan" in status
     assert errors == []
     assert selector["choices"] == ["doc-1"]
+
+
+def test_document_deletion_requires_review_and_confirmation(tmp_path: Path) -> None:
+    manager = FakeManager(tmp_path)
+    app = RAGApplication(vector_db=manager)  # type: ignore[arg-type]
+
+    confirmation, confirmation_update = app.prepare_deletion("doc-1")
+    assert "manual.txt" in confirmation
+    assert confirmation_update["visible"] is True
+    assert manager.deleted == []
+
+    confirmation, confirmation_update = app.cancel_deletion()
+    assert confirmation == ""
+    assert confirmation_update["visible"] is False
+    assert manager.deleted == []
+
+    app.delete_selected("doc-1")
+    assert manager.deleted == ["doc-1"]
+
+
+def test_evaluation_selection_handles_empty_and_scalar_values(tmp_path: Path, monkeypatch) -> None:
+    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+    calls: list[tuple[Path, list[str], str]] = []
+
+    def fake_run_evaluation(dataset: Path, systems: list[str], split: str) -> Path:
+        calls.append((dataset, systems, split))
+        return tmp_path / "result"
+
+    monkeypatch.setattr(app_module, "run_evaluation", fake_run_evaluation)
+    monkeypatch.setattr(
+        app,
+        "load_evaluation_result",
+        lambda _path: ([["dense"]], [], "Loaded evaluation."),
+    )
+
+    for selection in (None, [], ""):
+        metrics, failures, status = app.run_evaluation_ui("development", selection)
+        assert metrics == []
+        assert failures == []
+        assert "select at least one" in status.lower()
+    assert calls == []
+
+    monkeypatch.setattr(app_module, "PROJECT_ROOT", tmp_path)
+    dataset = tmp_path / "evals" / "mvp_cases.jsonl"
+    dataset.parent.mkdir(parents=True)
+    dataset.write_text("{}\n", encoding="utf-8")
+
+    metrics, _, status = app.run_evaluation_ui("development", "dense")
+    assert metrics == [["dense"]]
+    assert "Loaded" in status
+    assert calls == [(dataset, ["dense"], "development")]
 
 
 def test_evaluation_tables_and_diagnostics(tmp_path: Path) -> None:
@@ -230,9 +281,7 @@ def test_evaluation_tables_and_diagnostics(tmp_path: Path) -> None:
     )
 
 
-def test_latest_evaluation_finds_the_newest_valid_nested_run(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_latest_evaluation_finds_the_newest_valid_nested_run(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(app_module, "PROJECT_ROOT", tmp_path)
     results = tmp_path / "evals" / "results"
 

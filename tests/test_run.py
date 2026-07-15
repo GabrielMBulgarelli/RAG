@@ -75,3 +75,25 @@ def test_main_runs_injected_application_after_prerequisites_pass(tmp_path: Path)
 
     assert exit_code == 0
     assert calls == ["launched"]
+
+
+def test_main_launches_ui_when_ollama_is_unavailable(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    settings = Settings(
+        sources_dir=tmp_path / "sources",
+        _env_file=None,  # pyright: ignore[reportCallIssue]
+    )
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        run,
+        "collect_runtime_diagnostics",
+        lambda *_args, **_kwargs: ["Ollama is unavailable."],
+    )
+
+    exit_code = run.main(settings=settings, app_runner=lambda: calls.append("launched") or 0)
+
+    assert exit_code == 0
+    assert calls == ["launched"]
+    assert "started with limited readiness" in capsys.readouterr().err

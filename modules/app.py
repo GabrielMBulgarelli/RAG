@@ -100,6 +100,10 @@ class RAGApplication:
             for record in sorted(manifest.documents.values(), key=lambda item: item.relative_path)
         ]
 
+    def document_selector_update(self) -> dict[str, Any]:
+        choices = [row[2] for row in self.document_rows()]
+        return gr.update(choices=choices, value=None)
+
     @staticmethod
     def error_rows(errors: list[Any]) -> list[list[str]]:
         return [
@@ -133,6 +137,7 @@ class RAGApplication:
             f"Indexed {len(paths) - len(errors)} document(s), {total_chunks} chunks.",
             self.error_rows(errors),
             self.readiness(),
+            self.document_selector_update(),
         )
 
     def reindex_changed(self, progress: gr.Progress = gr.Progress(track_tqdm=False)):
@@ -161,11 +166,17 @@ class RAGApplication:
             self.document_rows(),
             f"Reindexed {len(changed) - len(errors)} changed document(s).",
             self.error_rows(errors),
+            self.document_selector_update(),
         )
 
     def delete_selected(self, document_id: str | None):
         if not document_id:
-            return self.document_rows(), "Select a document ID to delete.", []
+            return (
+                self.document_rows(),
+                "Select a document ID to delete.",
+                [],
+                self.document_selector_update(),
+            )
         deleted = self.vector_db.delete_document(document_id)
         self._reset_graph()
         status = (
@@ -173,14 +184,37 @@ class RAGApplication:
             if deleted
             else f"Document {document_id} was not found."
         )
-        return self.document_rows(), status, []
+        return self.document_rows(), status, [], self.document_selector_update()
 
     def rebuild_index(self, progress: gr.Progress = gr.Progress(track_tqdm=False)):
         progress(None, desc="Rebuilding collection, parsing and chunking documents")
         count = self.vector_db.rebuild()
         progress(None, desc="Embedding, upserting and updating manifest")
         self._reset_graph()
-        return self.document_rows(), f"Rebuilt complete index with {count} chunks.", []
+        return (
+            self.document_rows(),
+            f"Rebuilt complete index with {count} chunks.",
+            [],
+            self.document_selector_update(),
+        )
+
+    def reconcile_manifest_index(self):
+        try:
+            result = self.vector_db.reconcile_index()
+            status = (
+                "Manifest/index reconciliation checked: "
+                f"{len(result.missing_chunk_ids)} missing, "
+                f"{len(result.orphan_chunk_ids)} orphan, "
+                f"{len(result.duplicate_chunk_ids)} duplicate, "
+                f"{len(result.missing_source_files)} missing source, and "
+                f"{len(result.incompatible_document_ids)} incompatible document ID(s)."
+            )
+        except Exception as exc:
+            status = f"Reconciliation failed: {type(exc).__name__}: {exc}"
+        return self.document_rows(), status, [], self.document_selector_update()
+
+    def refresh_documents(self):
+        return self.document_rows(), self.readiness(), self.document_selector_update()
 
     def _ollama_info(self) -> dict[str, Any]:
         try:
@@ -204,6 +238,28 @@ class RAGApplication:
             chunks, documents = 0, 0
         return f"Ollama: **{'ready' if info['reachable'] else 'unavailable'}** · Index: **{chunks} chunks** · Documents: **{documents}**"
 
+    def preflight(self, ollama: dict[str, Any] | None = None):
+        rows = self.diagnostic_rows(ollama=ollama)
+        blocking = [row for row in rows if row[1] == "error"]
+        ready = not blocking
+        if ready:
+            summary = "✅ **Ready for questions.** Ollama, required models, index, and graph are available."
+        else:
+            actions: list[str] = []
+            checks = {row[0] for row in blocking}
+            if "Ollama connectivity" in checks:
+                actions.append(f"start Ollama with `ollama serve` at `{config.ollama_base_url}`")
+            for label, model in (
+                ("Chat model", config.llm_model),
+                ("Embedding model", config.embedding_model),
+            ):
+                if label in checks:
+                    actions.append(f"install `{model}` with `ollama pull {model}`")
+            if checks - {"Ollama connectivity", "Chat model", "Embedding model"}:
+                actions.append("review Diagnostics and rebuild or reconcile the local index")
+            summary = "⛔ **Not ready for questions.** " + "; ".join(actions) + "."
+        return summary, rows, gr.update(interactive=ready), gr.update(interactive=ready)
+
     @staticmethod
     def source_rows(result: dict[str, Any]) -> list[list[Any]]:
         hits = {hit.get("chunk_id"): hit for hit in result.get("retrieval_hits", [])}
@@ -216,6 +272,7 @@ class RAGApplication:
                 hits.get(source.get("chunk_id"), {}).get("semantic_score"),
                 hits.get(source.get("chunk_id"), {}).get("sparse_score"),
                 hits.get(source.get("chunk_id"), {}).get("fused_score"),
+                hits.get(source.get("chunk_id"), {}).get("selection_score"),
             ]
             for source in result.get("sources", [])
         ]
@@ -256,8 +313,16 @@ class RAGApplication:
 
     def chat(self, message: str, history: list[dict[str, str]], session_id: str):
         if not message.strip():
-            return "", history, {}, "Enter a question.", [], [], []
-        result = self._graph().process_query(message.strip(), session_id)
+            return "", history, {}, "ℹ️ **No answer yet.**", "Enter a question.", [], [], []
+        try:
+            result = self._graph().process_query(message.strip(), session_id)
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
+            messages = history + [
+                {"role": "user", "content": message},
+                {"role": "assistant", "content": "The local RAG service is unavailable. Refresh Diagnostics and retry."},
+            ]
+            return "", messages, {}, self.answer_status({}, error=error), error, [], [], []
         result.setdefault("standalone_query", message.strip())
         result["original_question"] = message.strip()
         diagnostics = (
@@ -276,6 +341,7 @@ class RAGApplication:
             "",
             messages,
             result,
+            self.answer_status(result),
             diagnostics,
             self.source_rows(result),
             self.score_rows(result),
@@ -285,7 +351,24 @@ class RAGApplication:
     def clear(self, session_id: str):
         if self.rag_graph is not None:
             self.rag_graph.clear(session_id)
-        return [], {}, "Conversation cleared.", [], [], []
+        return [], {}, "ℹ️ **No answer yet.**", "Conversation cleared.", [], [], []
+
+    @staticmethod
+    def answer_status(result: dict[str, Any], error: str | None = None) -> str:
+        if error:
+            return f"❌ **Unavailable.** The query could not complete: {error}"
+        evidence = result.get("evidence_status")
+        termination = next(
+            (event.get("termination") for event in reversed(result.get("trace", [])) if event.get("termination")),
+            None,
+        )
+        if evidence == "sufficient" or termination == "supported":
+            return "✅ **Supported.** The answer is backed by sufficient cited evidence."
+        if evidence == "limited" or termination == "limited":
+            return "⚠️ **Limited.** Only part of the requested answer is supported by the evidence."
+        if evidence == "insufficient" or termination in {"unsupported", "out_of_scope"}:
+            return "⛔ **Abstention.** The indexed evidence is insufficient for a grounded answer."
+        return "ℹ️ **Completed.** Review the route, evidence, and citations below."
 
     @staticmethod
     def public_export(messages: list[Any], result: dict[str, Any]) -> dict[str, Any]:
@@ -462,6 +545,7 @@ class RAGApplication:
                     index_button = gr.Button("Index selected uploads", variant="primary")
                     reindex_button = gr.Button("Reindex changed documents")
                     rebuild_button = gr.Button("Rebuild complete index")
+                    reconcile_button = gr.Button("Reconcile manifest/index")
                 documents = gr.Dataframe(
                     headers=DOCUMENT_HEADERS, value=self.document_rows(), interactive=False
                 )
@@ -477,14 +561,19 @@ class RAGApplication:
                 )
             with gr.Tab("Chat"):
                 chatbot = gr.Chatbot(label="Chat", type="messages", allow_tags=False)
-                message = gr.Textbox(label="Question", placeholder="Ask about your documents")
+                message = gr.Textbox(
+                    label="Question",
+                    placeholder="Run preflight before asking about your documents",
+                    interactive=False,
+                )
                 with gr.Row():
                     send, clear = (
-                        gr.Button("Send", variant="primary"),
+                        gr.Button("Send", variant="primary", interactive=False),
                         gr.Button("Clear conversation"),
                     )
                     export = gr.Button("Export conversation JSON")
                 export_file = gr.File(label="Public conversation export")
+                answer_state = gr.Markdown("ℹ️ **No answer yet.**")
                 evidence = gr.Markdown()
                 gr.Markdown("### Sources and retrieval scores")
                 sources = gr.Dataframe(
@@ -496,6 +585,7 @@ class RAGApplication:
                         "Semantic",
                         "Sparse",
                         "Fused",
+                        "Selection",
                     ],
                     interactive=False,
                 )
@@ -525,31 +615,48 @@ class RAGApplication:
                 )
 
             index_button.click(
-                self.index_selected, files, [documents, ingestion_status, errors, readiness]
+                self.index_selected,
+                files,
+                [documents, ingestion_status, errors, readiness, selected_id],
             )
-            reindex_button.click(self.reindex_changed, None, [documents, ingestion_status, errors])
-            rebuild_button.click(self.rebuild_index, None, [documents, ingestion_status, errors])
+            document_outputs = [documents, ingestion_status, errors, selected_id]
+            reindex_button.click(self.reindex_changed, None, document_outputs)
+            rebuild_button.click(self.rebuild_index, None, document_outputs)
+            reconcile_button.click(self.reconcile_manifest_index, None, document_outputs)
             delete_button.click(
-                self.delete_selected, selected_id, [documents, ingestion_status, errors]
+                self.delete_selected, selected_id, document_outputs
             )
             refresh_button.click(
-                lambda: (self.document_rows(), self.readiness()), None, [documents, readiness]
+                self.refresh_documents, None, [documents, readiness, selected_id]
             )
             for trigger in (send.click, message.submit):
                 trigger(
                     self.chat,
                     [message, chatbot, session_id],
-                    [message, chatbot, latest_result, evidence, sources, scores, trace],
+                    [
+                        message,
+                        chatbot,
+                        latest_result,
+                        answer_state,
+                        evidence,
+                        sources,
+                        scores,
+                        trace,
+                    ],
                 )
             clear.click(
-                self.clear, session_id, [chatbot, latest_result, evidence, sources, scores, trace]
+                self.clear,
+                session_id,
+                [chatbot, latest_result, answer_state, evidence, sources, scores, trace],
             )
             export.click(self.export_chat, [chatbot, latest_result], export_file)
             run_eval.click(
                 self.run_evaluation_ui, [split, systems], [metrics, failures, eval_status]
             )
             load_eval.click(self.load_latest_evaluation, None, [metrics, failures, eval_status])
-            refresh_diagnostics.click(self.diagnostic_rows, None, diagnostics)
+            preflight_outputs = [readiness, diagnostics, message, send]
+            refresh_diagnostics.click(self.preflight, None, preflight_outputs)
+            interface.load(self.preflight, None, preflight_outputs)
         return interface
 
 

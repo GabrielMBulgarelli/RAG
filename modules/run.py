@@ -30,7 +30,7 @@ def collect_runtime_diagnostics(
 
 
 def _print_diagnostics(diagnostics: Sequence[str]) -> None:
-    print("RAG application cannot start:", file=sys.stderr)
+    print("RAG application started with limited readiness:", file=sys.stderr)
     for diagnostic in diagnostics:
         print(f"- {diagnostic}", file=sys.stderr)
 
@@ -41,11 +41,10 @@ def main(
     check_ollama: bool = True,
     app_runner: Callable[[], int] | None = None,
 ) -> int:
-    """Validate prerequisites, then lazily import and launch the application."""
+    """Report unavailable services, then lazily import and launch the application."""
     diagnostics = collect_runtime_diagnostics(settings, check_ollama=check_ollama)
     if diagnostics:
         _print_diagnostics(diagnostics)
-        return 1
 
     if app_runner is None:
         try:

@@ -29,6 +29,9 @@ class FakeManager:
             chunk_overlap=100,
         )
 
+    def setup(self):
+        return None
+
     def manifest(self):
         return IngestionManifest(documents={} if self.deleted else {"doc-1": self.record})
 
@@ -56,21 +59,53 @@ def test_document_callbacks_delete_reindex_and_rebuild(tmp_path: Path) -> None:
     (tmp_path / "manual.txt").write_text("changed", encoding="utf-8")
     app = RAGApplication(vector_db=manager)  # type: ignore[arg-type]
 
-    rows, status, _ = app.delete_selected("doc-1")
+    rows, status, _, selector = app.delete_selected("doc-1")
     assert rows == []
+    assert selector["choices"] == []
     assert manager.deleted == ["doc-1"]
     assert "Deleted" in status
 
     manager.deleted.clear()
-    rows, status, errors = app.reindex_changed()
+    rows, status, errors, selector = app.reindex_changed()
     assert rows[0][0] == "manual.txt"
     assert manager.indexed == [tmp_path / "manual.txt"]
     assert "Reindexed" in status
     assert errors == []
+    assert selector["choices"] == ["doc-1"]
 
-    _, status, _ = app.rebuild_index()
+    _, status, _, selector = app.rebuild_index()
     assert manager.rebuilt
     assert "Rebuilt" in status
+    assert selector["choices"] == ["doc-1"]
+
+
+def test_preflight_controls_chat_and_reports_actionable_state(tmp_path: Path) -> None:
+    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+
+    summary, diagnostics, message_update, send_update = app.preflight(
+        ollama={"reachable": False, "models": []}
+    )
+
+    assert "not ready" in summary.lower()
+    assert "ollama serve" in summary
+    assert message_update["interactive"] is False
+    assert send_update["interactive"] is False
+    assert any(row[0] == "Ollama connectivity" and row[1] == "error" for row in diagnostics)
+
+
+def test_preflight_enables_chat_when_required_services_are_ready(tmp_path: Path) -> None:
+    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+
+    summary, _, message_update, send_update = app.preflight(
+        ollama={
+            "reachable": True,
+            "models": ["qwen3.5:9b", "nomic-embed-text:latest"],
+        }
+    )
+
+    assert "ready" in summary.lower()
+    assert message_update["interactive"] is True
+    assert send_update["interactive"] is True
 
 
 def test_export_is_public_and_trace_and_scores_preserve_observability(tmp_path: Path) -> None:
@@ -124,6 +159,29 @@ def test_export_is_public_and_trace_and_scores_preserve_observability(tmp_path: 
     assert app.score_rows(result)[0][3:6] == [0.8, 4.0, 0.03]
     assert app.score_rows(result)[0][6] == 0.77
     assert app.score_rows(result)[0][-1] == "one"
+    assert app.source_rows(result)[0][-1] == 0.77
+    assert "Limited" in app.answer_status(result)
+
+
+def test_answer_status_distinguishes_supported_abstention_and_errors(tmp_path: Path) -> None:
+    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+
+    assert "Supported" in app.answer_status({"evidence_status": "sufficient"})
+    assert "Abstention" in app.answer_status(
+        {"evidence_status": "insufficient", "trace": []}
+    )
+    assert "Unavailable" in app.answer_status({}, error="connection refused")
+
+
+def test_reconciliation_action_refreshes_document_controls(tmp_path: Path) -> None:
+    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+
+    rows, status, errors, selector = app.reconcile_manifest_index()
+
+    assert rows[0][0] == "manual.txt"
+    assert "1 orphan" in status
+    assert errors == []
+    assert selector["choices"] == ["doc-1"]
 
 
 def test_evaluation_tables_and_diagnostics(tmp_path: Path) -> None:

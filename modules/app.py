@@ -422,11 +422,19 @@ class RAGApplication:
     @staticmethod
     def latest_evaluation() -> Path | None:
         root = PROJECT_ROOT / "evals" / "results"
-        return max(
-            (path for path in root.glob("*") if (path / "summary.json").exists()),
-            default=None,
-            key=lambda path: path.stat().st_mtime,
-        )
+        candidates: list[tuple[float, Path]] = []
+        for summary_path in root.rglob("summary.json"):
+            result_path = summary_path.parent
+            try:
+                json.loads(summary_path.read_text(encoding="utf-8"))
+                if not (result_path / "cases.jsonl").is_file():
+                    continue
+                candidates.append((summary_path.stat().st_mtime, result_path))
+            except (json.JSONDecodeError, OSError):
+                continue
+        if not candidates:
+            return None
+        return max(candidates, key=lambda item: item[0])[1]
 
     def load_latest_evaluation(self):
         latest = self.latest_evaluation()
@@ -451,9 +459,14 @@ class RAGApplication:
             return [], [], f"Evaluation could not run: {exc}"
         return self.load_evaluation_result(output)
 
+    @staticmethod
+    def _normalize_model_name(name: str) -> str:
+        normalized = name.strip()
+        return normalized if ":" in normalized else f"{normalized}:latest"
+
     def diagnostic_rows(self, ollama: dict[str, Any] | None = None) -> list[list[str]]:
         info = ollama or self._ollama_info()
-        model_names = {name.split(":")[0] for name in info["models"]}
+        model_names = {self._normalize_model_name(name) for name in info["models"]}
         rows = [
             [
                 "Ollama connectivity",
@@ -465,7 +478,7 @@ class RAGApplication:
             ("Chat model", config.llm_model),
             ("Embedding model", config.embedding_model),
         ):
-            available = model.split(":")[0] in model_names
+            available = self._normalize_model_name(model) in model_names
             rows.append(
                 [
                     label,

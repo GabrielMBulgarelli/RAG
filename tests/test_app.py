@@ -1,6 +1,8 @@
 import json
+import os
 from pathlib import Path
 
+import modules.app as app_module
 from modules.app import RAGApplication
 from modules.models import (
     IngestionManifest,
@@ -108,6 +110,23 @@ def test_preflight_enables_chat_when_required_services_are_ready(tmp_path: Path)
     assert send_update["interactive"] is True
 
 
+def test_preflight_requires_the_exact_configured_model_tag(tmp_path: Path) -> None:
+    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+
+    summary, diagnostics, message_update, send_update = app.preflight(
+        ollama={
+            "reachable": True,
+            "models": ["qwen3.5:latest", "nomic-embed-text"],
+        }
+    )
+
+    assert "not ready" in summary.lower()
+    assert any(row[0] == "Chat model" and row[1] == "error" for row in diagnostics)
+    assert any(row[0] == "Embedding model" and row[1] == "ok" for row in diagnostics)
+    assert message_update["interactive"] is False
+    assert send_update["interactive"] is False
+
+
 def test_export_is_public_and_trace_and_scores_preserve_observability(tmp_path: Path) -> None:
     app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
     result = {
@@ -209,6 +228,38 @@ def test_evaluation_tables_and_diagnostics(tmp_path: Path) -> None:
         row[0] == "Embedding model" and "ollama pull nomic-embed-text" in row[2]
         for row in diagnostics
     )
+
+
+def test_latest_evaluation_finds_the_newest_valid_nested_run(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(app_module, "PROJECT_ROOT", tmp_path)
+    results = tmp_path / "evals" / "results"
+
+    older = results / "multihop" / "older"
+    older.mkdir(parents=True)
+    (older / "summary.json").write_text("{}", encoding="utf-8")
+    (older / "cases.jsonl").write_text("", encoding="utf-8")
+    os.utime(older / "summary.json", (10, 10))
+
+    newer = results / "multihop" / "newer"
+    newer.mkdir(parents=True)
+    (newer / "summary.json").write_text("{}", encoding="utf-8")
+    (newer / "cases.jsonl").write_text("", encoding="utf-8")
+    os.utime(newer / "summary.json", (20, 20))
+
+    invalid = results / "multihop" / "invalid"
+    invalid.mkdir(parents=True)
+    (invalid / "summary.json").write_text("not json", encoding="utf-8")
+    (invalid / "cases.jsonl").write_text("", encoding="utf-8")
+    os.utime(invalid / "summary.json", (30, 30))
+
+    incomplete = results / "multihop" / "incomplete"
+    incomplete.mkdir(parents=True)
+    (incomplete / "summary.json").write_text("{}", encoding="utf-8")
+    os.utime(incomplete / "summary.json", (40, 40))
+
+    assert RAGApplication.latest_evaluation() == newer
 
 
 def test_interface_construction_does_not_require_live_ollama(tmp_path: Path) -> None:

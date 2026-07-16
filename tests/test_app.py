@@ -3,7 +3,15 @@ import os
 from pathlib import Path
 
 import modules.app as app_module
-from modules.app import RAGApplication
+from modules.app import (
+    DISPLAY_METRIC_LABELS,
+    EVALUATION_HEADERS,
+    RAGApplication,
+    format_duration_ms,
+    format_metric,
+    format_score,
+    render_status,
+)
 from modules.models import (
     IngestionManifest,
     IngestionResult,
@@ -94,7 +102,10 @@ def test_preflight_controls_chat_and_reports_actionable_state(tmp_path: Path) ->
     assert "ollama serve" in summary
     assert message_update["interactive"] is False
     assert send_update["interactive"] is False
-    assert any(row[0] == "Ollama connectivity" and row[1] == "error" for row in diagnostics)
+    assert any(
+        row[0] == "Ollama connectivity" and row[1] == "Unavailable"
+        for row in diagnostics
+    )
 
 
 def test_preflight_keeps_chat_disabled_until_ai_is_loaded(tmp_path: Path) -> None:
@@ -127,7 +138,7 @@ def test_manual_ai_load_initializes_graph_and_enables_chat(tmp_path: Path, monke
 
     assert app.rag_graph is graph
     assert "ready for questions" in summary.lower()
-    assert ["AI models", "ok", "loaded for this application session"] in diagnostics
+    assert ["AI models", "Ready", "Loaded for this application session"] in diagnostics
     assert message_update["interactive"] is True
     assert send_update["interactive"] is True
 
@@ -170,7 +181,7 @@ def test_manual_ai_load_surfaces_initialization_failure(tmp_path: Path, monkeypa
     )
 
     assert "not loaded" in summary.lower()
-    assert ["AI models", "error", "RuntimeError: index unavailable"] in diagnostics
+    assert ["AI models", "Unavailable", "RuntimeError: index unavailable"] in diagnostics
     assert message_update["interactive"] is False
     assert send_update["interactive"] is False
 
@@ -186,8 +197,8 @@ def test_preflight_requires_the_exact_configured_model_tag(tmp_path: Path) -> No
     )
 
     assert "not ready" in summary.lower()
-    assert any(row[0] == "Chat model" and row[1] == "error" for row in diagnostics)
-    assert any(row[0] == "Embedding model" and row[1] == "ok" for row in diagnostics)
+    assert any(row[0] == "Chat model" and row[1] == "Unavailable" for row in diagnostics)
+    assert any(row[0] == "Embedding model" and row[1] == "Ready" for row in diagnostics)
     assert message_update["interactive"] is False
     assert send_update["interactive"] is False
 
@@ -239,11 +250,13 @@ def test_export_is_public_and_trace_and_scores_preserve_observability(tmp_path: 
         "public_trace",
     }
     assert "prompt" not in json.dumps(exported)
-    assert app.trace_rows(result) == [["retrieve", "", 20, 12, 6, 0, "", 12.5]]
-    assert app.score_rows(result)[0][3:6] == [0.8, 4.0, 0.03]
-    assert app.score_rows(result)[0][6] == 0.77
+    assert app.trace_rows(result) == [
+        ["Retrieve", "—", 20, 12, 6, 0, "—", "12 ms"]
+    ]
+    assert app.score_rows(result)[0][3:6] == ["0.8000", "4.0000", "0.0300"]
+    assert app.score_rows(result)[0][6] == "0.7700"
     assert app.score_rows(result)[0][-1] == "one"
-    assert app.source_rows(result)[0][-1] == 0.77
+    assert app.source_rows(result)[0][-1] == "0.7700"
     assert "Limited" in app.answer_status(result)
 
 
@@ -332,8 +345,10 @@ def test_evaluation_tables_and_diagnostics(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     metrics, failures, label = app.load_evaluation_result(result)
-    assert metrics[0][0:2] == ["dense", 0.5]
-    assert failures[0][-1] == "retrieval_miss"
+    assert metrics[0] == ["Recall at 5", "50.0%", "—", "—", "—"]
+    assert metrics[-1][0] == "Mean retrieval rounds per query"
+    assert len(metrics) == len(DISPLAY_METRIC_LABELS)
+    assert failures[0][-1] == "Retrieval miss"
     assert "r1" in label
 
     diagnostics = app.diagnostic_rows(ollama={"reachable": False, "models": []})
@@ -342,6 +357,66 @@ def test_evaluation_tables_and_diagnostics(tmp_path: Path) -> None:
         row[0] == "Embedding model" and "ollama pull nomic-embed-text" in row[2]
         for row in diagnostics
     )
+
+
+def test_semantic_status_banner_escapes_dynamic_content_and_exposes_aria() -> None:
+    for kind in ("info", "success", "warning", "error"):
+        banner = render_status(kind, f"{kind} <title>", '<script>alert("x")</script>')
+        assert f"rag-status--{kind}" in banner
+        assert 'role="status"' in banner
+        assert 'aria-live="polite"' in banner
+        assert "<script>" not in banner
+        assert "&lt;script&gt;" in banner
+
+
+def test_result_formatters_use_consistent_precision_and_missing_values() -> None:
+    assert format_metric("recall_at_5", 0.8123) == "81.2%"
+    assert format_metric("p95_latency_seconds", 1.234) == "1,234 ms"
+    assert format_metric("mean_llm_calls_per_query", 2.25) == "2.3"
+    assert format_metric("recall_at_5", None) == "—"
+    assert format_score(0.87654) == "0.8765"
+    assert format_score(None) == "—"
+    assert format_duration_ms(12.5) == "12 ms"
+    assert format_duration_ms(None) == "—"
+
+
+def test_display_rows_format_sources_traces_scores_and_diagnostics(tmp_path: Path) -> None:
+    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+    result = {
+        "sources": [
+            {"label": "C1", "chunk_id": "c1", "filename": "a.pdf", "page": None}
+        ],
+        "retrieval_hits": [
+            {
+                "chunk_id": "c1",
+                "filename": "a.pdf",
+                "page": None,
+                "semantic_score": None,
+                "sparse_score": 3,
+                "fused_score": 0.02,
+                "selection_score": 0.5,
+                "subqueries": [],
+            }
+        ],
+        "trace": [{"stage": "grade_evidence", "duration_ms": None}],
+    }
+    assert app.source_rows(result)[0][2:] == [
+        "—",
+        "—",
+        "—",
+        "3.0000",
+        "0.0200",
+        "0.5000",
+    ]
+    assert app.score_rows(result)[0][-1] == "—"
+    assert app.trace_rows(result)[0][0] == "Grade evidence"
+    assert app.trace_rows(result)[0][-1] == "—"
+
+    raw = app.diagnostic_rows(ollama={"reachable": False, "models": []})
+    displayed = app.diagnostic_display_rows(raw)
+    assert any(row[1] == "Unavailable" for row in displayed)
+    assert any(row[1] == "Review" for row in displayed)
+    assert all(row[1] not in {"ok", "warning", "error", "pending"} for row in displayed)
 
 
 def test_latest_evaluation_finds_the_newest_valid_nested_run(tmp_path: Path, monkeypatch) -> None:
@@ -402,6 +477,7 @@ def test_interface_exposes_responsive_hierarchy_and_hides_mean_latency(tmp_path:
     assert '"label": "Maintenance"' in serialized
     assert '"label": "Technical details"' in serialized
     assert "mean_latency_seconds" not in serialized
+    assert EVALUATION_HEADERS == ["Metric", "Dense", "BM25", "Hybrid", "Agentic"]
 
     components = [component["props"] for component in config["components"]]
     document_table = next(
@@ -410,6 +486,21 @@ def test_interface_exposes_responsive_hierarchy_and_hides_mean_latency(tmp_path:
     assert document_table["show_search"] == "filter"
     assert document_table["wrap"] is True
     assert document_table["max_height"] == 360
+    table_ids = {
+        props.get("elem_id")
+        for props in components
+        if "rag-table" in (props.get("elem_classes") or [])
+    }
+    assert {
+        "documents-table",
+        "indexing-errors-table",
+        "sources-table",
+        "retrieval-scores-table",
+        "retrieval-trace-table",
+        "evaluation-metrics-table",
+        "evaluation-failures-table",
+        "diagnostics-table",
+    } <= table_ids
 
 
 def test_local_stylesheet_covers_mobile_tables_and_keyboard_focus() -> None:
@@ -421,3 +512,40 @@ def test_local_stylesheet_covers_mobile_tables_and_keyboard_focus() -> None:
     assert "overflow-x: auto" in css
     assert ":focus-visible" in css
     assert "min-height: 44px" in css
+    assert "--rag-status-text:" in css
+    assert "--rag-status-surface:" in css
+    assert "min-width: 0" in css
+    assert "overflow-x: clip" in css
+    assert ".rag-table > div" in css
+    assert "--rag-info-surface:" in css
+    assert "--rag-error-surface:" in css
+    assert "font-family: var(--font)" in css
+    assert ".evaluation-metrics-table table" in css
+    assert "#eef2ff" not in css
+    assert "#fff1f2" not in css
+    assert ".status-host > div:not(.rag-status)" in css
+    assert ".status-host > div," not in css
+
+
+def test_dynamic_statuses_are_accessible_live_regions(tmp_path: Path) -> None:
+    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+    config = app.create_interface().get_config_file()
+    components = [component["props"] for component in config["components"]]
+
+    live_regions = {
+        props.get("elem_id"): props
+        for props in components
+        if props.get("elem_id", "").endswith("-status")
+    }
+    assert {
+        "readiness-status",
+        "ingestion-status",
+        "answer-status",
+        "evaluation-status",
+    } <= live_regions.keys()
+    assert all(props.get("value", "").count('role="status"') == 1 for props in live_regions.values())
+    assert 'setAttribute("role", "alert")' in app_module.ACCESSIBILITY_BOOTSTRAP
+    assert "requestAnimationFrame" in app_module.ACCESSIBILITY_BOOTSTRAP
+    assert "addedNodes" in app_module.ACCESSIBILITY_BOOTSTRAP
+    assert "ResizeObserver" in app_module.ACCESSIBILITY_BOOTSTRAP
+    assert "horizontally scrollable" in app_module.ACCESSIBILITY_BOOTSTRAP

@@ -63,32 +63,58 @@ METRIC_NAMES = [
     "gold_evidence_citation_coverage",
     "abstention_accuracy",
     "conflict_accuracy",
+    "answer_token_f1",
     "termination_rate",
     "mean_latency_seconds",
     "p95_latency_seconds",
     "mean_llm_calls_per_query",
     "mean_retrieval_rounds_per_query",
 ]
-DISPLAY_METRIC_NAMES = [name for name in METRIC_NAMES if name != "mean_latency_seconds"]
 DISPLAY_METRIC_LABELS = {
     "recall_at_5": "Recall at 5",
     "mrr_at_5": "MRR at 5",
     "ndcg_at_5": "NDCG at 5",
-    "route_accuracy": "Route accuracy",
-    "strategy_accuracy": "Strategy accuracy",
-    "retry_precision": "Retry precision",
-    "retry_recall": "Retry recall",
     "citation_precision": "Citation precision",
     "gold_evidence_citation_coverage": "Gold evidence citation coverage",
     "abstention_accuracy": "Abstention accuracy",
     "conflict_accuracy": "Conflict accuracy",
-    "termination_rate": "Termination rate",
+    "answer_token_f1": "Answer token F1",
     "p95_latency_seconds": "P95 latency",
     "mean_llm_calls_per_query": "Mean LLM calls per query",
     "mean_retrieval_rounds_per_query": "Mean retrieval rounds per query",
 }
+METRIC_GROUPS = (
+    ("Retrieval", ("recall_at_5", "mrr_at_5", "ndcg_at_5")),
+    (
+        "Evidence and grounding",
+        (
+            "citation_precision",
+            "gold_evidence_citation_coverage",
+            "abstention_accuracy",
+            "conflict_accuracy",
+        ),
+    ),
+    ("Answer quality", ("answer_token_f1",)),
+    (
+        "Workflow cost",
+        (
+            "p95_latency_seconds",
+            "mean_llm_calls_per_query",
+            "mean_retrieval_rounds_per_query",
+        ),
+    ),
+)
+HIDDEN_METRICS = {
+    "mean_latency_seconds",
+    "route_accuracy",
+    "strategy_accuracy",
+    "retry_precision",
+    "retry_recall",
+    "termination_rate",
+}
+DISPLAY_METRIC_NAMES = [name for _, names in METRIC_GROUPS for name in names]
 EVALUATION_SYSTEMS = ("dense", "bm25", "hybrid", "agentic")
-EVALUATION_HEADERS = ["Metric", "Dense", "BM25", "Hybrid", "Agentic"]
+EVALUATION_HEADERS = ["Category", "Metric", "Dense", "BM25", "Hybrid", "Agentic"]
 PERCENTAGE_METRICS = {
     "recall_at_5",
     "mrr_at_5",
@@ -101,6 +127,7 @@ PERCENTAGE_METRICS = {
     "gold_evidence_citation_coverage",
     "abstention_accuracy",
     "conflict_accuracy",
+    "answer_token_f1",
     "termination_rate",
 }
 StatusKind = Literal["info", "success", "warning", "error"]
@@ -128,7 +155,9 @@ def format_duration_ms(value: Any) -> str:
 def format_metric(name: str, value: Any) -> str:
     if value is None or value == "":
         return "—"
-    if name in PERCENTAGE_METRICS:
+    if name in PERCENTAGE_METRICS or (
+        name not in METRIC_NAMES and 0 <= float(value) <= 1
+    ):
         return f"{float(value) * 100:.1f}%"
     if name == "p95_latency_seconds":
         return format_duration_ms(float(value) * 1000)
@@ -153,28 +182,48 @@ def render_status(kind: StatusKind, title: str, detail: str = "") -> str:
 
 ACCESSIBILITY_BOOTSTRAP = """
 () => {
-  const tableLabels = {
+  const regionLabels = {
     "documents-table": "Indexed documents",
     "indexing-errors-table": "Indexing errors",
-    "sources-table": "Sources used in this answer",
+    "conversation-region": "Conversation",
+    "corpus-rail": "Document management",
+    "evidence-list": "Cited evidence",
     "retrieval-scores-table": "Retrieval scores",
     "retrieval-trace-table": "Retrieval trace",
     "evaluation-metrics-table": "Evaluation metrics comparison",
     "evaluation-failures-table": "Evaluation failure cases",
     "diagnostics-table": "Readiness checks",
   };
-  const syncTable = (table) => {
-    const label = tableLabels[table.id] || "Data table";
-    const grid = table.querySelector("table");
-    const scrollable = Boolean(grid && grid.scrollWidth > table.clientWidth + 1);
-    table.setAttribute("role", "region");
-    table.setAttribute("aria-label", scrollable ? `${label}, horizontally scrollable` : label);
-    table.toggleAttribute("tabindex", scrollable);
-    table.dataset.scrollable = String(scrollable);
-    table.dataset.empty = String(Boolean(grid && grid.tBodies[0]?.rows.length === 0));
+  const syncRegion = (region) => {
+    const target = region.querySelector(".table-wrap") || region;
+    const overflowX =
+      region.id !== "corpus-rail" && target.scrollWidth > target.clientWidth + 1;
+    const overflowY = target.scrollHeight > target.clientHeight + 1;
+    region.dataset.overflowX = String(overflowX);
+    region.dataset.overflowY = String(overflowY);
+    const table = region.querySelector("table");
+    region.dataset.empty = String(Boolean(table && table.tBodies[0]?.rows.length === 0));
+    if (overflowX || overflowY) {
+      const directions = [
+        overflowX && "horizontally scrollable",
+        overflowY && "vertically scrollable",
+      ]
+        .filter(Boolean)
+        .join(" and ");
+      region.setAttribute("role", "region");
+      region.setAttribute(
+        "aria-label",
+        `${regionLabels[region.id] || "Scrollable results"}, ${directions} scrolling available`,
+      );
+      region.setAttribute("tabindex", "0");
+    } else {
+      region.removeAttribute("role");
+      region.removeAttribute("aria-label");
+      region.removeAttribute("tabindex");
+    }
   };
   const resizeObserver = new ResizeObserver((entries) => {
-    for (const entry of entries) syncTable(entry.target);
+    for (const entry of entries) syncRegion(entry.target);
   });
   const enhanceNode = (node) => {
     if (!(node instanceof Element)) return;
@@ -183,14 +232,14 @@ ACCESSIBILITY_BOOTSTRAP = """
       deletion.setAttribute("role", "alert");
       deletion.setAttribute("aria-live", "assertive");
     }
-    const tables = node.matches(".rag-table")
+    const regions = node.matches(".overflow-region")
       ? [node]
-      : Array.from(node.querySelectorAll(".rag-table"));
-    for (const table of tables) {
-      syncTable(table);
-      if (!table.dataset.resizeObserved) {
-        table.dataset.resizeObserved = "true";
-        resizeObserver.observe(table);
+      : Array.from(node.querySelectorAll(".overflow-region"));
+    for (const region of regions) {
+      syncRegion(region);
+      if (!region.dataset.resizeObserved) {
+        region.dataset.resizeObserved = "true";
+        resizeObserver.observe(region);
       }
     }
   };
@@ -199,11 +248,16 @@ ACCESSIBILITY_BOOTSTRAP = """
   let frame = null;
   new MutationObserver((mutations) => {
     for (const mutation of mutations) {
+      const parentRegion = mutation.target instanceof Element
+        ? mutation.target.closest(".overflow-region")
+        : null;
+      if (parentRegion) pending.add(parentRegion);
       for (const node of mutation.addedNodes) pending.add(node);
     }
     if (frame !== null) return;
     frame = requestAnimationFrame(() => {
       for (const node of pending) enhanceNode(node);
+      syncCorpusMode();
       pending.clear();
       frame = null;
     });
@@ -211,6 +265,29 @@ ACCESSIBILITY_BOOTSTRAP = """
     childList: true,
     subtree: true,
   });
+
+  const mobile = window.matchMedia("(max-width: 900px)");
+  function syncCorpusTrigger(trigger) {
+    const expanded = trigger.classList.contains("open");
+    trigger.setAttribute("aria-expanded", String(expanded));
+    return expanded;
+  }
+  function syncCorpusMode() {
+    const corpus = document.getElementById("corpus-management");
+    const trigger = corpus?.querySelector("button.label-wrap");
+    if (trigger && !trigger.dataset.expansionObserved) {
+      trigger.dataset.expansionObserved = "true";
+      trigger.addEventListener("click", () => {
+        requestAnimationFrame(() => syncCorpusTrigger(trigger));
+      });
+    }
+    if (!trigger || corpus.dataset.mobileMode === String(mobile.matches)) return;
+    const expanded = syncCorpusTrigger(trigger);
+    if (mobile.matches === expanded) trigger.click();
+    corpus.dataset.mobileMode = String(mobile.matches);
+  }
+  mobile.addEventListener("change", syncCorpusMode);
+  requestAnimationFrame(syncCorpusMode);
 }
 """
 
@@ -529,6 +606,45 @@ class RAGApplication:
         ]
 
     @staticmethod
+    def evidence_html(result: dict[str, Any]) -> str:
+        sources = result.get("sources", [])
+        if not sources:
+            return (
+                '<section class="evidence-list evidence-list--empty" '
+                'aria-label="Cited evidence">'
+                '<p class="empty-result">No cited evidence yet. Sources will appear after a supported answer.</p>'
+                "</section>"
+            )
+        items = []
+        for source in sources:
+            label = escape(str(source.get("label") or "Source"))
+            filename = escape(str(source.get("filename") or "Unknown file"))
+            page = source.get("page")
+            location = f"{filename} · Page {escape(str(page))}" if page is not None else filename
+            excerpt = escape(str(source.get("excerpt") or "No excerpt available."))
+            relevant = source.get("relevant", True)
+            relevant_badge = (
+                '<span class="evidence-state evidence-state--relevant">Relevant</span>'
+                if relevant
+                else ""
+            )
+            items.append(
+                '<article class="evidence-item">'
+                '<div class="evidence-item__header">'
+                f'<span class="evidence-citation">{label}</span>'
+                f'<strong class="evidence-location">{location}</strong>'
+                '<span class="evidence-state evidence-state--cited">Cited</span>'
+                f"{relevant_badge}</div>"
+                f'<blockquote class="evidence-excerpt">{excerpt}</blockquote>'
+                "</article>"
+            )
+        return (
+            '<section class="evidence-list" aria-label="Cited evidence">'
+            + "".join(items)
+            + "</section>"
+        )
+
+    @staticmethod
     def trace_rows(result: dict[str, Any]) -> list[list[Any]]:
         return [
             [
@@ -570,7 +686,7 @@ class RAGApplication:
                 {},
                 render_status("info", "No answer yet", "Enter a question."),
                 "Enter a question.",
-                [],
+                self.evidence_html({}),
                 [],
                 [],
             )
@@ -585,7 +701,16 @@ class RAGApplication:
                     "content": "The local RAG service is unavailable. Refresh Diagnostics and retry.",
                 },
             ]
-            return "", messages, {}, self.answer_status({}, error=error), error, [], [], []
+            return (
+                "",
+                messages,
+                {},
+                self.answer_status({}, error=error),
+                error,
+                self.evidence_html({}),
+                [],
+                [],
+            )
         result.setdefault("standalone_query", message.strip())
         result["original_question"] = message.strip()
         diagnostics = (
@@ -606,7 +731,7 @@ class RAGApplication:
             result,
             self.answer_status(result),
             diagnostics,
-            self.source_rows(result),
+            self.evidence_html(result),
             self.score_rows(result),
             self.trace_rows(result),
         )
@@ -615,7 +740,7 @@ class RAGApplication:
         if self.rag_graph is not None:
             self.rag_graph.clear(session_id)
         return (
-            [],
+            self.evidence_html({}),
             {},
             render_status("info", "No answer yet", "Conversation cleared."),
             "Conversation cleared.",
@@ -687,16 +812,33 @@ class RAGApplication:
     def load_evaluation_result(path: Path):
         summary = json.loads((path / "summary.json").read_text(encoding="utf-8"))
         system_metrics = summary.get("metrics", {})
-        metrics = [
-            [
-                label,
-                *[
-                    format_metric(name, system_metrics.get(system, {}).get(name))
-                    for system in EVALUATION_SYSTEMS
-                ],
-            ]
-            for name, label in DISPLAY_METRIC_LABELS.items()
-        ]
+        metrics = []
+        for category, names in METRIC_GROUPS:
+            for name in names:
+                metrics.append(
+                    [
+                        category,
+                        DISPLAY_METRIC_LABELS[name],
+                        *[
+                            format_metric(name, system_metrics.get(system, {}).get(name))
+                            for system in EVALUATION_SYSTEMS
+                        ],
+                    ]
+                )
+        available_names = {
+            name for values in system_metrics.values() for name in values
+        }
+        for name in sorted(available_names - set(DISPLAY_METRIC_NAMES) - HIDDEN_METRICS):
+            metrics.append(
+                [
+                    "Other",
+                    readable_label(name),
+                    *[
+                        format_metric(name, system_metrics.get(system, {}).get(name))
+                        for system in EVALUATION_SYSTEMS
+                    ],
+                ]
+            )
         failures = []
         for line in (path / "cases.jsonl").read_text(encoding="utf-8").splitlines():
             case = json.loads(line)
@@ -866,6 +1008,7 @@ class RAGApplication:
             "error": "Unavailable",
             "pending": "Not loaded",
         }
+
         return [
             [
                 row[0],
@@ -874,6 +1017,42 @@ class RAGApplication:
             ]
             for row in rows
         ]
+
+    @staticmethod
+    def diagnostic_presentation_rows(rows: list[list[str]]) -> list[list[str]]:
+        def category(check: str) -> str:
+            if check in {"Ollama connectivity", "AI models"}:
+                return "AI runtime"
+            if check in {"Chat model", "Embedding model"}:
+                return "Required models"
+            if check == "Latest evaluation":
+                return "Saved evaluation"
+            if any(word in check.lower() for word in ("index", "manifest", "chroma")):
+                return "Document index"
+            return "Other"
+
+        return [
+            [category(row[0]), row[0], row[1], row[2]]
+            for row in rows
+        ]
+
+    def preflight_ui(self):
+        summary, rows, message_update, send_update = self.preflight()
+        return (
+            summary,
+            self.diagnostic_presentation_rows(rows),
+            message_update,
+            send_update,
+        )
+
+    def load_ai_models_ui(self):
+        summary, rows, message_update, send_update = self.load_ai_models()
+        return (
+            summary,
+            self.diagnostic_presentation_rows(rows),
+            message_update,
+            send_update,
+        )
 
     def create_interface(self) -> gr.Blocks:
         theme = Soft(primary_hue="indigo", neutral_hue="slate")
@@ -885,192 +1064,260 @@ class RAGApplication:
             fill_width=True,
         ) as interface:
             session_id, latest_result = gr.State(lambda: str(uuid4())), gr.State({})
-            gr.HTML(
-                """
-                <header class="app-header">
-                  <div>
-                    <p class="app-eyebrow">LOCAL · PRIVATE · GROUNDED</p>
-                    <h1>Local Document RAG</h1>
-                    <p>Manage your corpus, ask cited questions, and inspect the supporting evidence.</p>
-                  </div>
-                </header>
-                """
-            )
-            readiness = gr.HTML(
-                render_status(
-                    "info",
-                    "Interface ready without AI",
-                    "Open Diagnostics when you want to enable document questions.",
-                ),
-                elem_id="readiness-status",
-                elem_classes=["readiness-summary", "status-host"],
-            )
+            with gr.Column(elem_id="app-shell"):
+                gr.HTML(
+                    """
+                    <header class="app-header">
+                      <div class="app-identity">
+                        <span class="app-mark" aria-hidden="true">R</span>
+                        <div>
+                          <h1>Local Document RAG</h1>
+                          <p>Private document questions with inspectable evidence.</p>
+                        </div>
+                      </div>
+                    </header>
+                    """
+                )
+                with gr.Row(elem_classes="readiness-bar"):
+                    readiness = gr.HTML(
+                        render_status(
+                            "info",
+                            "Interface ready",
+                            "Load the local AI models when you are ready to ask questions.",
+                        ),
+                        elem_id="readiness-status",
+                        elem_classes=["readiness-summary", "status-host"],
+                    )
+                    load_ai = gr.Button(
+                        "Load AI models",
+                        variant="primary",
+                        elem_classes=["primary-action", "load-models-action"],
+                    )
             with gr.Tabs(elem_id="primary-tabs"):
-                with gr.Tab("Documents"):
-                    gr.Markdown(
-                        "## Document library\nAdd local PDF or text files, then review what is available to search."
+                with gr.Tab("Workspace", elem_id="workspace-tab"):
+                    with gr.Row(equal_height=False, elem_id="workspace-grid"):
+                        with gr.Column(scale=4, min_width=0, elem_id="chat-workspace"):
+                            gr.HTML(
+                                """
+                                <div class="workspace-heading">
+                                  <div>
+                                    <p class="section-kicker">WORKSPACE</p>
+                                    <h2>Ask your documents</h2>
+                                    <p>Answers stay connected to the evidence used to produce them.</p>
+                                  </div>
+                                  <a class="manage-documents-link" href="#corpus-management">
+                                    Manage documents
+                                  </a>
+                                </div>
+                                """
+                            )
+                            answer_state = gr.HTML(
+                                render_status("info", "No answer yet", "Ask a question to begin."),
+                                elem_id="answer-status",
+                                elem_classes=["answer-state", "status-host"],
+                            )
+                            chatbot = gr.Chatbot(
+                                label="Conversation",
+                                type="messages",
+                                allow_tags=False,
+                                height=470,
+                                elem_id="conversation-region",
+                                elem_classes=[
+                                    "conversation",
+                                    "overflow-region",
+                                    "fixed-scroll-region",
+                                ],
+                            )
+                            message = gr.Textbox(
+                                label="Question",
+                                placeholder="Load AI models before asking about your documents",
+                                interactive=False,
+                                lines=2,
+                                elem_classes="question-composer",
+                            )
+                            with gr.Row(elem_classes=["action-row", "chat-actions"]):
+                                send = gr.Button(
+                                    "Ask", variant="primary", interactive=False
+                                )
+                                clear = gr.Button("Clear")
+                                export = gr.Button("Export")
+                            export_file = gr.File(label="Conversation export", height=72)
+                            gr.HTML(
+                                """
+                                <div class="section-heading">
+                                  <div>
+                                    <p class="section-kicker">EVIDENCE</p>
+                                    <h3>Cited sources</h3>
+                                  </div>
+                                  <p>Only sources cited by the current answer appear here.</p>
+                                </div>
+                                """
+                            )
+                            sources = gr.HTML(
+                                self.evidence_html({}),
+                                elem_id="evidence-list",
+                                elem_classes=["evidence-region", "overflow-region"],
+                            )
+                            with gr.Accordion("Technical details", open=False):
+                                evidence = gr.Markdown(
+                                    "Routing and evidence details will appear after a question."
+                                )
+                                scores = gr.Dataframe(
+                                    headers=SCORE_HEADERS,
+                                    label="Retrieval scores",
+                                    interactive=False,
+                                    wrap=True,
+                                    max_height=320,
+                                    elem_id="retrieval-scores-table",
+                                    elem_classes=[
+                                        "rag-table",
+                                        "retrieval-scores-table",
+                                        "overflow-region",
+                                    ],
+                                )
+                                trace = gr.Dataframe(
+                                    headers=TRACE_HEADERS,
+                                    label="Retrieval trace",
+                                    interactive=False,
+                                    wrap=True,
+                                    max_height=320,
+                                    elem_id="retrieval-trace-table",
+                                    elem_classes=[
+                                        "rag-table",
+                                        "retrieval-trace-table",
+                                        "overflow-region",
+                                    ],
+                                )
+                        with gr.Column(
+                            scale=1,
+                            min_width=296,
+                            elem_id="corpus-rail",
+                            elem_classes=["overflow-region", "fixed-scroll-region"],
+                        ):
+                            with gr.Accordion(
+                                "Manage documents",
+                                open=True,
+                                elem_id="corpus-management",
+                            ):
+                                gr.HTML(
+                                    f"""
+                                    <div class="corpus-summary">
+                                      <span class="corpus-summary__value">{len(self.document_rows())}</span>
+                                      <span class="corpus-summary__label">indexed documents</span>
+                                    </div>
+                                    """
+                                )
+                                files = gr.File(
+                                    label="PDF/TXT uploads",
+                                    file_count="multiple",
+                                    file_types=[".pdf", ".txt"],
+                                    type="filepath",
+                                    height=132,
+                                    elem_classes="upload-compact",
+                                )
+                                index_button = gr.Button(
+                                    "Index document",
+                                    variant="primary",
+                                    elem_classes="primary-action",
+                                )
+                                ingestion_status = gr.HTML(
+                                    render_status(
+                                        "info",
+                                        "Ready to index",
+                                        "Select one or more files to begin.",
+                                    ),
+                                    elem_id="ingestion-status",
+                                    elem_classes=["inline-status", "status-host"],
+                                )
+                                refresh_button = gr.Button("Refresh document status")
+                                selected_id = gr.Dropdown(
+                                    label="Document ID to delete",
+                                    choices=[row[2] for row in self.document_rows()],
+                                )
+                                delete_button = gr.Button(
+                                    "Review deletion", elem_classes="destructive-review"
+                                )
+                                with gr.Group(
+                                    visible=False,
+                                    elem_id="deletion-alert",
+                                    elem_classes="delete-confirmation",
+                                ) as delete_confirmation:
+                                    delete_confirmation_text = gr.HTML()
+                                    gr.Markdown(
+                                        "This removes the local document and its indexed chunks. "
+                                        "This action cannot be undone."
+                                    )
+                                    with gr.Row(elem_classes="action-row"):
+                                        cancel_delete = gr.Button("Cancel")
+                                        confirm_delete = gr.Button(
+                                            "Confirm deletion", variant="stop"
+                                        )
+                                documents = gr.Dataframe(
+                                    headers=DOCUMENT_HEADERS,
+                                    value=self.document_rows(),
+                                    label="Indexed documents",
+                                    interactive=False,
+                                    wrap=True,
+                                    show_search="filter",
+                                    max_height=360,
+                                    column_widths=[180, 220, 200, 80, 80, 130, 100, 240],
+                                    elem_id="documents-table",
+                                    elem_classes=[
+                                        "rag-table",
+                                        "documents-table",
+                                        "overflow-region",
+                                    ],
+                                )
+                                with gr.Accordion("Maintenance", open=False):
+                                    gr.Markdown(
+                                        "Repair or rebuild the local corpus when source files or "
+                                        "index state change."
+                                    )
+                                    reindex_button = gr.Button("Reindex changed documents")
+                                    reconcile_button = gr.Button("Reconcile manifest/index")
+                                    rebuild_button = gr.Button("Rebuild complete index")
+                                with gr.Accordion("Indexing errors", open=False):
+                                    errors = gr.Dataframe(
+                                        headers=[
+                                            "Document",
+                                            "Operation",
+                                            "Error type",
+                                            "Message",
+                                        ],
+                                        label="Indexing errors",
+                                        interactive=False,
+                                        wrap=True,
+                                        max_height=280,
+                                        elem_id="indexing-errors-table",
+                                        elem_classes=[
+                                            "rag-table",
+                                            "indexing-errors-table",
+                                            "overflow-region",
+                                        ],
+                                    )
+                with gr.Tab("Evaluation", elem_id="evaluation-tab"):
+                    gr.HTML(
+                        """
+                        <div class="view-heading">
+                          <p class="section-kicker">QUALITY REVIEW</p>
+                          <h2>Evaluation</h2>
+                          <p>Compare retrieval and answer quality, then inspect failing cases.</p>
+                        </div>
+                        """
                     )
-                    with gr.Row(equal_height=False):
-                        with gr.Column(scale=2, min_width=280):
-                            files = gr.File(
-                                label="PDF/TXT uploads",
-                                file_count="multiple",
-                                file_types=[".pdf", ".txt"],
-                                type="filepath",
-                                height=132,
-                                elem_classes="upload-compact",
-                            )
-                            index_button = gr.Button(
-                                "Index document", variant="primary", elem_classes="primary-action"
-                            )
-                            ingestion_status = gr.HTML(
-                                render_status(
-                                    "info", "Ready to index", "Select one or more files to begin."
-                                ),
-                                elem_id="ingestion-status",
-                                elem_classes=["inline-status", "status-host"],
-                            )
-                        with gr.Column(scale=1, min_width=260):
-                            gr.Markdown(
-                                "### Library actions\nRefresh the table or review a document before removing it."
-                            )
-                            refresh_button = gr.Button("Refresh document status")
-                            selected_id = gr.Dropdown(
-                                label="Document ID to delete",
-                                choices=[row[2] for row in self.document_rows()],
-                            )
-                            delete_button = gr.Button(
-                                "Review deletion", elem_classes="destructive-review"
-                            )
-                    with gr.Group(
-                        visible=False,
-                        elem_id="deletion-alert",
-                        elem_classes="delete-confirmation",
-                    ) as delete_confirmation:
-                        delete_confirmation_text = gr.HTML()
-                        gr.Markdown(
-                            "This removes the local document and its indexed chunks. This action cannot be undone."
-                        )
+                    with gr.Group(elem_classes="evaluation-controls"):
                         with gr.Row(elem_classes="action-row"):
-                            cancel_delete = gr.Button("Cancel")
-                            confirm_delete = gr.Button("Confirm deletion", variant="stop")
-                    documents = gr.Dataframe(
-                        headers=DOCUMENT_HEADERS,
-                        value=self.document_rows(),
-                        label="Indexed documents",
-                        interactive=False,
-                        wrap=True,
-                        show_search="filter",
-                        max_height=360,
-                        column_widths=[180, 220, 200, 80, 80, 130, 100, 240],
-                        elem_id="documents-table",
-                        elem_classes=["rag-table", "documents-table"],
-                    )
-                    with gr.Accordion("Maintenance", open=False):
-                        gr.Markdown(
-                            "Use these actions when source files change or the manifest and index need repair."
-                        )
+                            split = gr.Dropdown(
+                                ["development", "test"], value="development", label="Split"
+                            )
+                            systems = gr.CheckboxGroup(
+                                [*SYSTEMS, "all"],
+                                value=["dense", "bm25", "hybrid", "agentic"],
+                                label="Systems",
+                            )
                         with gr.Row(elem_classes="action-row"):
-                            reindex_button = gr.Button("Reindex changed documents")
-                            reconcile_button = gr.Button("Reconcile manifest/index")
-                            rebuild_button = gr.Button("Rebuild complete index")
-                    with gr.Accordion("Indexing errors", open=False):
-                        errors = gr.Dataframe(
-                            headers=["Document", "Operation", "Error type", "Message"],
-                            label="Indexing errors",
-                            interactive=False,
-                            wrap=True,
-                            max_height=280,
-                            elem_id="indexing-errors-table",
-                            elem_classes=["rag-table", "indexing-errors-table"],
-                        )
-                with gr.Tab("Chat"):
-                    gr.Markdown(
-                        "## Ask your documents\nAnswers are grounded in the indexed corpus and linked to their cited sources."
-                    )
-                    answer_state = gr.HTML(
-                        render_status("info", "No answer yet", "Ask a question to begin."),
-                        elem_id="answer-status",
-                        elem_classes=["answer-state", "status-host"],
-                    )
-                    chatbot = gr.Chatbot(
-                        label="Conversation",
-                        type="messages",
-                        allow_tags=False,
-                        height=430,
-                        elem_classes="conversation",
-                    )
-                    message = gr.Textbox(
-                        label="Question",
-                        placeholder="Load AI models in Diagnostics before asking about your documents",
-                        interactive=False,
-                        lines=2,
-                    )
-                    with gr.Row(elem_classes="action-row"):
-                        send = gr.Button(
-                            "Ask documents", variant="primary", interactive=False
-                        )
-                        clear = gr.Button("Clear conversation")
-                        export = gr.Button("Export conversation JSON")
-                    export_file = gr.File(label="Conversation export", height=72)
-                    gr.Markdown("### Cited sources")
-                    sources = gr.Dataframe(
-                        headers=[
-                            "Citation",
-                            "Filename",
-                            "Page",
-                            "Excerpt",
-                            "Semantic",
-                            "Sparse",
-                            "Fused",
-                            "Selection",
-                        ],
-                        label="Sources used in this answer",
-                        interactive=False,
-                        wrap=True,
-                        max_height=360,
-                        column_widths=[90, 180, 70, 380, 100, 100, 100, 100],
-                        elem_id="sources-table",
-                        elem_classes=["rag-table", "sources-table"],
-                    )
-                    with gr.Accordion("Technical details", open=False):
-                        evidence = gr.Markdown(
-                            "Routing and evidence details will appear after a question."
-                        )
-                        scores = gr.Dataframe(
-                            headers=SCORE_HEADERS,
-                            label="Retrieval scores",
-                            interactive=False,
-                            wrap=True,
-                            max_height=320,
-                            elem_id="retrieval-scores-table",
-                            elem_classes=["rag-table", "retrieval-scores-table"],
-                        )
-                        trace = gr.Dataframe(
-                            headers=TRACE_HEADERS,
-                            label="Retrieval trace",
-                            interactive=False,
-                            wrap=True,
-                            max_height=320,
-                            elem_id="retrieval-trace-table",
-                            elem_classes=["rag-table", "retrieval-trace-table"],
-                        )
-                with gr.Tab("Evaluation"):
-                    gr.Markdown(
-                        "## Evaluation results\nRun the existing benchmark or inspect the newest saved result."
-                    )
-                    with gr.Row(elem_classes="action-row"):
-                        split = gr.Dropdown(
-                            ["development", "test"], value="development", label="Split"
-                        )
-                        systems = gr.CheckboxGroup(
-                            [*SYSTEMS, "all"],
-                            value=["dense", "bm25", "hybrid", "agentic"],
-                            label="Systems",
-                        )
-                    with gr.Row():
-                        run_eval = gr.Button("Run evaluation", variant="primary")
-                        load_eval = gr.Button("Load latest result")
+                            run_eval = gr.Button("Run evaluation", variant="primary")
+                            load_eval = gr.Button("Load latest result")
                     eval_status = gr.HTML(
                         render_status(
                             "info", "Evaluation ready", "Choose systems and a split."
@@ -1084,10 +1331,15 @@ class RAGApplication:
                         interactive=False,
                         wrap=True,
                         max_height=360,
-                        column_widths=[260, 120, 120, 120, 120],
+                        column_widths=[180, 280, 120, 120, 120, 120],
                         elem_id="evaluation-metrics-table",
-                        elem_classes=["rag-table", "evaluation-metrics-table"],
+                        elem_classes=[
+                            "rag-table",
+                            "evaluation-metrics-table",
+                            "overflow-region",
+                        ],
                     )
+                    gr.HTML('<h3 class="result-heading">Failure details</h3>')
                     failures = gr.Dataframe(
                         headers=["Case", "System", "Route", "Strategy", "Failure labels"],
                         label="Failure cases",
@@ -1097,25 +1349,38 @@ class RAGApplication:
                         max_height=360,
                         column_widths=[170, 110, 130, 130, 360],
                         elem_id="evaluation-failures-table",
-                        elem_classes=["rag-table", "evaluation-failures-table"],
+                        elem_classes=[
+                            "rag-table",
+                            "evaluation-failures-table",
+                            "overflow-region",
+                        ],
                     )
-                with gr.Tab("Diagnostics"):
-                    gr.Markdown(
-                        "## Local readiness\nThe interface runs independently from Ollama. "
-                        "Inspect availability, then load AI models only when needed."
+                with gr.Tab("Diagnostics", elem_id="diagnostics-tab"):
+                    gr.HTML(
+                        """
+                        <div class="view-heading">
+                          <p class="section-kicker">LOCAL RECOVERY</p>
+                          <h2>Diagnostics</h2>
+                          <p>Review runtime, model, index, and saved-evaluation readiness.</p>
+                        </div>
+                        """
                     )
-                    with gr.Row(elem_classes="action-row"):
-                        load_ai = gr.Button("Load AI models", variant="primary")
-                        refresh_diagnostics = gr.Button("Refresh status")
+                    refresh_diagnostics = gr.Button(
+                        "Refresh diagnostics", elem_classes="diagnostics-refresh"
+                    )
                     diagnostics = gr.Dataframe(
-                        headers=["Check", "Status", "Details"],
+                        headers=["Area", "Check", "Status", "Details"],
                         label="Readiness checks",
                         interactive=False,
                         wrap=True,
                         max_height=480,
-                        column_widths=[200, 100, 520],
+                        column_widths=[180, 220, 120, 560],
                         elem_id="diagnostics-table",
-                        elem_classes=["rag-table", "diagnostics-table"],
+                        elem_classes=[
+                            "rag-table",
+                            "diagnostics-table",
+                            "overflow-region",
+                        ],
                     )
 
             index_button.click(
@@ -1174,8 +1439,8 @@ class RAGApplication:
             )
             load_eval.click(self.load_latest_evaluation, None, [metrics, failures, eval_status])
             preflight_outputs = [readiness, diagnostics, message, send]
-            refresh_diagnostics.click(self.preflight, None, preflight_outputs)
-            load_ai.click(self.load_ai_models, None, preflight_outputs)
+            refresh_diagnostics.click(self.preflight_ui, None, preflight_outputs)
+            load_ai.click(self.load_ai_models_ui, None, preflight_outputs)
         return interface
 
 

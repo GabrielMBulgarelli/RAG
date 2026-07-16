@@ -336,7 +336,20 @@ def test_evaluation_tables_and_diagnostics(tmp_path: Path) -> None:
     result = tmp_path / "run"
     result.mkdir()
     (result / "summary.json").write_text(
-        json.dumps({"configuration": {"run_id": "r1"}, "metrics": {"dense": {"recall_at_5": 0.5}}}),
+        json.dumps(
+            {
+                "configuration": {"run_id": "r1"},
+                "metrics": {
+                    "dense": {
+                        "recall_at_5": 0.5,
+                        "answer_token_f1": 0.25,
+                        "custom_grounding_metric": 0.75,
+                        "route_accuracy": 1.0,
+                        "mean_latency_seconds": 99,
+                    }
+                },
+            }
+        ),
         encoding="utf-8",
     )
     (result / "cases.jsonl").write_text(
@@ -345,9 +358,18 @@ def test_evaluation_tables_and_diagnostics(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     metrics, failures, label = app.load_evaluation_result(result)
-    assert metrics[0] == ["Recall at 5", "50.0%", "—", "—", "—"]
-    assert metrics[-1][0] == "Mean retrieval rounds per query"
-    assert len(metrics) == len(DISPLAY_METRIC_LABELS)
+    assert metrics[0] == ["Retrieval", "Recall at 5", "50.0%", "—", "—", "—"]
+    assert ["Answer quality", "Answer token F1", "25.0%", "—", "—", "—"] in metrics
+    assert metrics[-1] == [
+        "Other",
+        "Custom grounding metric",
+        "75.0%",
+        "—",
+        "—",
+        "—",
+    ]
+    assert not any(row[1] in {"Route accuracy", "Mean latency"} for row in metrics)
+    assert len(metrics) == len(DISPLAY_METRIC_LABELS) + 1
     assert failures[0][-1] == "Retrieval miss"
     assert "r1" in label
 
@@ -418,6 +440,43 @@ def test_display_rows_format_sources_traces_scores_and_diagnostics(tmp_path: Pat
     assert any(row[1] == "Review" for row in displayed)
     assert all(row[1] not in {"ok", "warning", "error", "pending"} for row in displayed)
 
+    presentation = app.diagnostic_presentation_rows(displayed)
+    assert any(row[2] == "Unavailable" for row in presentation)
+    assert {row[0] for row in presentation} >= {
+        "AI runtime",
+        "Required models",
+        "Document index",
+        "Saved evaluation",
+    }
+
+
+def test_evidence_cards_are_accessible_and_escape_dynamic_content(tmp_path: Path) -> None:
+    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+    result = {
+        "sources": [
+            {
+                "label": "C1<script>",
+                "filename": 'guide <img src="x">.pdf',
+                "page": 4,
+                "excerpt": "Use <b>local</b> retrieval.",
+                "relevant": True,
+            }
+        ]
+    }
+
+    evidence = app.evidence_html(result)
+
+    assert '<section class="evidence-list"' in evidence
+    assert '<article class="evidence-item"' in evidence
+    assert 'aria-label="Cited evidence"' in evidence
+    assert "Cited" in evidence
+    assert "Relevant" in evidence
+    assert "<script>" not in evidence
+    assert "<img" not in evidence
+    assert "<b>" not in evidence
+    assert "&lt;b&gt;local&lt;/b&gt;" in evidence
+    assert "No cited evidence" in app.evidence_html({"sources": []})
+
 
 def test_latest_evaluation_finds_the_newest_valid_nested_run(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(app_module, "PROJECT_ROOT", tmp_path)
@@ -473,13 +532,53 @@ def test_interface_exposes_responsive_hierarchy_and_hides_mean_latency(tmp_path:
     config = interface.get_config_file()
     serialized = json.dumps(config, default=str)
 
+    assert '"elem_id": "app-shell"' in serialized
     assert '"elem_id": "primary-tabs"' in serialized
+    assert '"elem_id": "workspace-grid"' in serialized
+    assert '"elem_id": "corpus-rail"' in serialized
+    assert '"elem_id": "chat-workspace"' in serialized
+    assert '"elem_id": "conversation-region"' in serialized
+    assert '"elem_id": "evidence-list"' in serialized
     assert '"label": "Maintenance"' in serialized
     assert '"label": "Technical details"' in serialized
     assert "mean_latency_seconds" not in serialized
-    assert EVALUATION_HEADERS == ["Metric", "Dense", "BM25", "Hybrid", "Agentic"]
+    assert EVALUATION_HEADERS == [
+        "Category",
+        "Metric",
+        "Dense",
+        "BM25",
+        "Hybrid",
+        "Agentic",
+    ]
 
     components = [component["props"] for component in config["components"]]
+    top_level_tabs = {
+        props.get("elem_id"): props.get("label")
+        for props in components
+        if props.get("elem_id") in {"workspace-tab", "evaluation-tab", "diagnostics-tab"}
+    }
+    assert top_level_tabs == {
+        "workspace-tab": "Workspace",
+        "evaluation-tab": "Evaluation",
+        "diagnostics-tab": "Diagnostics",
+    }
+    assert not any(props.get("label") in {"Documents", "Chat"} for props in components)
+
+    action_labels = [props.get("value") for props in components]
+    for label in (
+        "Load AI models",
+        "Index document",
+        "Review deletion",
+        "Cancel",
+        "Confirm deletion",
+        "Ask",
+        "Clear",
+        "Export",
+        "Run evaluation",
+        "Refresh diagnostics",
+    ):
+        assert action_labels.count(label) == 1
+
     document_table = next(
         props for props in components if props.get("label") == "Indexed documents"
     )
@@ -494,7 +593,6 @@ def test_interface_exposes_responsive_hierarchy_and_hides_mean_latency(tmp_path:
     assert {
         "documents-table",
         "indexing-errors-table",
-        "sources-table",
         "retrieval-scores-table",
         "retrieval-trace-table",
         "evaluation-metrics-table",
@@ -508,6 +606,7 @@ def test_local_stylesheet_covers_mobile_tables_and_keyboard_focus() -> None:
 
     assert stylesheet.is_file()
     css = stylesheet.read_text(encoding="utf-8")
+    assert "@media (max-width: 900px)" in css
     assert "@media (max-width: 640px)" in css
     assert "overflow-x: auto" in css
     assert ":focus-visible" in css
@@ -521,6 +620,12 @@ def test_local_stylesheet_covers_mobile_tables_and_keyboard_focus() -> None:
     assert "--rag-error-surface:" in css
     assert "font-family: var(--font)" in css
     assert ".evaluation-metrics-table table" in css
+    assert "#workspace-grid" in css
+    assert "#corpus-rail" in css
+    assert ".evidence-item" in css
+    assert "scrollbar-width: thin" in css
+    assert "::-webkit-scrollbar" in css
+    assert "8px" in css
     assert "#eef2ff" not in css
     assert "#fff1f2" not in css
     assert ".status-host > div:not(.rag-status)" in css
@@ -549,3 +654,16 @@ def test_dynamic_statuses_are_accessible_live_regions(tmp_path: Path) -> None:
     assert "addedNodes" in app_module.ACCESSIBILITY_BOOTSTRAP
     assert "ResizeObserver" in app_module.ACCESSIBILITY_BOOTSTRAP
     assert "horizontally scrollable" in app_module.ACCESSIBILITY_BOOTSTRAP
+    assert "vertically scrollable" in app_module.ACCESSIBILITY_BOOTSTRAP
+    assert 'dataset.overflowX' in app_module.ACCESSIBILITY_BOOTSTRAP
+    assert 'dataset.overflowY' in app_module.ACCESSIBILITY_BOOTSTRAP
+    assert 'region.id !== "corpus-rail"' in app_module.ACCESSIBILITY_BOOTSTRAP
+    assert 'removeAttribute("tabindex")' in app_module.ACCESSIBILITY_BOOTSTRAP
+    assert 'removeAttribute("aria-label")' in app_module.ACCESSIBILITY_BOOTSTRAP
+    assert 'querySelector("button.label-wrap")' in app_module.ACCESSIBILITY_BOOTSTRAP
+    assert 'classList.contains("open")' in app_module.ACCESSIBILITY_BOOTSTRAP
+    assert 'setAttribute("aria-expanded"' in app_module.ACCESSIBILITY_BOOTSTRAP
+    assert "for (const node of pending) enhanceNode(node);\n      syncCorpusMode();" in (
+        app_module.ACCESSIBILITY_BOOTSTRAP
+    )
+    assert 'type="range"' not in app_module.ACCESSIBILITY_BOOTSTRAP

@@ -12,6 +12,7 @@ from typing import Any
 from uuid import uuid4
 
 import gradio as gr
+from gradio.themes import Soft
 
 from modules.config import PROJECT_ROOT, config
 from modules.evaluation import SYSTEMS, run_evaluation
@@ -66,6 +67,8 @@ METRIC_NAMES = [
     "mean_llm_calls_per_query",
     "mean_retrieval_rounds_per_query",
 ]
+DISPLAY_METRIC_NAMES = [name for name in METRIC_NAMES if name != "mean_latency_seconds"]
+APP_STYLESHEET = Path(__file__).with_name("app.css")
 
 
 class RAGApplication:
@@ -264,9 +267,14 @@ class RAGApplication:
     def preflight(self, ollama: dict[str, Any] | None = None):
         rows = self.diagnostic_rows(ollama=ollama)
         blocking = [row for row in rows if row[1] == "error"]
-        ready = not blocking
+        ready = not blocking and self.rag_graph is not None
         if ready:
             summary = "✅ **Ready for questions.** Ollama, required models, index, and graph are available."
+        elif not blocking:
+            summary = (
+                "ℹ️ **Application ready; AI not loaded.** "
+                "Select **Load AI models** when you want to enable document questions."
+            )
         else:
             actions: list[str] = []
             checks = {row[0] for row in blocking}
@@ -282,6 +290,31 @@ class RAGApplication:
                 actions.append("review Diagnostics and rebuild or reconcile the local index")
             summary = "⛔ **Not ready for questions.** " + "; ".join(actions) + "."
         return summary, rows, gr.update(interactive=ready), gr.update(interactive=ready)
+
+    def load_ai_models(self, ollama: dict[str, Any] | None = None):
+        """Initialize AI-backed services only after an explicit UI action."""
+        rows = self.diagnostic_rows(ollama=ollama)
+        if any(row[1] == "error" for row in rows):
+            summary, rows, message_update, send_update = self.preflight(ollama=ollama)
+            return (
+                summary.replace("Not ready for questions", "AI models not loaded"),
+                rows,
+                message_update,
+                send_update,
+            )
+        try:
+            self.initialize()
+        except Exception as exc:
+            rows = self.diagnostic_rows(ollama=ollama)
+            ai_row = next(index for index, row in enumerate(rows) if row[0] == "AI models")
+            rows[ai_row] = ["AI models", "error", f"{type(exc).__name__}: {exc}"]
+            return (
+                "⛔ **AI models not loaded.** Review Diagnostics, then retry.",
+                rows,
+                gr.update(interactive=False),
+                gr.update(interactive=False),
+            )
+        return self.preflight(ollama=ollama)
 
     @staticmethod
     def source_rows(result: dict[str, Any]) -> list[list[Any]]:
@@ -430,7 +463,7 @@ class RAGApplication:
     def load_evaluation_result(path: Path):
         summary = json.loads((path / "summary.json").read_text(encoding="utf-8"))
         metrics = [
-            [system, *[values.get(name) for name in METRIC_NAMES]]
+            [system, *[values.get(name) for name in DISPLAY_METRIC_NAMES]]
             for system, values in summary.get("metrics", {}).items()
         ]
         failures = []
@@ -559,12 +592,15 @@ class RAGApplication:
             )
         except Exception as exc:
             rows.append(["Index diagnostics", "error", f"{type(exc).__name__}: {exc}"])
-        try:
-            if self.rag_graph is None:
-                self.initialize()
-            rows.append(["Graph compilation", "ok", "compiled"])
-        except Exception as exc:
-            rows.append(["Graph compilation", "error", f"{type(exc).__name__}: {exc}"])
+        rows.append(
+            [
+                "AI models",
+                "ok" if self.rag_graph is not None else "pending",
+                "loaded for this application session"
+                if self.rag_graph is not None
+                else "not loaded; use Load AI models when needed",
+            ]
+        )
         latest = self.latest_evaluation()
         rows.append(
             [
@@ -576,96 +612,220 @@ class RAGApplication:
         return rows
 
     def create_interface(self) -> gr.Blocks:
-        with gr.Blocks(title="Local Document RAG") as interface:
+        theme = Soft(primary_hue="indigo", neutral_hue="slate")
+        with gr.Blocks(
+            title="Local Document RAG",
+            theme=theme,
+            css_paths=APP_STYLESHEET,
+            fill_width=True,
+        ) as interface:
             session_id, latest_result = gr.State(lambda: str(uuid4())), gr.State({})
-            gr.Markdown(
-                "# Local Document RAG\nManage the local corpus, ask grounded questions, and inspect public evidence."
+            gr.HTML(
+                """
+                <header class="app-header">
+                  <div>
+                    <p class="app-eyebrow">LOCAL · PRIVATE · GROUNDED</p>
+                    <h1>Local Document RAG</h1>
+                    <p>Manage your corpus, ask cited questions, and inspect the supporting evidence.</p>
+                  </div>
+                </header>
+                """
             )
-            with gr.Tab("Documents"):
-                readiness = gr.Markdown("Use Refresh diagnostics to check readiness.")
-                files = gr.File(
-                    label="PDF/TXT uploads",
-                    file_count="multiple",
-                    file_types=[".pdf", ".txt"],
-                    type="filepath",
-                )
-                with gr.Row():
-                    index_button = gr.Button("Index selected uploads", variant="primary")
-                    reindex_button = gr.Button("Reindex changed documents")
-                    rebuild_button = gr.Button("Rebuild complete index")
-                    reconcile_button = gr.Button("Reconcile manifest/index")
-                documents = gr.Dataframe(
-                    headers=DOCUMENT_HEADERS, value=self.document_rows(), interactive=False
-                )
-                selected_id = gr.Dropdown(
-                    label="Document ID to delete", choices=[row[2] for row in self.document_rows()]
-                )
-                with gr.Row():
-                    delete_button = gr.Button("Review deletion")
-                    refresh_button = gr.Button("Refresh document status")
-                with gr.Group(visible=False) as delete_confirmation:
-                    delete_confirmation_text = gr.Markdown()
+            readiness = gr.Markdown(
+                "Application loaded without AI models. Open Diagnostics when you want to enable chat.",
+                elem_classes=["readiness-summary", "status-panel"],
+            )
+            with gr.Tabs(elem_id="primary-tabs"):
+                with gr.Tab("Documents"):
+                    gr.Markdown(
+                        "## Document library\nAdd local PDF or text files, then review what is available to search."
+                    )
+                    with gr.Row(equal_height=False):
+                        with gr.Column(scale=2, min_width=280):
+                            files = gr.File(
+                                label="PDF/TXT uploads",
+                                file_count="multiple",
+                                file_types=[".pdf", ".txt"],
+                                type="filepath",
+                                height=132,
+                                elem_classes="upload-compact",
+                            )
+                            index_button = gr.Button(
+                                "Index document", variant="primary", elem_classes="primary-action"
+                            )
+                            ingestion_status = gr.Markdown(
+                                "Select one or more files to begin.", elem_classes="inline-status"
+                            )
+                        with gr.Column(scale=1, min_width=260):
+                            gr.Markdown(
+                                "### Library actions\nRefresh the table or review a document before removing it."
+                            )
+                            refresh_button = gr.Button("Refresh document status")
+                            selected_id = gr.Dropdown(
+                                label="Document ID to delete",
+                                choices=[row[2] for row in self.document_rows()],
+                            )
+                            delete_button = gr.Button(
+                                "Review deletion", elem_classes="destructive-review"
+                            )
+                    with gr.Group(
+                        visible=False, elem_classes="delete-confirmation"
+                    ) as delete_confirmation:
+                        delete_confirmation_text = gr.Markdown()
+                        gr.Markdown(
+                            "This removes the local document and its indexed chunks. This action cannot be undone."
+                        )
+                        with gr.Row():
+                            cancel_delete = gr.Button("Cancel")
+                            confirm_delete = gr.Button("Confirm deletion", variant="stop")
+                    documents = gr.Dataframe(
+                        headers=DOCUMENT_HEADERS,
+                        value=self.document_rows(),
+                        label="Indexed documents",
+                        interactive=False,
+                        wrap=True,
+                        show_search="filter",
+                        max_height=360,
+                        column_widths=[180, 220, 200, 80, 80, 130, 100, 240],
+                        elem_classes=["rag-table", "documents-table"],
+                    )
+                    with gr.Accordion("Maintenance", open=False):
+                        gr.Markdown(
+                            "Use these actions when source files change or the manifest and index need repair."
+                        )
+                        with gr.Row():
+                            reindex_button = gr.Button("Reindex changed documents")
+                            reconcile_button = gr.Button("Reconcile manifest/index")
+                            rebuild_button = gr.Button("Rebuild complete index")
+                    with gr.Accordion("Indexing errors", open=False):
+                        errors = gr.Dataframe(
+                            headers=["Document", "Operation", "Error type", "Message"],
+                            label="Indexing errors",
+                            interactive=False,
+                            wrap=True,
+                            max_height=280,
+                            elem_classes="rag-table",
+                        )
+                with gr.Tab("Chat"):
+                    gr.Markdown(
+                        "## Ask your documents\nAnswers are grounded in the indexed corpus and linked to their cited sources."
+                    )
+                    answer_state = gr.Markdown(
+                        "ℹ️ **No answer yet.**", elem_classes=["answer-state", "status-panel"]
+                    )
+                    chatbot = gr.Chatbot(
+                        label="Conversation",
+                        type="messages",
+                        allow_tags=False,
+                        height=430,
+                        elem_classes="conversation",
+                    )
+                    message = gr.Textbox(
+                        label="Question",
+                        placeholder="Run preflight before asking about your documents",
+                        interactive=False,
+                        lines=2,
+                    )
                     with gr.Row():
-                        cancel_delete = gr.Button("Cancel")
-                        confirm_delete = gr.Button("Confirm deletion", variant="stop")
-                ingestion_status = gr.Markdown()
-                errors = gr.Dataframe(
-                    headers=["Document", "Operation", "Error type", "Message"], interactive=False
-                )
-            with gr.Tab("Chat"):
-                chatbot = gr.Chatbot(label="Chat", type="messages", allow_tags=False)
-                message = gr.Textbox(
-                    label="Question",
-                    placeholder="Run preflight before asking about your documents",
-                    interactive=False,
-                )
-                with gr.Row():
-                    send, clear = (
-                        gr.Button("Send", variant="primary", interactive=False),
-                        gr.Button("Clear conversation"),
+                        send = gr.Button(
+                            "Ask documents", variant="primary", interactive=False
+                        )
+                        clear = gr.Button("Clear conversation")
+                        export = gr.Button("Export conversation JSON")
+                    export_file = gr.File(label="Conversation export", height=72)
+                    gr.Markdown("### Cited sources")
+                    sources = gr.Dataframe(
+                        headers=[
+                            "Citation",
+                            "Filename",
+                            "Page",
+                            "Excerpt",
+                            "Semantic",
+                            "Sparse",
+                            "Fused",
+                            "Selection",
+                        ],
+                        label="Sources used in this answer",
+                        interactive=False,
+                        wrap=True,
+                        max_height=360,
+                        column_widths=[90, 180, 70, 380, 100, 100, 100, 100],
+                        elem_classes=["rag-table", "sources-table"],
                     )
-                    export = gr.Button("Export conversation JSON")
-                export_file = gr.File(label="Public conversation export")
-                answer_state = gr.Markdown("ℹ️ **No answer yet.**")
-                evidence = gr.Markdown()
-                gr.Markdown("### Sources and retrieval scores")
-                sources = gr.Dataframe(
-                    headers=[
-                        "Citation",
-                        "Filename",
-                        "Page",
-                        "Excerpt",
-                        "Semantic",
-                        "Sparse",
-                        "Fused",
-                        "Selection",
-                    ],
-                    interactive=False,
-                )
-                scores = gr.Dataframe(headers=SCORE_HEADERS, interactive=False)
-                gr.Markdown("### Public trace")
-                trace = gr.Dataframe(headers=TRACE_HEADERS, interactive=False)
-            with gr.Tab("Evaluation"):
-                split = gr.Dropdown(["development", "test"], value="development", label="Split")
-                systems = gr.CheckboxGroup(
-                    [*SYSTEMS, "all"], value=["dense", "bm25", "hybrid", "agentic"], label="Systems"
-                )
-                with gr.Row():
-                    run_eval, load_eval = (
-                        gr.Button("Run evaluation", variant="primary"),
-                        gr.Button("Load latest result"),
+                    with gr.Accordion("Technical details", open=False):
+                        evidence = gr.Markdown(
+                            "Routing and evidence details will appear after a question."
+                        )
+                        scores = gr.Dataframe(
+                            headers=SCORE_HEADERS,
+                            label="Retrieval scores",
+                            interactive=False,
+                            wrap=True,
+                            max_height=320,
+                            elem_classes="rag-table",
+                        )
+                        trace = gr.Dataframe(
+                            headers=TRACE_HEADERS,
+                            label="Retrieval trace",
+                            interactive=False,
+                            wrap=True,
+                            max_height=320,
+                            elem_classes="rag-table",
+                        )
+                with gr.Tab("Evaluation"):
+                    gr.Markdown(
+                        "## Evaluation results\nRun the existing benchmark or inspect the newest saved result."
                     )
-                eval_status = gr.Markdown()
-                metrics = gr.Dataframe(headers=["System", *METRIC_NAMES], interactive=False)
-                failures = gr.Dataframe(
-                    headers=["Case", "System", "Route", "Strategy", "Failure labels"],
-                    interactive=False,
-                )
-            with gr.Tab("Diagnostics"):
-                refresh_diagnostics = gr.Button("Refresh diagnostics")
-                diagnostics = gr.Dataframe(
-                    headers=["Check", "Status", "Details"], interactive=False
-                )
+                    with gr.Row():
+                        split = gr.Dropdown(
+                            ["development", "test"], value="development", label="Split"
+                        )
+                        systems = gr.CheckboxGroup(
+                            [*SYSTEMS, "all"],
+                            value=["dense", "bm25", "hybrid", "agentic"],
+                            label="Systems",
+                        )
+                    with gr.Row():
+                        run_eval = gr.Button("Run evaluation", variant="primary")
+                        load_eval = gr.Button("Load latest result")
+                    eval_status = gr.Markdown(
+                        "Choose systems and a split.", elem_classes="inline-status"
+                    )
+                    metrics = gr.Dataframe(
+                        headers=["System", *DISPLAY_METRIC_NAMES],
+                        label="Metrics",
+                        interactive=False,
+                        wrap=True,
+                        show_search="filter",
+                        max_height=360,
+                        elem_classes="rag-table",
+                    )
+                    failures = gr.Dataframe(
+                        headers=["Case", "System", "Route", "Strategy", "Failure labels"],
+                        label="Failure cases",
+                        interactive=False,
+                        wrap=True,
+                        show_search="filter",
+                        max_height=360,
+                        elem_classes="rag-table",
+                    )
+                with gr.Tab("Diagnostics"):
+                    gr.Markdown(
+                        "## Local readiness\nThe interface runs independently from Ollama. "
+                        "Inspect availability, then load AI models only when needed."
+                    )
+                    with gr.Row():
+                        load_ai = gr.Button("Load AI models", variant="primary")
+                        refresh_diagnostics = gr.Button("Refresh status")
+                    diagnostics = gr.Dataframe(
+                        headers=["Check", "Status", "Details"],
+                        label="Readiness checks",
+                        interactive=False,
+                        wrap=True,
+                        max_height=480,
+                        column_widths=[200, 100, 520],
+                        elem_classes="rag-table",
+                    )
 
             index_button.click(
                 self.index_selected,
@@ -724,7 +884,7 @@ class RAGApplication:
             load_eval.click(self.load_latest_evaluation, None, [metrics, failures, eval_status])
             preflight_outputs = [readiness, diagnostics, message, send]
             refresh_diagnostics.click(self.preflight, None, preflight_outputs)
-            interface.load(self.preflight, None, preflight_outputs)
+            load_ai.click(self.load_ai_models, None, preflight_outputs)
         return interface
 
 

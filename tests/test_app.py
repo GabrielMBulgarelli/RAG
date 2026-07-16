@@ -97,7 +97,7 @@ def test_preflight_controls_chat_and_reports_actionable_state(tmp_path: Path) ->
     assert any(row[0] == "Ollama connectivity" and row[1] == "error" for row in diagnostics)
 
 
-def test_preflight_enables_chat_when_required_services_are_ready(tmp_path: Path) -> None:
+def test_preflight_keeps_chat_disabled_until_ai_is_loaded(tmp_path: Path) -> None:
     app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
 
     summary, _, message_update, send_update = app.preflight(
@@ -107,9 +107,72 @@ def test_preflight_enables_chat_when_required_services_are_ready(tmp_path: Path)
         }
     )
 
-    assert "ready" in summary.lower()
+    assert "load ai models" in summary.lower()
+    assert app.rag_graph is None
+    assert message_update["interactive"] is False
+    assert send_update["interactive"] is False
+
+
+def test_manual_ai_load_initializes_graph_and_enables_chat(tmp_path: Path, monkeypatch) -> None:
+    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+    graph = object()
+    monkeypatch.setattr(app_module, "RAGGraph", lambda _vector_db: graph)
+
+    summary, diagnostics, message_update, send_update = app.load_ai_models(
+        ollama={
+            "reachable": True,
+            "models": ["qwen3.5:9b", "nomic-embed-text:latest"],
+        }
+    )
+
+    assert app.rag_graph is graph
+    assert "ready for questions" in summary.lower()
+    assert ["AI models", "ok", "loaded for this application session"] in diagnostics
     assert message_update["interactive"] is True
     assert send_update["interactive"] is True
+
+
+def test_manual_ai_load_reports_missing_models_without_initializing(
+    tmp_path: Path, monkeypatch
+) -> None:
+    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+    initialized = False
+
+    def initialize() -> None:
+        nonlocal initialized
+        initialized = True
+
+    monkeypatch.setattr(app, "initialize", initialize)
+
+    summary, _, message_update, send_update = app.load_ai_models(
+        ollama={"reachable": False, "models": []}
+    )
+
+    assert "not loaded" in summary.lower()
+    assert initialized is False
+    assert message_update["interactive"] is False
+    assert send_update["interactive"] is False
+
+
+def test_manual_ai_load_surfaces_initialization_failure(tmp_path: Path, monkeypatch) -> None:
+    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+
+    def fail_initialization() -> None:
+        raise RuntimeError("index unavailable")
+
+    monkeypatch.setattr(app, "initialize", fail_initialization)
+
+    summary, diagnostics, message_update, send_update = app.load_ai_models(
+        ollama={
+            "reachable": True,
+            "models": ["qwen3.5:9b", "nomic-embed-text:latest"],
+        }
+    )
+
+    assert "not loaded" in summary.lower()
+    assert ["AI models", "error", "RuntimeError: index unavailable"] in diagnostics
+    assert message_update["interactive"] is False
+    assert send_update["interactive"] is False
 
 
 def test_preflight_requires_the_exact_configured_model_tag(tmp_path: Path) -> None:
@@ -315,3 +378,46 @@ def test_interface_construction_does_not_require_live_ollama(tmp_path: Path) -> 
     app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
     interface = app.create_interface()
     assert interface is not None
+
+
+def test_interface_exposes_manual_ai_loading_without_automatic_preflight(tmp_path: Path) -> None:
+    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+    config = app.create_interface().get_config_file()
+    labels = [component["props"].get("value") for component in config["components"]]
+
+    assert "Load AI models" in labels
+    assert not any(
+        dependency.get("trigger_after") == "load"
+        for dependency in config.get("dependencies", [])
+    )
+
+
+def test_interface_exposes_responsive_hierarchy_and_hides_mean_latency(tmp_path: Path) -> None:
+    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+    interface = app.create_interface()
+    config = interface.get_config_file()
+    serialized = json.dumps(config, default=str)
+
+    assert '"elem_id": "primary-tabs"' in serialized
+    assert '"label": "Maintenance"' in serialized
+    assert '"label": "Technical details"' in serialized
+    assert "mean_latency_seconds" not in serialized
+
+    components = [component["props"] for component in config["components"]]
+    document_table = next(
+        props for props in components if props.get("label") == "Indexed documents"
+    )
+    assert document_table["show_search"] == "filter"
+    assert document_table["wrap"] is True
+    assert document_table["max_height"] == 360
+
+
+def test_local_stylesheet_covers_mobile_tables_and_keyboard_focus() -> None:
+    stylesheet = Path(app_module.__file__).with_name("app.css")
+
+    assert stylesheet.is_file()
+    css = stylesheet.read_text(encoding="utf-8")
+    assert "@media (max-width: 640px)" in css
+    assert "overflow-x: auto" in css
+    assert ":focus-visible" in css
+    assert "min-height: 44px" in css

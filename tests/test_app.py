@@ -385,8 +385,10 @@ def test_semantic_status_banner_escapes_dynamic_content_and_exposes_aria() -> No
     for kind in ("info", "success", "warning", "error"):
         banner = render_status(kind, f"{kind} <title>", '<script>alert("x")</script>')
         assert f"rag-status--{kind}" in banner
-        assert 'role="status"' in banner
-        assert 'aria-live="polite"' in banner
+        expected_role = "alert" if kind == "error" else "status"
+        expected_live = "assertive" if kind == "error" else "polite"
+        assert f'role="{expected_role}"' in banner
+        assert f'aria-live="{expected_live}"' in banner
         assert "<script>" not in banner
         assert "&lt;script&gt;" in banner
 
@@ -533,6 +535,7 @@ def test_interface_exposes_responsive_hierarchy_and_hides_mean_latency(tmp_path:
     serialized = json.dumps(config, default=str)
 
     assert '"elem_id": "app-shell"' in serialized
+    assert '"elem_id": "skip-navigation"' in serialized
     assert '"elem_id": "primary-tabs"' in serialized
     assert '"elem_id": "workspace-grid"' in serialized
     assert '"elem_id": "corpus-rail"' in serialized
@@ -585,20 +588,30 @@ def test_interface_exposes_responsive_hierarchy_and_hides_mean_latency(tmp_path:
     assert document_table["show_search"] == "filter"
     assert document_table["wrap"] is True
     assert document_table["max_height"] == 360
-    table_ids = {
-        props.get("elem_id")
-        for props in components
-        if "rag-table" in (props.get("elem_classes") or [])
+    component_by_id = {
+        component["props"].get("elem_id"): component
+        for component in config["components"]
+        if component["props"].get("elem_id")
     }
-    assert {
-        "documents-table",
+    dataframe_ids = {
+        component["props"].get("elem_id")
+        for component in config["components"]
+        if component["type"] == "dataframe"
+    }
+    assert dataframe_ids == {"documents-table"}
+    for result_id in (
         "indexing-errors-table",
         "retrieval-scores-table",
         "retrieval-trace-table",
         "evaluation-metrics-table",
         "evaluation-failures-table",
         "diagnostics-table",
-    } <= table_ids
+    ):
+        assert component_by_id[result_id]["type"] == "html"
+
+    export_component = component_by_id["conversation-export"]
+    assert export_component["type"] == "downloadbutton"
+    assert export_component["props"]["visible"] is False
 
 
 def test_local_stylesheet_covers_mobile_tables_and_keyboard_focus() -> None:
@@ -608,6 +621,7 @@ def test_local_stylesheet_covers_mobile_tables_and_keyboard_focus() -> None:
     css = stylesheet.read_text(encoding="utf-8")
     assert "@media (max-width: 900px)" in css
     assert "@media (max-width: 640px)" in css
+    assert "color-scheme: dark" in css
     assert "overflow-x: auto" in css
     assert ":focus-visible" in css
     assert "min-height: 44px" in css
@@ -615,7 +629,11 @@ def test_local_stylesheet_covers_mobile_tables_and_keyboard_focus() -> None:
     assert "--rag-status-surface:" in css
     assert "min-width: 0" in css
     assert "overflow-x: clip" in css
-    assert ".rag-table > div" in css
+    assert ".result-scroll" in css
+    assert ".result-table" in css
+    assert "#skip-navigation" in css
+    assert "height: clamp(220px, 28vh, 260px)" in css
+    assert ".stack-on-mobile" in css
     assert "--rag-info-surface:" in css
     assert "--rag-error-surface:" in css
     assert "font-family: var(--font)" in css
@@ -630,6 +648,58 @@ def test_local_stylesheet_covers_mobile_tables_and_keyboard_focus() -> None:
     assert "#fff1f2" not in css
     assert ".status-host > div:not(.rag-status)" in css
     assert ".status-host > div," not in css
+    assert "#document-upload" in css
+    assert "#evaluation-split" in css
+    assert "#evaluation-systems" in css
+    assert "  .view-heading {\n    flex-direction: column;" in css
+
+
+def test_statuses_have_typed_aria_semantics_and_escape_content() -> None:
+    informational = app_module.render_status("info", "Ready", "Use <local> models")
+    failure = app_module.render_status("error", "Failed <now>", 'Bad "value"')
+
+    assert 'role="status"' in informational
+    assert 'aria-live="polite"' in informational
+    assert "Use &lt;local&gt; models" in informational
+    assert 'role="alert"' in failure
+    assert 'aria-live="assertive"' in failure
+    assert "Failed &lt;now&gt;" in failure
+    assert "Bad &quot;value&quot;" in failure
+
+
+def test_semantic_result_renderer_is_accessible_safe_and_handles_empty_rows() -> None:
+    rendered = app_module.render_result_table(
+        ["Name", "Status"],
+        [["<script>alert(1)</script>", "Unavailable"]],
+        caption="Readiness <checks>",
+        empty_message="No checks.",
+        mobile_cards=True,
+    )
+    empty = app_module.render_result_table(
+        ["Name"],
+        [],
+        caption="Indexing errors",
+        empty_message="No indexing errors.",
+    )
+
+    assert '<div class="result-scroll"' in rendered
+    assert '<caption>Readiness &lt;checks&gt;</caption>' in rendered
+    assert 'data-label="Status"' in rendered
+    assert 'data-status="error"' in rendered
+    assert "stack-on-mobile" in rendered
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in rendered
+    assert "<script>" not in rendered
+    assert 'class="result-empty"' in empty
+    assert "No indexing errors." in empty
+
+
+def test_result_row_normalizer_accepts_only_tabular_sequences() -> None:
+    assert app_module.normalize_result_rows([["one", 2], ("three", 4)]) == [
+        ["one", 2],
+        ["three", 4],
+    ]
+    assert app_module.normalize_result_rows({"unexpected": "mapping"}) == []
+    assert app_module.normalize_result_rows("unexpected text") == []
 
 
 def test_dynamic_statuses_are_accessible_live_regions(tmp_path: Path) -> None:
@@ -649,7 +719,6 @@ def test_dynamic_statuses_are_accessible_live_regions(tmp_path: Path) -> None:
         "evaluation-status",
     } <= live_regions.keys()
     assert all(props.get("value", "").count('role="status"') == 1 for props in live_regions.values())
-    assert 'setAttribute("role", "alert")' in app_module.ACCESSIBILITY_BOOTSTRAP
     assert "requestAnimationFrame" in app_module.ACCESSIBILITY_BOOTSTRAP
     assert "addedNodes" in app_module.ACCESSIBILITY_BOOTSTRAP
     assert "ResizeObserver" in app_module.ACCESSIBILITY_BOOTSTRAP
@@ -657,13 +726,13 @@ def test_dynamic_statuses_are_accessible_live_regions(tmp_path: Path) -> None:
     assert "vertically scrollable" in app_module.ACCESSIBILITY_BOOTSTRAP
     assert 'dataset.overflowX' in app_module.ACCESSIBILITY_BOOTSTRAP
     assert 'dataset.overflowY' in app_module.ACCESSIBILITY_BOOTSTRAP
-    assert 'region.id !== "corpus-rail"' in app_module.ACCESSIBILITY_BOOTSTRAP
-    assert 'removeAttribute("tabindex")' in app_module.ACCESSIBILITY_BOOTSTRAP
-    assert 'removeAttribute("aria-label")' in app_module.ACCESSIBILITY_BOOTSTRAP
+    assert 'querySelector(".result-scroll, .wrap")' in app_module.ACCESSIBILITY_BOOTSTRAP
+    assert 'target.setAttribute("role", "region")' in app_module.ACCESSIBILITY_BOOTSTRAP
+    assert 'target.removeAttribute("tabindex")' in app_module.ACCESSIBILITY_BOOTSTRAP
+    assert 'target.removeAttribute("aria-label")' in app_module.ACCESSIBILITY_BOOTSTRAP
+    assert "resizeObserver.observe(target)" in app_module.ACCESSIBILITY_BOOTSTRAP
     assert 'querySelector("button.label-wrap")' in app_module.ACCESSIBILITY_BOOTSTRAP
     assert 'classList.contains("open")' in app_module.ACCESSIBILITY_BOOTSTRAP
     assert 'setAttribute("aria-expanded"' in app_module.ACCESSIBILITY_BOOTSTRAP
-    assert "for (const node of pending) enhanceNode(node);\n      syncCorpusMode();" in (
-        app_module.ACCESSIBILITY_BOOTSTRAP
-    )
+    assert '"corpus-rail":' not in app_module.ACCESSIBILITY_BOOTSTRAP
     assert 'type="range"' not in app_module.ACCESSIBILITY_BOOTSTRAP

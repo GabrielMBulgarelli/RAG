@@ -365,13 +365,16 @@ def test_evaluation_selection_handles_empty_and_scalar_values(tmp_path: Path, mo
     monkeypatch.setattr(
         app,
         "load_evaluation_result",
-        lambda _path: ([["dense"]], [], "Loaded evaluation."),
+        lambda _path: ([["dense"]], [], "context", "Loaded evaluation."),
     )
 
     for selection in (None, [], ""):
-        metrics, failures, status = app.run_evaluation_ui("development", selection)
+        metrics, failures, context, status = app.run_evaluation_ui(
+            "development", selection
+        )
         assert metrics == []
         assert failures == []
+        assert context == ""
         assert "select at least one" in status.lower()
     assert calls == []
 
@@ -380,7 +383,7 @@ def test_evaluation_selection_handles_empty_and_scalar_values(tmp_path: Path, mo
     dataset.parent.mkdir(parents=True)
     dataset.write_text("{}\n", encoding="utf-8")
 
-    metrics, _, status = app.run_evaluation_ui("development", "dense")
+    metrics, _, _, status = app.run_evaluation_ui("development", "dense")
     assert metrics == [["dense"]]
     assert "Loaded" in status
     assert calls == [(dataset, ["dense"], "development")]
@@ -413,7 +416,7 @@ def test_evaluation_tables_and_diagnostics(tmp_path: Path) -> None:
         + "\n",
         encoding="utf-8",
     )
-    metrics, failures, label = app.load_evaluation_result(result)
+    metrics, failures, context, label = app.load_evaluation_result(result)
     assert metrics[0] == [
         "Retrieval",
         "Recall at 5",
@@ -441,6 +444,9 @@ def test_evaluation_tables_and_diagnostics(tmp_path: Path) -> None:
     assert not any(row[1] in {"Route accuracy", "Mean latency"} for row in metrics)
     assert len(metrics) == len(DISPLAY_METRIC_LABELS) + 1
     assert failures[0][-1] == "Retrieval miss"
+    assert 'aria-label="Evaluation result context"' in context
+    assert "r1" in context
+    assert "1 case" in context
     assert "r1" in label
 
     diagnostics = app.diagnostic_rows(ollama={"reachable": False, "models": []})
@@ -490,12 +496,13 @@ def test_evaluation_loader_formats_v2_support_and_empty_statuses(tmp_path: Path)
     )
     (result / "cases.jsonl").write_text("", encoding="utf-8")
 
-    metrics, _, _ = app.load_evaluation_result(result)
+    metrics, _, context, _ = app.load_evaluation_result(result)
 
     assert metrics[0][2] == "0.0% · n=8"
     citation_row = next(row for row in metrics if row[1] == "Citation precision")
     assert citation_row[2] == "— Not applicable"
     assert citation_row[5] == "— No eligible cases"
+    assert "r2" in context
 
 
 def test_semantic_status_banner_escapes_dynamic_content_and_exposes_aria() -> None:
@@ -771,6 +778,13 @@ def test_local_stylesheet_covers_mobile_tables_and_keyboard_focus() -> None:
     assert "#document-upload" in css
     assert "#evaluation-split" in css
     assert "#evaluation-systems" in css
+    assert "#evaluation-setup" in css
+    assert ".evaluation-config-row" in css
+    assert ".evaluation-actions-row" in css
+    assert ".evaluation-context" in css
+    assert ".metric-value--neutral" in css
+    assert ".metric-support" in css
+    assert ".evaluation-toolbar" not in css
     assert "  .view-heading {\n    flex-direction: column;" in css
 
 
@@ -904,13 +918,113 @@ def test_evaluation_adapters_reveal_results_and_status(tmp_path: Path, monkeypat
     monkeypatch.setattr(
         app,
         "load_latest_evaluation",
-        lambda: ([['Retrieval', 'Recall at 5', '50.0%', '—', '—', '—']], [], "loaded"),
+        lambda: (
+            [['Retrieval', 'Recall at 5', '50.0%', '—', '—', '—']],
+            [],
+            '<section aria-label="Evaluation result context">r1</section>',
+            "loaded",
+        ),
     )
 
-    metrics, failures, failure_panel, status = app.load_latest_evaluation_ui()
+    (
+        results_panel,
+        context,
+        metrics,
+        failures,
+        failure_panel,
+        status,
+        run_button,
+        load_button,
+    ) = app.load_latest_evaluation_ui()
 
+    assert results_panel["visible"] is True
+    assert context["visible"] is True
+    assert "r1" in context["value"]
     assert metrics["visible"] is True
     assert "Recall at 5" in metrics["value"]
     assert "No evaluation failures" in failures
     assert failure_panel["visible"] is True
     assert status["visible"] is True
+    assert run_button["interactive"] is True
+    assert load_button["interactive"] is True
+
+
+def test_evaluation_adapters_hide_results_on_validation_error(tmp_path: Path) -> None:
+    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+
+    updates = app.run_evaluation_presentation_ui("development", [])
+
+    assert updates[0]["visible"] is False
+    assert updates[1]["visible"] is False
+    assert updates[2]["visible"] is False
+    assert updates[4]["visible"] is False
+    assert "select at least one" in updates[5]["value"].lower()
+    assert updates[6]["interactive"] is True
+    assert updates[7]["interactive"] is True
+
+
+def test_evaluation_running_state_disables_both_actions(tmp_path: Path) -> None:
+    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+
+    run_button, load_button, status = app.begin_evaluation_ui()
+
+    assert run_button["interactive"] is False
+    assert load_button["interactive"] is False
+    assert status["visible"] is True
+    assert "Running evaluation" in status["value"]
+
+
+def test_evaluation_context_escapes_metadata(tmp_path: Path) -> None:
+    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+    result = tmp_path / "unsafe-run"
+    result.mkdir()
+    (result / "summary.json").write_text(
+        json.dumps(
+            {
+                "configuration": {
+                    "run_id": "<script>bad()</script>",
+                    "dataset_name": "multi<hop",
+                    "evaluated_split": "development",
+                    "systems": ["dense", "agentic"],
+                    "timestamp": "2026-07-17T12:00:00+00:00",
+                },
+                "metrics": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (result / "cases.jsonl").write_text("{}\n{}\n", encoding="utf-8")
+
+    _, _, context, _ = app.load_evaluation_result(result)
+
+    assert "<script>" not in context
+    assert "&lt;script&gt;" in context
+    assert "multi&lt;hop" in context
+    assert "Dense, Agentic" in context
+    assert "2 cases" in context
+    assert "2026-07-17 12:00 UTC" in context
+
+
+def test_evaluation_interface_has_task_order_and_four_systems(tmp_path: Path) -> None:
+    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+    config = app.create_interface().get_config_file()
+    components = [component["props"] for component in config["components"]]
+    by_id = {
+        props.get("elem_id"): props for props in components if props.get("elem_id")
+    }
+
+    assert by_id["evaluation-split"]["label"] == "Split"
+    assert by_id["evaluation-systems"]["label"] == "Systems"
+    assert by_id["evaluation-systems"]["choices"] == [
+        ("dense", "dense"),
+        ("bm25", "bm25"),
+        ("hybrid", "hybrid"),
+        ("agentic", "agentic"),
+    ]
+    assert by_id["evaluation-systems"]["value"] == list(app_module.SYSTEMS)
+    assert by_id["evaluation-results"]["visible"] is False
+    assert by_id["evaluation-result-context"]["visible"] is False
+    action_values = [props.get("value") for props in components]
+    assert action_values.count("Run evaluation") == 1
+    assert action_values.count("Load latest result") == 1
+    assert "all" not in by_id["evaluation-systems"]["value"]

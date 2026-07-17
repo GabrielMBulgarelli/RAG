@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import modules.app as app_module
 from modules.app import (
@@ -38,12 +39,13 @@ class FakeManager:
             chunk_size=700,
             chunk_overlap=100,
         )
+        self.records: dict[str, ManifestDocument] = {"doc-1": self.record}
 
     def setup(self):
         return None
 
     def manifest(self):
-        return IngestionManifest(documents={} if self.deleted else {"doc-1": self.record})
+        return IngestionManifest(documents={} if self.deleted else self.records)
 
     def delete_document(self, document_id: str):
         self.deleted.append(document_id)
@@ -69,26 +71,72 @@ def test_document_callbacks_delete_reindex_and_rebuild(tmp_path: Path) -> None:
     (tmp_path / "manual.txt").write_text("changed", encoding="utf-8")
     app = RAGApplication(vector_db=manager)  # type: ignore[arg-type]
 
-    rows, status, _, selector, confirmation, confirmation_update = app.delete_selected("doc-1")
+    rows, status, _, confirmation, confirmation_update = app.delete_selected("doc-1")
     assert rows == []
-    assert selector["choices"] == []
     assert manager.deleted == ["doc-1"]
     assert "Deleted" in status
+    assert "doc-1" not in status
     assert confirmation == ""
     assert confirmation_update["visible"] is False
 
     manager.deleted.clear()
-    rows, status, errors, selector = app.reindex_changed()
+    rows, status, errors = app.reindex_changed()
     assert rows[0][0] == "manual.txt"
     assert manager.indexed == [tmp_path / "manual.txt"]
     assert "Reindexed" in status
     assert errors == []
-    assert selector["choices"] == ["doc-1"]
 
-    _, status, _, selector = app.rebuild_index()
+    _, status, _ = app.rebuild_index()
     assert manager.rebuilt
     assert "Rebuilt" in status
-    assert selector["choices"] == ["doc-1"]
+
+
+def test_document_inventory_and_selection_use_relative_path_without_exposing_id(
+    tmp_path: Path,
+) -> None:
+    manager = FakeManager(tmp_path)
+    manager.records = {
+        "doc-1": manager.record,
+        "doc-2": manager.record.model_copy(
+            update={"document_id": "doc-2", "relative_path": "archive/manual.txt"}
+        ),
+    }
+    app = RAGApplication(vector_db=manager)  # type: ignore[arg-type]
+
+    rows = app.document_rows()
+    assert rows == [
+        ["archive/manual.txt", 1, 1, "Indexed"],
+        ["manual.txt", 1, 1, "Indexed"],
+    ]
+
+    selected_id, summary, delete_button, confirmation_text, confirmation = (
+        app.select_document(rows, SimpleNamespace(index=(0, 2)))  # type: ignore[arg-type]
+    )
+
+    assert selected_id == "doc-2"
+    assert "archive/manual.txt" in summary["value"]
+    assert "doc-2" not in summary["value"]
+    assert delete_button["interactive"] is True
+    assert delete_button["visible"] is True
+    assert confirmation_text == ""
+    assert confirmation["visible"] is False
+
+
+def test_document_selection_reset_disables_delete_and_closes_confirmation(
+    tmp_path: Path,
+) -> None:
+    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+
+    selected_id, summary, delete_button, confirmation_text, confirmation = (
+        app.reset_document_selection(app.document_rows())
+    )
+
+    assert selected_id == ""
+    assert summary["visible"] is False
+    assert delete_button["interactive"] is False
+    assert delete_button["visible"] is True
+    assert confirmation_text == ""
+    assert confirmation["visible"] is False
 
 
 def test_preflight_controls_chat_and_reports_actionable_state(tmp_path: Path) -> None:
@@ -271,12 +319,20 @@ def test_answer_status_distinguishes_supported_abstention_and_errors(tmp_path: P
 def test_reconciliation_action_refreshes_document_controls(tmp_path: Path) -> None:
     app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
 
-    rows, status, errors, selector = app.reconcile_manifest_index()
+    rows, status, errors = app.reconcile_manifest_index()
+    selected_id, summary, delete_button, confirmation_text, confirmation = (
+        app.reset_document_selection(rows)
+    )
 
     assert rows[0][0] == "manual.txt"
     assert "1 orphan" in status
     assert errors == []
-    assert selector["choices"] == ["doc-1"]
+    assert selected_id == ""
+    assert summary["visible"] is False
+    assert delete_button["visible"] is True
+    assert delete_button["interactive"] is False
+    assert confirmation_text == ""
+    assert confirmation["visible"] is False
 
 
 def test_document_deletion_requires_review_and_confirmation(tmp_path: Path) -> None:
@@ -563,22 +619,24 @@ def test_interface_exposes_responsive_hierarchy_and_hides_mean_latency(tmp_path:
     assert top_level_tabs == {
         "workspace-tab": "Workspace",
         "evaluation-tab": "Evaluation",
-        "diagnostics-tab": "Diagnostics",
     }
+    assert "Manage documents" not in serialized
+    assert "Document ID to delete" not in serialized
+    assert "Diagnostics" not in top_level_tabs.values()
     assert not any(props.get("label") in {"Documents", "Chat"} for props in components)
 
     action_labels = [props.get("value") for props in components]
     for label in (
         "Load AI models",
-        "Index document",
-        "Review deletion",
+        "Index files",
+        "Delete selected",
         "Cancel",
         "Confirm deletion",
         "Ask",
         "Clear",
         "Export",
         "Run evaluation",
-        "Refresh diagnostics",
+        "Refresh system status",
     ):
         assert action_labels.count(label) == 1
 
@@ -587,7 +645,8 @@ def test_interface_exposes_responsive_hierarchy_and_hides_mean_latency(tmp_path:
     )
     assert document_table["show_search"] == "filter"
     assert document_table["wrap"] is True
-    assert document_table["max_height"] == 360
+    assert document_table["max_height"] == 300
+    assert document_table["headers"] == ["Document", "Pages", "Chunks", "Status"]
     component_by_id = {
         component["props"].get("elem_id"): component
         for component in config["components"]
@@ -605,7 +664,7 @@ def test_interface_exposes_responsive_hierarchy_and_hides_mean_latency(tmp_path:
         "retrieval-trace-table",
         "evaluation-metrics-table",
         "evaluation-failures-table",
-        "diagnostics-table",
+        "system-status-details",
     ):
         assert component_by_id[result_id]["type"] == "html"
 
@@ -619,7 +678,7 @@ def test_local_stylesheet_covers_mobile_tables_and_keyboard_focus() -> None:
 
     assert stylesheet.is_file()
     css = stylesheet.read_text(encoding="utf-8")
-    assert "@media (max-width: 900px)" in css
+    assert "@media (max-width: 1050px)" in css
     assert "@media (max-width: 640px)" in css
     assert "color-scheme: dark" in css
     assert "overflow-x: auto" in css
@@ -632,7 +691,7 @@ def test_local_stylesheet_covers_mobile_tables_and_keyboard_focus() -> None:
     assert ".result-scroll" in css
     assert ".result-table" in css
     assert "#skip-navigation" in css
-    assert "height: clamp(220px, 28vh, 260px)" in css
+    assert "height: clamp(200px, 30vh, 320px)" in css
     assert ".stack-on-mobile" in css
     assert "--rag-info-surface:" in css
     assert "--rag-error-surface:" in css
@@ -718,7 +777,10 @@ def test_dynamic_statuses_are_accessible_live_regions(tmp_path: Path) -> None:
         "answer-status",
         "evaluation-status",
     } <= live_regions.keys()
-    assert all(props.get("value", "").count('role="status"') == 1 for props in live_regions.values())
+    assert live_regions["readiness-status"].get("value", "").count('role="status"') == 1
+    for idle_id in ("ingestion-status", "answer-status", "evaluation-status"):
+        assert live_regions[idle_id].get("value", "") == ""
+        assert live_regions[idle_id].get("visible") is False
     assert "requestAnimationFrame" in app_module.ACCESSIBILITY_BOOTSTRAP
     assert "addedNodes" in app_module.ACCESSIBILITY_BOOTSTRAP
     assert "ResizeObserver" in app_module.ACCESSIBILITY_BOOTSTRAP
@@ -726,6 +788,8 @@ def test_dynamic_statuses_are_accessible_live_regions(tmp_path: Path) -> None:
     assert "vertically scrollable" in app_module.ACCESSIBILITY_BOOTSTRAP
     assert 'dataset.overflowX' in app_module.ACCESSIBILITY_BOOTSTRAP
     assert 'dataset.overflowY' in app_module.ACCESSIBILITY_BOOTSTRAP
+    assert "target.dataset.overflowX !== nextOverflowX" in app_module.ACCESSIBILITY_BOOTSTRAP
+    assert "target.dataset.overflowY !== nextOverflowY" in app_module.ACCESSIBILITY_BOOTSTRAP
     assert 'querySelector(".result-scroll, .wrap")' in app_module.ACCESSIBILITY_BOOTSTRAP
     assert 'target.setAttribute("role", "region")' in app_module.ACCESSIBILITY_BOOTSTRAP
     assert 'target.removeAttribute("tabindex")' in app_module.ACCESSIBILITY_BOOTSTRAP
@@ -736,3 +800,39 @@ def test_dynamic_statuses_are_accessible_live_regions(tmp_path: Path) -> None:
     assert 'setAttribute("aria-expanded"' in app_module.ACCESSIBILITY_BOOTSTRAP
     assert '"corpus-rail":' not in app_module.ACCESSIBILITY_BOOTSTRAP
     assert 'type="range"' not in app_module.ACCESSIBILITY_BOOTSTRAP
+
+
+def test_system_status_groups_problems_and_preserves_technical_values(
+    tmp_path: Path,
+) -> None:
+    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+    rows = [
+        ["AI runtime", "Ollama connectivity", "Unavailable", "Run ollama serve"],
+        ["Document index", "Manifest", "Ready", "Valid; 1 document"],
+    ]
+
+    rendered = app.system_status_html(rows)
+
+    assert 'aria-label="System status"' in rendered
+    assert "Action required" in rendered
+    assert "Ollama connectivity" in rendered
+    assert "Run ollama serve" in rendered
+    assert "Technical values" in rendered
+    assert "Valid; 1 document" in rendered
+
+
+def test_evaluation_adapters_reveal_results_and_status(tmp_path: Path, monkeypatch) -> None:
+    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+    monkeypatch.setattr(
+        app,
+        "load_latest_evaluation",
+        lambda: ([['Retrieval', 'Recall at 5', '50.0%', '—', '—', '—']], [], "loaded"),
+    )
+
+    metrics, failures, failure_panel, status = app.load_latest_evaluation_ui()
+
+    assert metrics["visible"] is True
+    assert "Recall at 5" in metrics["value"]
+    assert "No evaluation failures" in failures
+    assert failure_panel["visible"] is True
+    assert status["visible"] is True

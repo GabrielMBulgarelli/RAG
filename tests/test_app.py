@@ -572,16 +572,15 @@ def test_interface_construction_does_not_require_live_ollama(tmp_path: Path) -> 
     assert interface is not None
 
 
-def test_interface_exposes_manual_ai_loading_without_automatic_preflight(tmp_path: Path) -> None:
+def test_interface_exposes_manual_ai_loading_with_automatic_workspace_refresh(
+    tmp_path: Path,
+) -> None:
     app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
     config = app.create_interface().get_config_file()
     labels = [component["props"].get("value") for component in config["components"]]
 
     assert "Load AI models" in labels
-    assert not any(
-        dependency.get("trigger_after") == "load"
-        for dependency in config.get("dependencies", [])
-    )
+    assert "refresh_workspace_state" in json.dumps(config, default=str)
 
 
 def test_interface_exposes_responsive_hierarchy_and_hides_mean_latency(tmp_path: Path) -> None:
@@ -636,17 +635,17 @@ def test_interface_exposes_responsive_hierarchy_and_hides_mean_latency(tmp_path:
         "Clear",
         "Export",
         "Run evaluation",
-        "Refresh system status",
     ):
         assert action_labels.count(label) == 1
+    assert "Refresh document status" not in action_labels
+    assert "Refresh system status" not in action_labels
+    assert "Reconcile manifest/index" not in action_labels
 
     document_table = next(
         props for props in components if props.get("label") == "Indexed documents"
     )
-    assert document_table["show_search"] == "filter"
-    assert document_table["wrap"] is True
-    assert document_table["max_height"] == 300
     assert document_table["headers"] == ["Document", "Pages", "Chunks", "Status"]
+    assert document_table["layout"] == "table"
     component_by_id = {
         component["props"].get("elem_id"): component
         for component in config["components"]
@@ -657,7 +656,8 @@ def test_interface_exposes_responsive_hierarchy_and_hides_mean_latency(tmp_path:
         for component in config["components"]
         if component["type"] == "dataframe"
     }
-    assert dataframe_ids == {"documents-table"}
+    assert dataframe_ids == set()
+    assert component_by_id["documents-table"]["type"] == "dataset"
     for result_id in (
         "indexing-errors-table",
         "retrieval-scores-table",
@@ -819,6 +819,23 @@ def test_system_status_groups_problems_and_preserves_technical_values(
     assert "Run ollama serve" in rendered
     assert "Technical values" in rendered
     assert "Valid; 1 document" in rendered
+
+
+def test_system_status_never_treats_unchecked_state_as_ready(tmp_path: Path) -> None:
+    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+
+    rendered = app.system_status_html([])
+
+    assert "Status unknown" in rendered
+    assert "System ready" not in rendered
+    assert "<details" not in rendered
+
+
+def test_document_samples_are_filtered_without_exposing_ids(tmp_path: Path) -> None:
+    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+
+    assert app.document_samples("MANUAL") == [["manual.txt", 1, 1, "Indexed"]]
+    assert "doc-1" not in json.dumps(app.document_samples(""))
 
 
 def test_evaluation_adapters_reveal_results_and_status(tmp_path: Path, monkeypatch) -> None:

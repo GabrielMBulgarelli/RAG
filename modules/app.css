@@ -1588,6 +1588,42 @@ button.primary:hover,
   font-family: var(--font) !important;
 }
 
+#corpus-summary,
+#corpus-summary > div,
+#corpus-summary .prose {
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+}
+
+.corpus-summary {
+  display: flex;
+  gap: 6px 12px;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 10px 12px;
+  color: var(--rag-muted);
+  border: 1px solid var(--rag-line);
+  border-radius: var(--rag-radius-sm);
+  background: var(--rag-surface-raised);
+  font-size: 0.82rem;
+}
+
+.corpus-summary strong {
+  color: var(--rag-text);
+  font-size: 0.88rem;
+}
+
+#document-filter {
+  min-width: 0 !important;
+  margin: 0 !important;
+}
+
+#document-filter textarea,
+#document-filter input {
+  min-height: 44px !important;
+}
+
 #documents-table .table-wrap,
 #documents-table .table-container,
 #documents-table [role="grid"] {
@@ -1618,6 +1654,19 @@ button.primary:hover,
   white-space: nowrap;
 }
 
+#documents-table tbody tr {
+  cursor: pointer;
+}
+
+#documents-table tbody tr:hover td {
+  background: var(--rag-surface-raised) !important;
+}
+
+#documents-table tbody tr:focus-within td {
+  outline: 2px solid var(--rag-focus);
+  outline-offset: -2px;
+}
+
 #documents-table th:first-child,
 #documents-table td:first-child { width: 52% !important; }
 #documents-table th:nth-child(2),
@@ -1646,9 +1695,19 @@ button.primary:hover,
   overflow-x: hidden !important;
 }
 
-#maintenance-panel button,
-#system-status-panel button {
-  width: 100%;
+#maintenance-actions {
+  display: flex !important;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+#maintenance-actions > * {
+  flex: 1 1 180px !important;
+  min-width: 0 !important;
+}
+
+#maintenance-actions button {
+  width: auto !important;
   white-space: normal;
 }
 
@@ -1660,6 +1719,25 @@ button.primary:hover,
   overflow-wrap: anywhere;
   color: var(--rag-text) !important;
   background: transparent !important;
+}
+
+.system-status {
+  display: grid;
+  gap: 12px;
+}
+
+.system-status__technical-title {
+  margin: 2px 0 -4px;
+  color: var(--rag-muted);
+  font-size: 0.76rem;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.system-status__summary--unknown {
+  border-color: var(--rag-line);
+  background: var(--rag-surface-raised);
 }
 
 .evaluation-heading {

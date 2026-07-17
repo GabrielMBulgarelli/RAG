@@ -6,6 +6,7 @@ import hashlib
 import json
 import urllib.error
 import urllib.request
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from html import escape
@@ -170,14 +171,89 @@ def render_status(kind: StatusKind, title: str, detail: str = "") -> str:
     safe_title = escape(title)
     safe_detail = escape(detail)
     detail_html = f'<span class="rag-status__detail">{safe_detail}</span>' if detail else ""
+    role = "alert" if kind == "error" else "status"
+    live = "assertive" if kind == "error" else "polite"
     return (
-        f'<div class="rag-status rag-status--{kind}" role="status" '
-        'aria-live="polite" aria-atomic="true">'
+        f'<div class="rag-status rag-status--{kind}" role="{role}" '
+        f'aria-live="{live}" aria-atomic="true">'
         f'<span class="rag-status__icon" aria-hidden="true">{icons[kind]}</span>'
         '<span class="rag-status__copy">'
         f'<strong class="rag-status__title">{safe_title}</strong>{detail_html}'
         "</span></div>"
     )
+
+
+def render_result_table(
+    headers: Sequence[Any],
+    rows: Sequence[Sequence[Any]] | None,
+    *,
+    caption: str,
+    empty_message: str,
+    mobile_cards: bool = False,
+    table_class: str = "",
+) -> str:
+    """Render read-only results without inheriting Gradio's editable grid UI."""
+    safe_headers = [escape(str(header)) for header in headers]
+    safe_caption = escape(caption)
+    safe_empty = escape(empty_message)
+    row_values = list(rows or [])
+    section_classes = "result-view"
+    if table_class:
+        section_classes += f" {escape(table_class)}"
+    if not row_values:
+        return (
+            f'<section class="{section_classes}" aria-label="{safe_caption}">'
+            f'<div class="result-empty" role="status">{safe_empty}</div>'
+            "</section>"
+        )
+
+    status_kinds = {
+        "ready": "success",
+        "indexed": "success",
+        "review": "warning",
+        "warning": "warning",
+        "unavailable": "error",
+        "error": "error",
+        "failed": "error",
+        "not loaded": "info",
+        "pending": "info",
+    }
+    card_class = " stack-on-mobile" if mobile_cards else ""
+    body = []
+    for row in row_values:
+        cells = []
+        for index, header in enumerate(safe_headers):
+            raw_value = row[index] if index < len(row) else "—"
+            display_value = "—" if raw_value is None or raw_value == "" else str(raw_value)
+            safe_value = escape(display_value)
+            status = status_kinds.get(display_value.strip().lower())
+            status_attribute = f' data-status="{status}"' if status else ""
+            cells.append(
+                f'<td data-label="{header}"{status_attribute}>{safe_value}</td>'
+            )
+        body.append(f"<tr>{''.join(cells)}</tr>")
+
+    headings = "".join(f'<th scope="col">{header}</th>' for header in safe_headers)
+    return (
+        f'<section class="{section_classes}">'
+        '<div class="result-scroll">'
+        f'<table class="result-table{card_class}">'
+        f"<caption>{safe_caption}</caption>"
+        f"<thead><tr>{headings}</tr></thead>"
+        f"<tbody>{''.join(body)}</tbody>"
+        "</table></div></section>"
+    )
+
+
+def normalize_result_rows(value: Any) -> list[list[Any]]:
+    """Narrow Gradio's broad component value type to safe tabular rows."""
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
+        return []
+    return [
+        list(row)
+        for row in value
+        if isinstance(row, Sequence) and not isinstance(row, (str, bytes))
+    ]
 
 
 ACCESSIBILITY_BOOTSTRAP = """
@@ -186,7 +262,6 @@ ACCESSIBILITY_BOOTSTRAP = """
     "documents-table": "Indexed documents",
     "indexing-errors-table": "Indexing errors",
     "conversation-region": "Conversation",
-    "corpus-rail": "Document management",
     "evidence-list": "Cited evidence",
     "retrieval-scores-table": "Retrieval scores",
     "retrieval-trace-table": "Retrieval trace",
@@ -194,15 +269,22 @@ ACCESSIBILITY_BOOTSTRAP = """
     "evaluation-failures-table": "Evaluation failure cases",
     "diagnostics-table": "Readiness checks",
   };
+  const clearScrollSemantics = (target) => {
+    target.removeAttribute("role");
+    target.removeAttribute("aria-label");
+    target.removeAttribute("tabindex");
+    delete target.dataset.overflowX;
+    delete target.dataset.overflowY;
+  };
   const syncRegion = (region) => {
-    const target = region.querySelector(".table-wrap") || region;
-    const overflowX =
-      region.id !== "corpus-rail" && target.scrollWidth > target.clientWidth + 1;
+    const target = region.querySelector(".result-scroll, .wrap") || region;
+    const previousTarget = region._ragScrollTarget;
+    if (previousTarget && previousTarget !== target) clearScrollSemantics(previousTarget);
+    region._ragScrollTarget = target;
+    const overflowX = target.scrollWidth > target.clientWidth + 1;
     const overflowY = target.scrollHeight > target.clientHeight + 1;
-    region.dataset.overflowX = String(overflowX);
-    region.dataset.overflowY = String(overflowY);
-    const table = region.querySelector("table");
-    region.dataset.empty = String(Boolean(table && table.tBodies[0]?.rows.length === 0));
+    target.dataset.overflowX = String(overflowX);
+    target.dataset.overflowY = String(overflowY);
     if (overflowX || overflowY) {
       const directions = [
         overflowX && "horizontally scrollable",
@@ -210,20 +292,24 @@ ACCESSIBILITY_BOOTSTRAP = """
       ]
         .filter(Boolean)
         .join(" and ");
-      region.setAttribute("role", "region");
-      region.setAttribute(
+      target.setAttribute("role", "region");
+      target.setAttribute(
         "aria-label",
         `${regionLabels[region.id] || "Scrollable results"}, ${directions} scrolling available`,
       );
-      region.setAttribute("tabindex", "0");
+      target.setAttribute("tabindex", "0");
     } else {
-      region.removeAttribute("role");
-      region.removeAttribute("aria-label");
-      region.removeAttribute("tabindex");
+      target.removeAttribute("role");
+      target.removeAttribute("aria-label");
+      target.removeAttribute("tabindex");
     }
+    return target;
   };
   const resizeObserver = new ResizeObserver((entries) => {
-    for (const entry of entries) syncRegion(entry.target);
+    for (const entry of entries) {
+      const region = entry.target.closest(".overflow-region");
+      if (region) syncRegion(region);
+    }
   });
   const enhanceNode = (node) => {
     if (!(node instanceof Element)) return;
@@ -236,10 +322,10 @@ ACCESSIBILITY_BOOTSTRAP = """
       ? [node]
       : Array.from(node.querySelectorAll(".overflow-region"));
     for (const region of regions) {
-      syncRegion(region);
-      if (!region.dataset.resizeObserved) {
-        region.dataset.resizeObserved = "true";
-        resizeObserver.observe(region);
+      const target = syncRegion(region);
+      if (!target.dataset.resizeObserved) {
+        target.dataset.resizeObserved = "true";
+        resizeObserver.observe(target);
       }
     }
   };
@@ -257,7 +343,6 @@ ACCESSIBILITY_BOOTSTRAP = """
     if (frame !== null) return;
     frame = requestAnimationFrame(() => {
       for (const node of pending) enhanceNode(node);
-      syncCorpusMode();
       pending.clear();
       frame = null;
     });
@@ -339,6 +424,71 @@ class RAGApplication:
             ]
             for error in errors
         ]
+
+    @staticmethod
+    def indexing_errors_html(rows: Sequence[Sequence[Any]] | None) -> str:
+        return render_result_table(
+            ["Document", "Operation", "Error type", "Message"],
+            rows,
+            caption="Indexing errors",
+            empty_message="No indexing errors.",
+            mobile_cards=True,
+            table_class="indexing-errors-view",
+        )
+
+    @staticmethod
+    def scores_html(rows: Sequence[Sequence[Any]] | None) -> str:
+        return render_result_table(
+            SCORE_HEADERS,
+            rows,
+            caption="Retrieval scores",
+            empty_message="No retrieval scores yet.",
+            mobile_cards=True,
+            table_class="retrieval-scores-view",
+        )
+
+    @staticmethod
+    def trace_html(rows: Sequence[Sequence[Any]] | None) -> str:
+        return render_result_table(
+            TRACE_HEADERS,
+            rows,
+            caption="Retrieval trace",
+            empty_message="No retrieval trace yet.",
+            mobile_cards=True,
+            table_class="retrieval-trace-view",
+        )
+
+    @staticmethod
+    def metrics_html(rows: Sequence[Sequence[Any]] | None) -> str:
+        return render_result_table(
+            EVALUATION_HEADERS,
+            rows,
+            caption="Metrics comparison",
+            empty_message="No evaluation metrics loaded.",
+            table_class="evaluation-metrics-view",
+        )
+
+    @staticmethod
+    def failures_html(rows: Sequence[Sequence[Any]] | None) -> str:
+        return render_result_table(
+            ["Case", "System", "Route", "Strategy", "Failure labels"],
+            rows,
+            caption="Failure cases",
+            empty_message="No evaluation failures to display.",
+            mobile_cards=True,
+            table_class="evaluation-failures-view",
+        )
+
+    @staticmethod
+    def diagnostics_html(rows: Sequence[Sequence[Any]] | None) -> str:
+        return render_result_table(
+            ["Area", "Check", "Status", "Details"],
+            rows,
+            caption="Readiness checks",
+            empty_message="Refresh diagnostics to inspect local readiness.",
+            mobile_cards=True,
+            table_class="diagnostics-view",
+        )
 
     def _reset_graph(self) -> None:
         self.rag_graph = None
@@ -1054,8 +1204,95 @@ class RAGApplication:
             send_update,
         )
 
+    def index_selected_ui(
+        self, files: list[str] | None, progress: gr.Progress = gr.Progress(track_tqdm=False)
+    ):
+        documents, status, errors, readiness, selector = self.index_selected(files, progress)
+        return documents, status, self.indexing_errors_html(errors), readiness, selector
+
+    def reindex_changed_ui(self, progress: gr.Progress = gr.Progress(track_tqdm=False)):
+        documents, status, errors, selector = self.reindex_changed(progress)
+        return documents, status, self.indexing_errors_html(errors), selector
+
+    def rebuild_index_ui(self, progress: gr.Progress = gr.Progress(track_tqdm=False)):
+        documents, status, errors, selector = self.rebuild_index(progress)
+        return documents, status, self.indexing_errors_html(errors), selector
+
+    def reconcile_manifest_index_ui(self):
+        documents, status, errors, selector = self.reconcile_manifest_index()
+        return documents, status, self.indexing_errors_html(errors), selector
+
+    def delete_selected_ui(self, document_id: str | None):
+        documents, status, errors, selector, text, confirmation = self.delete_selected(
+            document_id
+        )
+        return (
+            documents,
+            status,
+            self.indexing_errors_html(errors),
+            selector,
+            text,
+            confirmation,
+        )
+
+    def chat_ui(self, message: str, history: list[dict[str, str]], session_id: str):
+        values = list(self.chat(message, history, session_id))
+        values[6] = self.scores_html(normalize_result_rows(values[6]))
+        values[7] = self.trace_html(normalize_result_rows(values[7]))
+        return tuple(values)
+
+    def clear_ui(self, session_id: str):
+        if self.rag_graph is not None:
+            self.rag_graph.clear(session_id)
+        return (
+            [],
+            {},
+            render_status("info", "No answer yet", "Conversation cleared."),
+            "Conversation cleared.",
+            self.evidence_html({}),
+            self.scores_html([]),
+            self.trace_html([]),
+        )
+
+    def export_chat_ui(self, messages: list[Any], result: dict[str, Any]):
+        return gr.update(
+            value=self.export_chat(messages, result), visible=True, interactive=True
+        )
+
+    def load_latest_evaluation_ui(self):
+        metrics, failures, status = self.load_latest_evaluation()
+        return self.metrics_html(metrics), self.failures_html(failures), status
+
+    def run_evaluation_presentation_ui(self, split: str, systems: list[str] | str | None):
+        metrics, failures, status = self.run_evaluation_ui(split, systems)
+        return self.metrics_html(metrics), self.failures_html(failures), status
+
+    def preflight_presentation_ui(self):
+        summary, rows, message_update, send_update = self.preflight_ui()
+        return summary, self.diagnostics_html(rows), message_update, send_update
+
+    def load_ai_models_presentation_ui(self):
+        summary, rows, message_update, send_update = self.load_ai_models_ui()
+        return summary, self.diagnostics_html(rows), message_update, send_update
+
     def create_interface(self) -> gr.Blocks:
-        theme = Soft(primary_hue="indigo", neutral_hue="slate")
+        theme = Soft(primary_hue="indigo", neutral_hue="slate").set(
+            body_background_fill="#080d18",
+            body_text_color="#e7ecf6",
+            background_fill_primary="#101827",
+            background_fill_secondary="#172237",
+            block_background_fill="#101827",
+            block_border_color="#2b3952",
+            block_label_background_fill="#101827",
+            block_label_text_color="#a9b5c8",
+            input_background_fill="#101827",
+            input_border_color="#41516c",
+            input_placeholder_color="#7e8ca4",
+            button_secondary_background_fill="#172237",
+            button_secondary_background_fill_hover="#1d2a42",
+            button_secondary_border_color="#41516c",
+            button_secondary_text_color="#e7ecf6",
+        )
         with gr.Blocks(
             title="Local Document RAG",
             theme=theme,
@@ -1064,6 +1301,10 @@ class RAGApplication:
             fill_width=True,
         ) as interface:
             session_id, latest_result = gr.State(lambda: str(uuid4())), gr.State({})
+            gr.HTML(
+                '<a class="skip-link" href="#chat-workspace">Skip to workspace</a>',
+                elem_id="skip-navigation",
+            )
             with gr.Column(elem_id="app-shell"):
                 gr.HTML(
                     """
@@ -1120,7 +1361,7 @@ class RAGApplication:
                                 label="Conversation",
                                 type="messages",
                                 allow_tags=False,
-                                height=470,
+                                height=420,
                                 elem_id="conversation-region",
                                 elem_classes=[
                                     "conversation",
@@ -1141,7 +1382,12 @@ class RAGApplication:
                                 )
                                 clear = gr.Button("Clear")
                                 export = gr.Button("Export")
-                            export_file = gr.File(label="Conversation export", height=72)
+                                export_file = gr.DownloadButton(
+                                    "Download export",
+                                    visible=False,
+                                    interactive=False,
+                                    elem_id="conversation-export",
+                                )
                             gr.HTML(
                                 """
                                 <div class="section-heading">
@@ -1158,32 +1404,24 @@ class RAGApplication:
                                 elem_id="evidence-list",
                                 elem_classes=["evidence-region", "overflow-region"],
                             )
-                            with gr.Accordion("Technical details", open=False):
+                            with gr.Accordion(
+                                "Technical details", open=False, elem_id="technical-details"
+                            ):
                                 evidence = gr.Markdown(
                                     "Routing and evidence details will appear after a question."
                                 )
-                                scores = gr.Dataframe(
-                                    headers=SCORE_HEADERS,
-                                    label="Retrieval scores",
-                                    interactive=False,
-                                    wrap=True,
-                                    max_height=320,
+                                scores = gr.HTML(
+                                    self.scores_html([]),
                                     elem_id="retrieval-scores-table",
                                     elem_classes=[
-                                        "rag-table",
                                         "retrieval-scores-table",
                                         "overflow-region",
                                     ],
                                 )
-                                trace = gr.Dataframe(
-                                    headers=TRACE_HEADERS,
-                                    label="Retrieval trace",
-                                    interactive=False,
-                                    wrap=True,
-                                    max_height=320,
+                                trace = gr.HTML(
+                                    self.trace_html([]),
                                     elem_id="retrieval-trace-table",
                                     elem_classes=[
-                                        "rag-table",
                                         "retrieval-trace-table",
                                         "overflow-region",
                                     ],
@@ -1213,6 +1451,7 @@ class RAGApplication:
                                     file_types=[".pdf", ".txt"],
                                     type="filepath",
                                     height=132,
+                                    elem_id="document-upload",
                                     elem_classes="upload-compact",
                                 )
                                 index_button = gr.Button(
@@ -1268,7 +1507,9 @@ class RAGApplication:
                                         "overflow-region",
                                     ],
                                 )
-                                with gr.Accordion("Maintenance", open=False):
+                                with gr.Accordion(
+                                    "Maintenance", open=False, elem_id="maintenance-panel"
+                                ):
                                     gr.Markdown(
                                         "Repair or rebuild the local corpus when source files or "
                                         "index state change."
@@ -1276,21 +1517,13 @@ class RAGApplication:
                                     reindex_button = gr.Button("Reindex changed documents")
                                     reconcile_button = gr.Button("Reconcile manifest/index")
                                     rebuild_button = gr.Button("Rebuild complete index")
-                                with gr.Accordion("Indexing errors", open=False):
-                                    errors = gr.Dataframe(
-                                        headers=[
-                                            "Document",
-                                            "Operation",
-                                            "Error type",
-                                            "Message",
-                                        ],
-                                        label="Indexing errors",
-                                        interactive=False,
-                                        wrap=True,
-                                        max_height=280,
+                                with gr.Accordion(
+                                    "Indexing errors", open=False, elem_id="index-errors-panel"
+                                ):
+                                    errors = gr.HTML(
+                                        self.indexing_errors_html([]),
                                         elem_id="indexing-errors-table",
                                         elem_classes=[
-                                            "rag-table",
                                             "indexing-errors-table",
                                             "overflow-region",
                                         ],
@@ -1308,12 +1541,16 @@ class RAGApplication:
                     with gr.Group(elem_classes="evaluation-controls"):
                         with gr.Row(elem_classes="action-row"):
                             split = gr.Dropdown(
-                                ["development", "test"], value="development", label="Split"
+                                ["development", "test"],
+                                value="development",
+                                label="Split",
+                                elem_id="evaluation-split",
                             )
                             systems = gr.CheckboxGroup(
                                 [*SYSTEMS, "all"],
                                 value=["dense", "bm25", "hybrid", "agentic"],
                                 label="Systems",
+                                elem_id="evaluation-systems",
                             )
                         with gr.Row(elem_classes="action-row"):
                             run_eval = gr.Button("Run evaluation", variant="primary")
@@ -1325,32 +1562,19 @@ class RAGApplication:
                         elem_id="evaluation-status",
                         elem_classes=["inline-status", "status-host"],
                     )
-                    metrics = gr.Dataframe(
-                        headers=EVALUATION_HEADERS,
-                        label="Metrics comparison",
-                        interactive=False,
-                        wrap=True,
-                        max_height=360,
-                        column_widths=[180, 280, 120, 120, 120, 120],
+                    metrics = gr.HTML(
+                        self.metrics_html([]),
                         elem_id="evaluation-metrics-table",
                         elem_classes=[
-                            "rag-table",
                             "evaluation-metrics-table",
                             "overflow-region",
                         ],
                     )
                     gr.HTML('<h3 class="result-heading">Failure details</h3>')
-                    failures = gr.Dataframe(
-                        headers=["Case", "System", "Route", "Strategy", "Failure labels"],
-                        label="Failure cases",
-                        interactive=False,
-                        wrap=True,
-                        show_search="filter",
-                        max_height=360,
-                        column_widths=[170, 110, 130, 130, 360],
+                    failures = gr.HTML(
+                        self.failures_html([]),
                         elem_id="evaluation-failures-table",
                         elem_classes=[
-                            "rag-table",
                             "evaluation-failures-table",
                             "overflow-region",
                         ],
@@ -1368,30 +1592,24 @@ class RAGApplication:
                     refresh_diagnostics = gr.Button(
                         "Refresh diagnostics", elem_classes="diagnostics-refresh"
                     )
-                    diagnostics = gr.Dataframe(
-                        headers=["Area", "Check", "Status", "Details"],
-                        label="Readiness checks",
-                        interactive=False,
-                        wrap=True,
-                        max_height=480,
-                        column_widths=[180, 220, 120, 560],
+                    diagnostics = gr.HTML(
+                        self.diagnostics_html([]),
                         elem_id="diagnostics-table",
                         elem_classes=[
-                            "rag-table",
                             "diagnostics-table",
                             "overflow-region",
                         ],
                     )
 
             index_button.click(
-                self.index_selected,
+                self.index_selected_ui,
                 files,
                 [documents, ingestion_status, errors, readiness, selected_id],
             )
             document_outputs = [documents, ingestion_status, errors, selected_id]
-            reindex_button.click(self.reindex_changed, None, document_outputs)
-            rebuild_button.click(self.rebuild_index, None, document_outputs)
-            reconcile_button.click(self.reconcile_manifest_index, None, document_outputs)
+            reindex_button.click(self.reindex_changed_ui, None, document_outputs)
+            rebuild_button.click(self.rebuild_index_ui, None, document_outputs)
+            reconcile_button.click(self.reconcile_manifest_index_ui, None, document_outputs)
             delete_button.click(
                 self.prepare_deletion,
                 selected_id,
@@ -1408,14 +1626,14 @@ class RAGApplication:
                 [delete_confirmation_text, delete_confirmation],
             )
             confirm_delete.click(
-                self.delete_selected,
+                self.delete_selected_ui,
                 selected_id,
                 [*document_outputs, delete_confirmation_text, delete_confirmation],
             )
             refresh_button.click(self.refresh_documents, None, [documents, readiness, selected_id])
             for trigger in (send.click, message.submit):
                 trigger(
-                    self.chat,
+                    self.chat_ui,
                     [message, chatbot, session_id],
                     [
                         message,
@@ -1429,18 +1647,24 @@ class RAGApplication:
                     ],
                 )
             clear.click(
-                self.clear,
+                self.clear_ui,
                 session_id,
                 [chatbot, latest_result, answer_state, evidence, sources, scores, trace],
             )
-            export.click(self.export_chat, [chatbot, latest_result], export_file)
+            export.click(self.export_chat_ui, [chatbot, latest_result], export_file)
             run_eval.click(
-                self.run_evaluation_ui, [split, systems], [metrics, failures, eval_status]
+                self.run_evaluation_presentation_ui,
+                [split, systems],
+                [metrics, failures, eval_status],
             )
-            load_eval.click(self.load_latest_evaluation, None, [metrics, failures, eval_status])
+            load_eval.click(
+                self.load_latest_evaluation_ui, None, [metrics, failures, eval_status]
+            )
             preflight_outputs = [readiness, diagnostics, message, send]
-            refresh_diagnostics.click(self.preflight_ui, None, preflight_outputs)
-            load_ai.click(self.load_ai_models_ui, None, preflight_outputs)
+            refresh_diagnostics.click(
+                self.preflight_presentation_ui, None, preflight_outputs
+            )
+            load_ai.click(self.load_ai_models_presentation_ui, None, preflight_outputs)
         return interface
 
 

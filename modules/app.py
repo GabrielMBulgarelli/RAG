@@ -398,8 +398,50 @@ class RAGApplication:
             for record in sorted(manifest.documents.values(), key=lambda item: item.relative_path)
         ]
 
-    def select_document(self, rows: Any, event: gr.SelectData):
-        normalized = normalize_result_rows(rows)
+    def document_samples(self, query: str | None = None) -> list[list[Any]]:
+        """Return read-only inventory samples without exposing stable document IDs."""
+        needle = str(query or "").strip().casefold()
+        rows = self.document_rows()
+        if not needle:
+            return rows
+        return [
+            row
+            for row in rows
+            if needle in str(row[0]).casefold() or needle in str(row[3]).casefold()
+        ]
+
+    def corpus_summary_html(self) -> str:
+        rows = self.document_rows()
+        pages = sum(int(row[1] or 0) for row in rows)
+        chunks = sum(int(row[2] or 0) for row in rows)
+        return (
+            '<div class="corpus-summary" role="status" aria-live="polite">'
+            f'<strong>{len(rows)} document(s)</strong>'
+            f'<span>{pages} page(s) · {chunks} chunk(s)</span>'
+            "</div>"
+        )
+
+    def current_error_rows(self) -> list[list[str]]:
+        manifest = self.vector_db.manifest()
+        rows: list[list[str]] = []
+        for document_id, message in sorted(self.last_errors.items()):
+            record = manifest.documents.get(document_id)
+            rows.append(
+                [
+                    record.relative_path if record else "Unknown document",
+                    "Index",
+                    "Indexing error",
+                    message or "—",
+                ]
+            )
+        return rows
+
+    def select_document(self, rows_or_query: Any, event: gr.SelectData):
+        normalized = (
+            self.document_samples(rows_or_query)
+            if rows_or_query is None or isinstance(rows_or_query, str)
+            else normalize_result_rows(rows_or_query)
+        )
         index = event.index[0] if isinstance(event.index, (tuple, list)) else event.index
         if not isinstance(index, int) or index < 0 or index >= len(normalized):
             return self.reset_document_selection(normalized)
@@ -507,15 +549,41 @@ class RAGApplication:
     @staticmethod
     def system_status_html(rows: Sequence[Sequence[Any]] | None) -> str:
         normalized = normalize_result_rows(rows)
+        if not normalized:
+            technical = render_result_table(
+                ["Area", "Check", "Status", "Details"],
+                [],
+                caption="Technical system values",
+                empty_message="Workspace checks have not run yet.",
+                mobile_cards=True,
+                table_class="system-status-view",
+            )
+            return (
+                '<section class="system-status" aria-label="System status" '
+                'role="status" aria-live="polite">'
+                '<div class="system-status__summary system-status__summary--unknown">'
+                '<strong>Status unknown</strong>'
+                '<span>Workspace checks have not run yet.</span></div>'
+                '<h4 class="system-status__technical-title">Technical values</h4>'
+                f"{technical}</section>"
+            )
         problem_rows = [
             row for row in normalized if len(row) >= 4 and str(row[2]) != "Ready"
         ]
         if problem_rows:
+            has_error = any(
+                str(row[2]).casefold() in {"error", "unavailable"}
+                for row in problem_rows
+            )
             groups: dict[str, list[list[Any]]] = {}
             for row in problem_rows:
                 groups.setdefault(str(row[0]), []).append(row)
-            overview = ['<div class="system-status__summary system-status__summary--warning">'
-                        '<strong>Action required</strong>']
+            state = "error" if has_error else "warning"
+            title = "Action required" if has_error else "Review recommended"
+            overview = [
+                f'<div class="system-status__summary system-status__summary--{state}">'
+                f"<strong>{title}</strong>"
+            ]
             for category, items in groups.items():
                 overview.append(f'<section><h4>{escape(category)}</h4><ul>')
                 for item in items:
@@ -530,19 +598,24 @@ class RAGApplication:
             summary = (
                 '<div class="system-status__summary system-status__summary--ready">'
                 '<strong>System ready</strong>'
-                '<span>Local services and saved data are available.</span></div>'
+                '<span>Local services, models, and indexed data are available.</span></div>'
             )
         technical = render_result_table(
             ["Area", "Check", "Status", "Details"],
             normalized,
             caption="Technical system values",
-            empty_message="Refresh system status to inspect local readiness.",
+            empty_message="Workspace checks have not run yet.",
             mobile_cards=True,
             table_class="system-status-view",
         )
+        role = "alert" if any(
+            str(row[2]).casefold() in {"error", "unavailable"} for row in problem_rows
+        ) else "status"
         return (
-            '<section class="system-status" aria-label="System status">'
-            f"{summary}<details><summary>Technical values</summary>{technical}</details></section>"
+            '<section class="system-status" aria-label="System status" '
+            f'role="{role}" aria-live="polite">{summary}'
+            '<h4 class="system-status__technical-title">Technical values</h4>'
+            f"{technical}</section>"
         )
 
     def _reset_graph(self) -> None:
@@ -598,6 +671,8 @@ class RAGApplication:
             if result.error:
                 errors.append(result.error)
                 self.last_errors[result.document_id] = result.error.message
+            elif result.success:
+                self.last_errors.pop(result.document_id, None)
         progress(None, desc="Removing stale chunks and updating manifest")
         self._reset_graph()
         return (
@@ -623,6 +698,8 @@ class RAGApplication:
         display_name = record.relative_path if record else "Selected document"
         deleted = self.vector_db.delete_document(document_id)
         self._reset_graph()
+        if deleted:
+            self.last_errors.pop(document_id, None)
         status = render_status(
             "success" if deleted else "warning",
             "Deleted document" if deleted else "Document not found",
@@ -655,6 +732,7 @@ class RAGApplication:
         count = self.vector_db.rebuild()
         progress(None, desc="Embedding, upserting and updating manifest")
         self._reset_graph()
+        self.last_errors.clear()
         return (
             self.document_rows(),
             render_status("success", "Rebuilt complete index", f"{count} chunks available"),
@@ -1255,6 +1333,79 @@ class RAGApplication:
             send_update,
         )
 
+    def refresh_workspace_state(
+        self, filter_query: str | None = None, selected_document_id: str | None = None
+    ):
+        """Synchronize inexpensive workspace presentation state after each local action."""
+        samples = self.document_samples(filter_query)
+        error_rows = self.current_error_rows()
+        readiness, system_status, message_update, send_update, load_ai_update = (
+            self.preflight_shell_ui()
+        )
+        manifest = self.vector_db.manifest()
+        record = manifest.documents.get(str(selected_document_id or ""))
+        selected_is_visible = bool(
+            record and any(str(row[0]) == record.relative_path for row in samples)
+        )
+        if selected_is_visible and record is not None:
+            selection = (
+                record.document_id,
+                gr.update(
+                    value=(
+                        '<div class="selected-document">'
+                        f'<strong>{escape(record.relative_path)}</strong>'
+                        f'<span>{record.page_count} page(s) · '
+                        f'{record.chunk_count} chunk(s)</span></div>'
+                    ),
+                    visible=True,
+                ),
+                gr.update(visible=True, interactive=True),
+                "",
+                gr.update(visible=False),
+            )
+        else:
+            selection = self.reset_document_selection(samples)
+        return (
+            gr.update(samples=samples),
+            self.corpus_summary_html(),
+            gr.update(label=f"Indexing errors ({len(error_rows)})"),
+            self.indexing_errors_html(error_rows),
+            readiness,
+            system_status,
+            message_update,
+            send_update,
+            load_ai_update,
+            *selection,
+        )
+
+    def filter_document_inventory(self, query: str | None):
+        samples = self.document_samples(query)
+        return gr.update(samples=samples), *self.reset_document_selection(samples)
+
+    def index_selected_action_ui(
+        self, files: list[str] | None, progress: gr.Progress = gr.Progress(track_tqdm=False)
+    ):
+        _documents, status, _errors, _readiness = self.index_selected(files, progress)
+        return gr.update(value=status, visible=True)
+
+    def reindex_changed_action_ui(
+        self, progress: gr.Progress = gr.Progress(track_tqdm=False)
+    ):
+        _documents, status, _errors = self.reindex_changed(progress)
+        return gr.update(value=status, visible=True)
+
+    def rebuild_index_action_ui(
+        self, progress: gr.Progress = gr.Progress(track_tqdm=False)
+    ):
+        _documents, status, _errors = self.rebuild_index(progress)
+        return gr.update(value=status, visible=True)
+
+    def delete_selected_action_ui(self, document_id: str | None):
+        _documents, status, _errors, text, confirmation = self.delete_selected(
+            document_id
+        )
+        return gr.update(value=status, visible=True), text, confirmation
+
     def index_selected_ui(
         self, files: list[str] | None, progress: gr.Progress = gr.Progress(track_tqdm=False)
     ):
@@ -1785,7 +1936,8 @@ class RAGApplication:
             button_secondary_border_color="#41516c",
             button_secondary_text_color="#e7ecf6",
         )
-        initial_documents = self.document_rows()
+        initial_documents = self.document_samples()
+        initial_errors = self.current_error_rows()
         with gr.Blocks(
             title="Local Document RAG",
             theme=theme,
@@ -1953,17 +2105,26 @@ class RAGApplication:
                                 elem_id="ingestion-status",
                                 elem_classes=["inline-status", "status-host"],
                             )
-                            documents = gr.Dataframe(
+                            corpus_summary = gr.HTML(
+                                self.corpus_summary_html(),
+                                elem_id="corpus-summary",
+                            )
+                            document_filter = gr.Textbox(
+                                label="Filter documents",
+                                placeholder="Filter by document or status",
+                                lines=1,
+                                elem_id="document-filter",
+                            )
+                            documents = gr.Dataset(
+                                components=["textbox", "number", "number", "textbox"],
+                                samples=initial_documents,
                                 headers=DOCUMENT_HEADERS,
-                                value=initial_documents,
                                 label="Indexed documents",
-                                interactive=True,
-                                wrap=True,
-                                show_search="filter",
-                                max_height=300,
-                                column_widths=[190, 64, 72, 88],
+                                type="values",
+                                layout="table",
+                                samples_per_page=25,
                                 elem_id="documents-table",
-                                elem_classes=["rag-table", "documents-table"],
+                                elem_classes=["documents-table", "overflow-region"],
                             )
                             selected_document = gr.HTML(
                                 "",
@@ -1991,31 +2152,34 @@ class RAGApplication:
                                     confirm_delete = gr.Button(
                                         "Confirm deletion", variant="stop"
                                     )
-                            refresh_documents = gr.Button("Refresh document status")
                             with gr.Accordion(
                                 "Maintenance", open=False, elem_id="maintenance-panel"
                             ):
                                 gr.Markdown(
-                                    "Repair the corpus after source or index changes."
+                                    "Reindex changed sources or rebuild the complete local index."
                                 )
-                                reindex_button = gr.Button("Reindex changed documents")
-                                reconcile_button = gr.Button("Reconcile manifest/index")
-                                rebuild_button = gr.Button("Rebuild complete index")
+                                with gr.Row(elem_id="maintenance-actions"):
+                                    reindex_button = gr.Button(
+                                        "Reindex changed documents", variant="secondary"
+                                    )
+                                    rebuild_button = gr.Button(
+                                        "Rebuild complete index",
+                                        variant="stop",
+                                        elem_classes="destructive-review",
+                                    )
                             with gr.Accordion(
-                                "Indexing errors",
+                                f"Indexing errors ({len(initial_errors)})",
                                 open=False,
                                 elem_id="index-errors-panel",
-                            ):
+                            ) as index_errors_panel:
                                 errors = gr.HTML(
-                                    "",
-                                    visible=False,
+                                    self.indexing_errors_html(initial_errors),
                                     elem_id="indexing-errors-table",
                                     elem_classes="indexing-errors-table",
                                 )
                             with gr.Accordion(
                                 "System status", open=False, elem_id="system-status-panel"
                             ):
-                                refresh_system = gr.Button("Refresh system status")
                                 system_status = gr.HTML(
                                     self.system_status_html([]),
                                     elem_id="system-status-details",
@@ -2080,49 +2244,54 @@ class RAGApplication:
                 delete_confirmation_text,
                 delete_confirmation,
             ]
+            workspace_inputs = [document_filter, selected_document_id]
+            workspace_outputs = [
+                documents,
+                corpus_summary,
+                index_errors_panel,
+                errors,
+                readiness,
+                system_status,
+                message,
+                send,
+                load_ai,
+                *selection_outputs,
+            ]
             index_event = index_button.click(
-                self.index_selected_ui,
+                self.index_selected_action_ui,
                 files,
-                [documents, ingestion_status, errors, readiness],
+                ingestion_status,
             )
             index_event.then(
-                self.reset_document_selection, documents, selection_outputs
+                self.refresh_workspace_state, workspace_inputs, workspace_outputs
             )
             reindex_event = reindex_button.click(
-                self.reindex_changed_ui,
+                self.reindex_changed_action_ui,
                 None,
-                [documents, ingestion_status, errors],
+                ingestion_status,
             )
             reindex_event.then(
-                self.reset_document_selection, documents, selection_outputs
+                self.refresh_workspace_state, workspace_inputs, workspace_outputs
             )
             rebuild_event = rebuild_button.click(
-                self.rebuild_index_ui,
+                self.rebuild_index_action_ui,
                 None,
-                [documents, ingestion_status, errors],
+                ingestion_status,
             )
             rebuild_event.then(
-                self.reset_document_selection, documents, selection_outputs
-            )
-            reconcile_event = reconcile_button.click(
-                self.reconcile_manifest_index_ui,
-                None,
-                [documents, ingestion_status, errors],
-            )
-            reconcile_event.then(
-                self.reset_document_selection, documents, selection_outputs
-            )
-            refresh_event = refresh_documents.click(
-                self.refresh_documents, None, [documents, readiness]
-            )
-            refresh_event.then(
-                self.reset_document_selection, documents, selection_outputs
+                self.refresh_workspace_state, workspace_inputs, workspace_outputs
             )
 
             documents.select(
                 self.select_document,
-                documents,
+                document_filter,
                 selection_outputs,
+            )
+            document_filter.input(
+                self.filter_document_inventory,
+                document_filter,
+                [documents, *selection_outputs],
+                show_progress="hidden",
             )
             delete_button.click(
                 self.prepare_deletion,
@@ -2135,18 +2304,16 @@ class RAGApplication:
                 [delete_confirmation_text, delete_confirmation],
             )
             delete_event = confirm_delete.click(
-                self.delete_selected_ui,
+                self.delete_selected_action_ui,
                 selected_document_id,
                 [
-                    documents,
                     ingestion_status,
-                    errors,
                     delete_confirmation_text,
                     delete_confirmation,
                 ],
             )
             delete_event.then(
-                self.reset_document_selection, documents, selection_outputs
+                self.refresh_workspace_state, workspace_inputs, workspace_outputs
             )
 
             for trigger in (send.click, message.submit):
@@ -2170,19 +2337,35 @@ class RAGApplication:
                 [chatbot, latest_result, answer_state, evidence, sources, scores, trace],
             )
             export.click(self.export_chat_ui, [chatbot, latest_result], export_file)
-            run_eval.click(
+            run_evaluation_event = run_eval.click(
                 self.run_evaluation_presentation_ui,
                 [split, systems],
                 [metrics, failures, failure_panel, eval_status],
             )
-            load_eval.click(
+            run_evaluation_event.then(
+                self.refresh_workspace_state, workspace_inputs, workspace_outputs
+            )
+            load_evaluation_event = load_eval.click(
                 self.load_latest_evaluation_ui,
                 None,
                 [metrics, failures, failure_panel, eval_status],
             )
+            load_evaluation_event.then(
+                self.refresh_workspace_state, workspace_inputs, workspace_outputs
+            )
             preflight_outputs = [readiness, system_status, message, send, load_ai]
-            refresh_system.click(self.preflight_shell_ui, None, preflight_outputs)
-            load_ai.click(self.load_ai_models_shell_ui, None, preflight_outputs)
+            load_models_event = load_ai.click(
+                self.load_ai_models_shell_ui, None, preflight_outputs
+            )
+            load_models_event.then(
+                self.refresh_workspace_state, workspace_inputs, workspace_outputs
+            )
+            interface.load(
+                self.refresh_workspace_state,
+                workspace_inputs,
+                workspace_outputs,
+                show_progress="hidden",
+            )
         return interface
 
 

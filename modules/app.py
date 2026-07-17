@@ -22,16 +22,7 @@ from modules.evaluation import SYSTEMS, run_evaluation
 from modules.rag_graph import RAGGraph
 from modules.vector_db import VectorDBManager
 
-DOCUMENT_HEADERS = [
-    "Filename",
-    "Source path",
-    "Document ID",
-    "Pages",
-    "Chunks",
-    "Content hash",
-    "Status",
-    "Last error",
-]
+DOCUMENT_HEADERS = ["Document", "Pages", "Chunks", "Status"]
 TRACE_HEADERS = [
     "Stage",
     "Decision",
@@ -267,7 +258,7 @@ ACCESSIBILITY_BOOTSTRAP = """
     "retrieval-trace-table": "Retrieval trace",
     "evaluation-metrics-table": "Evaluation metrics comparison",
     "evaluation-failures-table": "Evaluation failure cases",
-    "diagnostics-table": "Readiness checks",
+    "system-status-details": "System status details",
   };
   const clearScrollSemantics = (target) => {
     target.removeAttribute("role");
@@ -283,8 +274,14 @@ ACCESSIBILITY_BOOTSTRAP = """
     region._ragScrollTarget = target;
     const overflowX = target.scrollWidth > target.clientWidth + 1;
     const overflowY = target.scrollHeight > target.clientHeight + 1;
-    target.dataset.overflowX = String(overflowX);
-    target.dataset.overflowY = String(overflowY);
+    const nextOverflowX = String(overflowX);
+    const nextOverflowY = String(overflowY);
+    if (target.dataset.overflowX !== nextOverflowX) {
+      target.dataset.overflowX = nextOverflowX;
+    }
+    if (target.dataset.overflowY !== nextOverflowY) {
+      target.dataset.overflowY = nextOverflowY;
+    }
     if (overflowX || overflowY) {
       const directions = [
         overflowX && "horizontally scrollable",
@@ -292,12 +289,16 @@ ACCESSIBILITY_BOOTSTRAP = """
       ]
         .filter(Boolean)
         .join(" and ");
-      target.setAttribute("role", "region");
-      target.setAttribute(
-        "aria-label",
-        `${regionLabels[region.id] || "Scrollable results"}, ${directions} scrolling available`,
-      );
-      target.setAttribute("tabindex", "0");
+      const label = `${regionLabels[region.id] || "Scrollable results"}, ${directions} scrolling available`;
+      if (target.getAttribute("role") !== "region") {
+        target.setAttribute("role", "region");
+      }
+      if (target.getAttribute("aria-label") !== label) {
+        target.setAttribute("aria-label", label);
+      }
+      if (target.getAttribute("tabindex") !== "0") {
+        target.setAttribute("tabindex", "0");
+      }
     } else {
       target.removeAttribute("role");
       target.removeAttribute("aria-label");
@@ -311,6 +312,15 @@ ACCESSIBILITY_BOOTSTRAP = """
       if (region) syncRegion(region);
     }
   });
+  const syncAccordion = (accordion) => {
+    const trigger = accordion.querySelector("button.label-wrap");
+    if (!trigger) return;
+    const expanded = accordion.classList.contains("open");
+    const nextExpanded = String(expanded);
+    if (trigger.getAttribute("aria-expanded") !== nextExpanded) {
+      trigger.setAttribute("aria-expanded", nextExpanded);
+    }
+  };
   const enhanceNode = (node) => {
     if (!(node instanceof Element)) return;
     const deletion = document.getElementById("deletion-alert");
@@ -328,6 +338,10 @@ ACCESSIBILITY_BOOTSTRAP = """
         resizeObserver.observe(target);
       }
     }
+    const accordions = node.matches(".gradio-accordion")
+      ? [node]
+      : Array.from(node.querySelectorAll(".gradio-accordion"));
+    for (const accordion of accordions) syncAccordion(accordion);
   };
   enhanceNode(document.body);
   const pending = new Set();
@@ -351,28 +365,7 @@ ACCESSIBILITY_BOOTSTRAP = """
     subtree: true,
   });
 
-  const mobile = window.matchMedia("(max-width: 900px)");
-  function syncCorpusTrigger(trigger) {
-    const expanded = trigger.classList.contains("open");
-    trigger.setAttribute("aria-expanded", String(expanded));
-    return expanded;
-  }
-  function syncCorpusMode() {
-    const corpus = document.getElementById("corpus-management");
-    const trigger = corpus?.querySelector("button.label-wrap");
-    if (trigger && !trigger.dataset.expansionObserved) {
-      trigger.dataset.expansionObserved = "true";
-      trigger.addEventListener("click", () => {
-        requestAnimationFrame(() => syncCorpusTrigger(trigger));
-      });
-    }
-    if (!trigger || corpus.dataset.mobileMode === String(mobile.matches)) return;
-    const expanded = syncCorpusTrigger(trigger);
-    if (mobile.matches === expanded) trigger.click();
-    corpus.dataset.mobileMode = String(mobile.matches);
-  }
-  mobile.addEventListener("change", syncCorpusMode);
-  requestAnimationFrame(syncCorpusMode);
+  requestAnimationFrame(() => enhanceNode(document.body));
 }
 """
 
@@ -397,21 +390,53 @@ class RAGApplication:
         manifest = self.vector_db.manifest()
         return [
             [
-                record.filename,
                 record.relative_path,
-                record.document_id,
                 record.page_count,
                 record.chunk_count,
-                record.content_hash[:12],
-                "Indexed",
-                self.last_errors.get(record.document_id, "—"),
+                "Review" if self.last_errors.get(record.document_id) else "Indexed",
             ]
             for record in sorted(manifest.documents.values(), key=lambda item: item.relative_path)
         ]
 
-    def document_selector_update(self) -> dict[str, Any]:
-        choices = [row[2] for row in self.document_rows()]
-        return gr.update(choices=choices, value=None)
+    def select_document(self, rows: Any, event: gr.SelectData):
+        normalized = normalize_result_rows(rows)
+        index = event.index[0] if isinstance(event.index, (tuple, list)) else event.index
+        if not isinstance(index, int) or index < 0 or index >= len(normalized):
+            return self.reset_document_selection(normalized)
+        relative_path = str(normalized[index][0])
+        record = next(
+            (
+                item
+                for item in self.vector_db.manifest().documents.values()
+                if item.relative_path == relative_path
+            ),
+            None,
+        )
+        if record is None:
+            return self.reset_document_selection(normalized)
+        summary = (
+            '<div class="selected-document">'
+            f'<strong>{escape(record.relative_path)}</strong>'
+            f'<span>{record.page_count} page(s) · {record.chunk_count} chunk(s)</span>'
+            "</div>"
+        )
+        return (
+            record.document_id,
+            gr.update(value=summary, visible=True),
+            gr.update(visible=True, interactive=True),
+            "",
+            gr.update(visible=False),
+        )
+
+    def reset_document_selection(self, rows: Any = None):
+        normalized = self.document_rows() if rows is None else normalize_result_rows(rows)
+        return (
+            "",
+            gr.update(value="", visible=False),
+            gr.update(visible=bool(normalized), interactive=False),
+            "",
+            gr.update(visible=False),
+        )
 
     @staticmethod
     def error_rows(errors: list[Any]) -> list[list[str]]:
@@ -480,14 +505,44 @@ class RAGApplication:
         )
 
     @staticmethod
-    def diagnostics_html(rows: Sequence[Sequence[Any]] | None) -> str:
-        return render_result_table(
+    def system_status_html(rows: Sequence[Sequence[Any]] | None) -> str:
+        normalized = normalize_result_rows(rows)
+        problem_rows = [
+            row for row in normalized if len(row) >= 4 and str(row[2]) != "Ready"
+        ]
+        if problem_rows:
+            groups: dict[str, list[list[Any]]] = {}
+            for row in problem_rows:
+                groups.setdefault(str(row[0]), []).append(row)
+            overview = ['<div class="system-status__summary system-status__summary--warning">'
+                        '<strong>Action required</strong>']
+            for category, items in groups.items():
+                overview.append(f'<section><h4>{escape(category)}</h4><ul>')
+                for item in items:
+                    overview.append(
+                        f'<li><strong>{escape(str(item[1]))}</strong>'
+                        f'<span>{escape(str(item[3]))}</span></li>'
+                    )
+                overview.append("</ul></section>")
+            overview.append("</div>")
+            summary = "".join(overview)
+        else:
+            summary = (
+                '<div class="system-status__summary system-status__summary--ready">'
+                '<strong>System ready</strong>'
+                '<span>Local services and saved data are available.</span></div>'
+            )
+        technical = render_result_table(
             ["Area", "Check", "Status", "Details"],
-            rows,
-            caption="Readiness checks",
-            empty_message="Refresh diagnostics to inspect local readiness.",
+            normalized,
+            caption="Technical system values",
+            empty_message="Refresh system status to inspect local readiness.",
             mobile_cards=True,
-            table_class="diagnostics-view",
+            table_class="system-status-view",
+        )
+        return (
+            '<section class="system-status" aria-label="System status">'
+            f"{summary}<details><summary>Technical values</summary>{technical}</details></section>"
         )
 
     def _reset_graph(self) -> None:
@@ -521,7 +576,6 @@ class RAGApplication:
             ),
             self.error_rows(errors),
             self.readiness(),
-            self.document_selector_update(),
         )
 
     def reindex_changed(self, progress: gr.Progress = gr.Progress(track_tqdm=False)):
@@ -554,7 +608,6 @@ class RAGApplication:
                 f"{len(changed) - len(errors)} changed document(s) reindexed",
             ),
             self.error_rows(errors),
-            self.document_selector_update(),
         )
 
     def delete_selected(self, document_id: str | None):
@@ -563,22 +616,22 @@ class RAGApplication:
                 self.document_rows(),
                 render_status("warning", "No document selected", "Select a document to delete."),
                 [],
-                self.document_selector_update(),
                 "",
                 gr.update(visible=False),
             )
+        record = self.vector_db.manifest().documents.get(document_id)
+        display_name = record.relative_path if record else "Selected document"
         deleted = self.vector_db.delete_document(document_id)
         self._reset_graph()
         status = render_status(
             "success" if deleted else "warning",
             "Deleted document" if deleted else "Document not found",
-            document_id,
+            display_name,
         )
         return (
             self.document_rows(),
             status,
             [],
-            self.document_selector_update(),
             "",
             gr.update(visible=False),
         )
@@ -587,10 +640,9 @@ class RAGApplication:
         if not document_id:
             return "", gr.update(visible=False)
         record = self.vector_db.manifest().documents.get(document_id)
-        filename = record.filename if record else document_id
+        filename = record.relative_path if record else "selected document"
         return (
-            f"<strong>Delete {escape(filename)}</strong> "
-            f"<code>{escape(document_id)}</code> and its indexed chunks?",
+            f"<strong>Delete {escape(filename)}</strong> and its indexed chunks?",
             gr.update(visible=True),
         )
 
@@ -607,7 +659,6 @@ class RAGApplication:
             self.document_rows(),
             render_status("success", "Rebuilt complete index", f"{count} chunks available"),
             [],
-            self.document_selector_update(),
         )
 
     def reconcile_manifest_index(self):
@@ -638,10 +689,10 @@ class RAGApplication:
             status = render_status(
                 "error", "Reconciliation failed", f"{type(exc).__name__}: {exc}"
             )
-        return self.document_rows(), status, [], self.document_selector_update()
+        return self.document_rows(), status, []
 
     def refresh_documents(self):
-        return self.document_rows(), self.readiness(), self.document_selector_update()
+        return self.document_rows(), self.readiness()
 
     def _ollama_info(self) -> dict[str, Any]:
         try:
@@ -716,7 +767,7 @@ class RAGApplication:
             _, display_rows, message_update, send_update = self.preflight(ollama=ollama)
             return (
                 render_status(
-                    "error", "AI models not loaded", "Review Diagnostics, then retry."
+                    "error", "AI models not loaded", "Open System status, then retry."
                 ),
                 display_rows,
                 message_update,
@@ -730,7 +781,7 @@ class RAGApplication:
             rows[ai_row] = ["AI models", "error", f"{type(exc).__name__}: {exc}"]
             return (
                 render_status(
-                    "error", "AI models not loaded", "Review Diagnostics, then retry."
+                    "error", "AI models not loaded", "Open System status, then retry."
                 ),
                 self.diagnostic_display_rows(rows),
                 gr.update(interactive=False),
@@ -1207,36 +1258,51 @@ class RAGApplication:
     def index_selected_ui(
         self, files: list[str] | None, progress: gr.Progress = gr.Progress(track_tqdm=False)
     ):
-        documents, status, errors, readiness, selector = self.index_selected(files, progress)
-        return documents, status, self.indexing_errors_html(errors), readiness, selector
-
-    def reindex_changed_ui(self, progress: gr.Progress = gr.Progress(track_tqdm=False)):
-        documents, status, errors, selector = self.reindex_changed(progress)
-        return documents, status, self.indexing_errors_html(errors), selector
-
-    def rebuild_index_ui(self, progress: gr.Progress = gr.Progress(track_tqdm=False)):
-        documents, status, errors, selector = self.rebuild_index(progress)
-        return documents, status, self.indexing_errors_html(errors), selector
-
-    def reconcile_manifest_index_ui(self):
-        documents, status, errors, selector = self.reconcile_manifest_index()
-        return documents, status, self.indexing_errors_html(errors), selector
-
-    def delete_selected_ui(self, document_id: str | None):
-        documents, status, errors, selector, text, confirmation = self.delete_selected(
-            document_id
-        )
+        documents, status, errors, readiness = self.index_selected(files, progress)
         return (
             documents,
-            status,
-            self.indexing_errors_html(errors),
-            selector,
+            gr.update(value=status, visible=True),
+            gr.update(value=self.indexing_errors_html(errors), visible=bool(errors)),
+            readiness,
+        )
+
+    def reindex_changed_ui(self, progress: gr.Progress = gr.Progress(track_tqdm=False)):
+        documents, status, errors = self.reindex_changed(progress)
+        return (
+            documents,
+            gr.update(value=status, visible=True),
+            gr.update(value=self.indexing_errors_html(errors), visible=bool(errors)),
+        )
+
+    def rebuild_index_ui(self, progress: gr.Progress = gr.Progress(track_tqdm=False)):
+        documents, status, errors = self.rebuild_index(progress)
+        return (
+            documents,
+            gr.update(value=status, visible=True),
+            gr.update(value=self.indexing_errors_html(errors), visible=bool(errors)),
+        )
+
+    def reconcile_manifest_index_ui(self):
+        documents, status, errors = self.reconcile_manifest_index()
+        return (
+            documents,
+            gr.update(value=status, visible=True),
+            gr.update(value=self.indexing_errors_html(errors), visible=bool(errors)),
+        )
+
+    def delete_selected_ui(self, document_id: str | None):
+        documents, status, errors, text, confirmation = self.delete_selected(document_id)
+        return (
+            documents,
+            gr.update(value=status, visible=True),
+            gr.update(value=self.indexing_errors_html(errors), visible=bool(errors)),
             text,
             confirmation,
         )
 
     def chat_ui(self, message: str, history: list[dict[str, str]], session_id: str):
         values = list(self.chat(message, history, session_id))
+        values[3] = gr.update(value=values[3], visible=True)
         values[6] = self.scores_html(normalize_result_rows(values[6]))
         values[7] = self.trace_html(normalize_result_rows(values[7]))
         return tuple(values)
@@ -1247,7 +1313,7 @@ class RAGApplication:
         return (
             [],
             {},
-            render_status("info", "No answer yet", "Conversation cleared."),
+            gr.update(value="", visible=False),
             "Conversation cleared.",
             self.evidence_html({}),
             self.scores_html([]),
@@ -1261,21 +1327,55 @@ class RAGApplication:
 
     def load_latest_evaluation_ui(self):
         metrics, failures, status = self.load_latest_evaluation()
-        return self.metrics_html(metrics), self.failures_html(failures), status
+        return (
+            gr.update(value=self.metrics_html(metrics), visible=True),
+            self.failures_html(failures),
+            gr.update(visible=True),
+            gr.update(value=status, visible=True),
+        )
 
     def run_evaluation_presentation_ui(self, split: str, systems: list[str] | str | None):
         metrics, failures, status = self.run_evaluation_ui(split, systems)
-        return self.metrics_html(metrics), self.failures_html(failures), status
+        return (
+            gr.update(value=self.metrics_html(metrics), visible=True),
+            self.failures_html(failures),
+            gr.update(visible=True),
+            gr.update(value=status, visible=True),
+        )
 
     def preflight_presentation_ui(self):
         summary, rows, message_update, send_update = self.preflight_ui()
-        return summary, self.diagnostics_html(rows), message_update, send_update
+        return summary, self.system_status_html(rows), message_update, send_update
 
     def load_ai_models_presentation_ui(self):
         summary, rows, message_update, send_update = self.load_ai_models_ui()
-        return summary, self.diagnostics_html(rows), message_update, send_update
+        return summary, self.system_status_html(rows), message_update, send_update
 
-    def create_interface(self) -> gr.Blocks:
+    def preflight_shell_ui(self):
+        summary, system_status, message_update, send_update = (
+            self.preflight_presentation_ui()
+        )
+        return (
+            summary,
+            system_status,
+            message_update,
+            send_update,
+            gr.update(visible=self.rag_graph is None),
+        )
+
+    def load_ai_models_shell_ui(self):
+        summary, system_status, message_update, send_update = (
+            self.load_ai_models_presentation_ui()
+        )
+        return (
+            summary,
+            system_status,
+            message_update,
+            send_update,
+            gr.update(visible=self.rag_graph is None),
+        )
+
+    def _legacy_create_interface(self) -> gr.Blocks:
         theme = Soft(primary_hue="indigo", neutral_hue="slate").set(
             body_background_fill="#080d18",
             body_text_color="#e7ecf6",
@@ -1593,7 +1693,7 @@ class RAGApplication:
                         "Refresh diagnostics", elem_classes="diagnostics-refresh"
                     )
                     diagnostics = gr.HTML(
-                        self.diagnostics_html([]),
+                        self.system_status_html([]),
                         elem_id="diagnostics-table",
                         elem_classes=[
                             "diagnostics-table",
@@ -1665,6 +1765,424 @@ class RAGApplication:
                 self.preflight_presentation_ui, None, preflight_outputs
             )
             load_ai.click(self.load_ai_models_presentation_ui, None, preflight_outputs)
+        return interface
+
+    def create_interface(self) -> gr.Blocks:
+        theme = Soft(primary_hue="indigo", neutral_hue="slate").set(
+            body_background_fill="#080d18",
+            body_text_color="#e7ecf6",
+            background_fill_primary="#101827",
+            background_fill_secondary="#172237",
+            block_background_fill="#101827",
+            block_border_color="#2b3952",
+            block_label_background_fill="#101827",
+            block_label_text_color="#a9b5c8",
+            input_background_fill="#101827",
+            input_border_color="#41516c",
+            input_placeholder_color="#7e8ca4",
+            button_secondary_background_fill="#172237",
+            button_secondary_background_fill_hover="#1d2a42",
+            button_secondary_border_color="#41516c",
+            button_secondary_text_color="#e7ecf6",
+        )
+        initial_documents = self.document_rows()
+        with gr.Blocks(
+            title="Local Document RAG",
+            theme=theme,
+            css_paths=APP_STYLESHEET,
+            js=ACCESSIBILITY_BOOTSTRAP,
+            fill_width=True,
+        ) as interface:
+            session_id = gr.State(lambda: str(uuid4()))
+            latest_result = gr.State({})
+            selected_document_id = gr.State("")
+            gr.HTML(
+                '<a class="skip-link" href="#chat-workspace">Skip to workspace</a>',
+                elem_id="skip-navigation",
+            )
+            with gr.Row(elem_id="app-shell", elem_classes="shell-header"):
+                gr.HTML(
+                    """
+                    <header class="app-header">
+                      <div class="app-identity">
+                        <span class="app-mark" aria-hidden="true">R</span>
+                        <div>
+                          <h1>Local Document RAG</h1>
+                          <p>Private document questions with inspectable evidence.</p>
+                        </div>
+                      </div>
+                    </header>
+                    """,
+                    elem_classes="shell-identity",
+                )
+                with gr.Row(elem_classes="shell-actions"):
+                    readiness = gr.HTML(
+                        render_status(
+                            "warning",
+                            "AI not loaded",
+                            "Load the local models when you are ready to ask.",
+                        ),
+                        elem_id="readiness-status",
+                        elem_classes=["readiness-summary", "status-host"],
+                    )
+                    load_ai = gr.Button(
+                        "Load AI models",
+                        variant="primary",
+                        elem_classes=["primary-action", "load-models-action"],
+                    )
+
+            with gr.Tabs(elem_id="primary-tabs"):
+                with gr.Tab("Workspace", elem_id="workspace-tab"):
+                    with gr.Row(equal_height=False, elem_id="workspace-grid"):
+                        with gr.Column(scale=4, min_width=0, elem_id="chat-workspace"):
+                            gr.HTML(
+                                """
+                                <div class="workspace-heading">
+                                  <div>
+                                    <h2>Ask your documents</h2>
+                                    <p>Answers stay connected to the evidence used.</p>
+                                  </div>
+                                </div>
+                                """
+                            )
+                            answer_state = gr.HTML(
+                                "",
+                                visible=False,
+                                elem_id="answer-status",
+                                elem_classes=["answer-state", "status-host"],
+                            )
+                            chatbot = gr.Chatbot(
+                                label="Conversation",
+                                type="messages",
+                                allow_tags=False,
+                                height=300,
+                                elem_id="conversation-region",
+                                elem_classes=[
+                                    "conversation",
+                                    "overflow-region",
+                                    "fixed-scroll-region",
+                                ],
+                            )
+                            message = gr.Textbox(
+                                label="Question",
+                                placeholder="Load AI models before asking about your documents",
+                                interactive=False,
+                                lines=2,
+                                elem_classes="question-composer",
+                            )
+                            with gr.Row(elem_classes=["action-row", "chat-actions"]):
+                                send = gr.Button(
+                                    "Ask", variant="primary", interactive=False
+                                )
+                                clear = gr.Button("Clear")
+                                export = gr.Button("Export")
+                                export_file = gr.DownloadButton(
+                                    "Download export",
+                                    visible=False,
+                                    interactive=False,
+                                    elem_id="conversation-export",
+                                )
+                            gr.HTML(
+                                """
+                                <div class="section-heading evidence-heading">
+                                  <div><h3>Cited sources</h3></div>
+                                  <p>Only evidence cited by the answer appears here.</p>
+                                </div>
+                                """
+                            )
+                            sources = gr.HTML(
+                                self.evidence_html({}),
+                                elem_id="evidence-list",
+                                elem_classes=["evidence-region", "overflow-region"],
+                            )
+                            with gr.Accordion(
+                                "Technical details", open=False, elem_id="technical-details"
+                            ):
+                                evidence = gr.Markdown(
+                                    "Routing and evidence details will appear after a question."
+                                )
+                                scores = gr.HTML(
+                                    self.scores_html([]),
+                                    elem_id="retrieval-scores-table",
+                                    elem_classes=["retrieval-scores-table", "overflow-region"],
+                                )
+                                trace = gr.HTML(
+                                    self.trace_html([]),
+                                    elem_id="retrieval-trace-table",
+                                    elem_classes=["retrieval-trace-table", "overflow-region"],
+                                )
+
+                        with gr.Column(
+                            scale=1,
+                            min_width=296,
+                            elem_id="corpus-rail",
+                        ):
+                            gr.HTML(
+                                """
+                                <div class="documents-heading">
+                                  <h2>Documents</h2>
+                                  <p>Add, review, and maintain the local corpus.</p>
+                                </div>
+                                """
+                            )
+                            gr.HTML(
+                                """
+                                <div class="upload-intro">
+                                  <strong>Add PDF or TXT</strong>
+                                  <span>Drop files here or browse</span>
+                                </div>
+                                """
+                            )
+                            files = gr.File(
+                                label="Add PDF or TXT",
+                                show_label=False,
+                                file_count="multiple",
+                                file_types=[".pdf", ".txt"],
+                                type="filepath",
+                                elem_id="document-upload",
+                                elem_classes="upload-compact",
+                            )
+                            index_button = gr.Button(
+                                "Index files",
+                                variant="primary",
+                                elem_classes="primary-action",
+                            )
+                            ingestion_status = gr.HTML(
+                                "",
+                                visible=False,
+                                elem_id="ingestion-status",
+                                elem_classes=["inline-status", "status-host"],
+                            )
+                            documents = gr.Dataframe(
+                                headers=DOCUMENT_HEADERS,
+                                value=initial_documents,
+                                label="Indexed documents",
+                                interactive=True,
+                                wrap=True,
+                                show_search="filter",
+                                max_height=300,
+                                column_widths=[190, 64, 72, 88],
+                                elem_id="documents-table",
+                                elem_classes=["rag-table", "documents-table"],
+                            )
+                            selected_document = gr.HTML(
+                                "",
+                                visible=False,
+                                elem_id="selected-document-summary",
+                            )
+                            delete_button = gr.Button(
+                                "Delete selected",
+                                visible=bool(initial_documents),
+                                interactive=False,
+                                elem_classes="destructive-review",
+                            )
+                            with gr.Group(
+                                visible=False,
+                                elem_id="deletion-alert",
+                                elem_classes="delete-confirmation",
+                            ) as delete_confirmation:
+                                delete_confirmation_text = gr.HTML()
+                                gr.Markdown(
+                                    "This removes the document and its indexed chunks. "
+                                    "This action cannot be undone."
+                                )
+                                with gr.Row(elem_classes="action-row"):
+                                    cancel_delete = gr.Button("Cancel")
+                                    confirm_delete = gr.Button(
+                                        "Confirm deletion", variant="stop"
+                                    )
+                            refresh_documents = gr.Button("Refresh document status")
+                            with gr.Accordion(
+                                "Maintenance", open=False, elem_id="maintenance-panel"
+                            ):
+                                gr.Markdown(
+                                    "Repair the corpus after source or index changes."
+                                )
+                                reindex_button = gr.Button("Reindex changed documents")
+                                reconcile_button = gr.Button("Reconcile manifest/index")
+                                rebuild_button = gr.Button("Rebuild complete index")
+                            with gr.Accordion(
+                                "Indexing errors",
+                                open=False,
+                                elem_id="index-errors-panel",
+                            ):
+                                errors = gr.HTML(
+                                    "",
+                                    visible=False,
+                                    elem_id="indexing-errors-table",
+                                    elem_classes="indexing-errors-table",
+                                )
+                            with gr.Accordion(
+                                "System status", open=False, elem_id="system-status-panel"
+                            ):
+                                refresh_system = gr.Button("Refresh system status")
+                                system_status = gr.HTML(
+                                    self.system_status_html([]),
+                                    elem_id="system-status-details",
+                                    elem_classes="system-status-details",
+                                )
+
+                with gr.Tab("Evaluation", elem_id="evaluation-tab"):
+                    gr.HTML(
+                        """
+                        <div class="evaluation-heading">
+                          <h2>Evaluation</h2>
+                          <p>Compare retrieval and answer quality, then inspect failures.</p>
+                        </div>
+                        """
+                    )
+                    with gr.Row(elem_classes="evaluation-toolbar"):
+                        split = gr.Dropdown(
+                            ["development", "test"],
+                            value="development",
+                            label="Split",
+                            elem_id="evaluation-split",
+                            scale=1,
+                        )
+                        systems = gr.CheckboxGroup(
+                            [*SYSTEMS, "all"],
+                            value=["dense", "bm25", "hybrid", "agentic"],
+                            label="Systems",
+                            elem_id="evaluation-systems",
+                            scale=3,
+                        )
+                        with gr.Column(scale=1, min_width=180):
+                            run_eval = gr.Button("Run evaluation", variant="primary")
+                            load_eval = gr.Button("Load latest result")
+                    eval_status = gr.HTML(
+                        "",
+                        visible=False,
+                        elem_id="evaluation-status",
+                        elem_classes=["inline-status", "status-host"],
+                    )
+                    metrics = gr.HTML(
+                        self.metrics_html([]),
+                        visible=False,
+                        elem_id="evaluation-metrics-table",
+                        elem_classes=["evaluation-metrics-table", "overflow-region"],
+                    )
+                    with gr.Accordion(
+                        "Failure details",
+                        open=False,
+                        visible=False,
+                        elem_id="evaluation-failures-panel",
+                    ) as failure_panel:
+                        failures = gr.HTML(
+                            self.failures_html([]),
+                            elem_id="evaluation-failures-table",
+                            elem_classes=["evaluation-failures-table", "overflow-region"],
+                        )
+
+            selection_outputs = [
+                selected_document_id,
+                selected_document,
+                delete_button,
+                delete_confirmation_text,
+                delete_confirmation,
+            ]
+            index_event = index_button.click(
+                self.index_selected_ui,
+                files,
+                [documents, ingestion_status, errors, readiness],
+            )
+            index_event.then(
+                self.reset_document_selection, documents, selection_outputs
+            )
+            reindex_event = reindex_button.click(
+                self.reindex_changed_ui,
+                None,
+                [documents, ingestion_status, errors],
+            )
+            reindex_event.then(
+                self.reset_document_selection, documents, selection_outputs
+            )
+            rebuild_event = rebuild_button.click(
+                self.rebuild_index_ui,
+                None,
+                [documents, ingestion_status, errors],
+            )
+            rebuild_event.then(
+                self.reset_document_selection, documents, selection_outputs
+            )
+            reconcile_event = reconcile_button.click(
+                self.reconcile_manifest_index_ui,
+                None,
+                [documents, ingestion_status, errors],
+            )
+            reconcile_event.then(
+                self.reset_document_selection, documents, selection_outputs
+            )
+            refresh_event = refresh_documents.click(
+                self.refresh_documents, None, [documents, readiness]
+            )
+            refresh_event.then(
+                self.reset_document_selection, documents, selection_outputs
+            )
+
+            documents.select(
+                self.select_document,
+                documents,
+                selection_outputs,
+            )
+            delete_button.click(
+                self.prepare_deletion,
+                selected_document_id,
+                [delete_confirmation_text, delete_confirmation],
+            )
+            cancel_delete.click(
+                self.cancel_deletion,
+                None,
+                [delete_confirmation_text, delete_confirmation],
+            )
+            delete_event = confirm_delete.click(
+                self.delete_selected_ui,
+                selected_document_id,
+                [
+                    documents,
+                    ingestion_status,
+                    errors,
+                    delete_confirmation_text,
+                    delete_confirmation,
+                ],
+            )
+            delete_event.then(
+                self.reset_document_selection, documents, selection_outputs
+            )
+
+            for trigger in (send.click, message.submit):
+                trigger(
+                    self.chat_ui,
+                    [message, chatbot, session_id],
+                    [
+                        message,
+                        chatbot,
+                        latest_result,
+                        answer_state,
+                        evidence,
+                        sources,
+                        scores,
+                        trace,
+                    ],
+                )
+            clear.click(
+                self.clear_ui,
+                session_id,
+                [chatbot, latest_result, answer_state, evidence, sources, scores, trace],
+            )
+            export.click(self.export_chat_ui, [chatbot, latest_result], export_file)
+            run_eval.click(
+                self.run_evaluation_presentation_ui,
+                [split, systems],
+                [metrics, failures, failure_panel, eval_status],
+            )
+            load_eval.click(
+                self.load_latest_evaluation_ui,
+                None,
+                [metrics, failures, failure_panel, eval_status],
+            )
+            preflight_outputs = [readiness, system_status, message, send, load_ai]
+            refresh_system.click(self.preflight_shell_ui, None, preflight_outputs)
+            load_ai.click(self.load_ai_models_shell_ui, None, preflight_outputs)
         return interface
 
 

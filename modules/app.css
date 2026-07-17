@@ -1745,33 +1745,171 @@ button.primary:hover,
   gap: 20px;
   align-items: baseline;
   justify-content: space-between;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
 }
 
-.evaluation-toolbar {
-  display: grid !important;
-  grid-template-columns: minmax(150px, 0.65fr) minmax(320px, 2fr) minmax(180px, 0.65fr);
-  gap: 16px !important;
-  align-items: end;
+#evaluation-setup {
+  display: grid;
+  gap: 16px;
   padding: 16px !important;
   border: 1px solid var(--rag-line) !important;
   border-radius: var(--rag-radius) !important;
   background: var(--rag-surface) !important;
 }
 
-.evaluation-toolbar > * {
+.evaluation-setup__heading h3,
+.evaluation-setup__heading p {
+  margin: 0;
+}
+
+.evaluation-setup__heading p {
+  margin-top: 4px;
+  color: var(--rag-muted);
+}
+
+.evaluation-config-row {
+  display: grid !important;
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: 16px !important;
+  align-items: start;
+}
+
+.evaluation-config-row > *,
+.evaluation-actions-row > * {
   min-width: 0 !important;
+}
+
+#evaluation-split {
+  width: 200px;
+  max-width: 200px;
+}
+
+#evaluation-split,
+#evaluation-systems,
+#evaluation-split > div,
+#evaluation-systems > div {
+  background: transparent !important;
+}
+
+#evaluation-systems .wrap {
+  display: grid !important;
+  grid-template-columns: repeat(4, minmax(112px, 1fr));
+  gap: 8px !important;
+  background: transparent !important;
+}
+
+#evaluation-systems .wrap > label {
+  min-height: 44px;
+  margin: 0;
+  border: 1px solid var(--rag-line-strong);
+  border-radius: var(--rag-radius-sm);
+  background: var(--rag-surface-raised) !important;
+}
+
+.evaluation-actions-row {
+  display: flex !important;
+  gap: 12px !important;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.evaluation-actions-row button {
+  flex: 0 0 auto !important;
+  width: auto !important;
+  min-width: 152px;
+}
+
+#run-evaluation {
+  min-width: 168px;
+}
+
+#evaluation-status {
+  flex: 1 1 320px;
+  margin: 0 !important;
+}
+
+#evaluation-results {
+  display: grid;
+  gap: 16px !important;
+  margin-top: 16px;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+}
+
+.evaluation-context {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--rag-line);
+  border-radius: var(--rag-radius);
+  background: var(--rag-line);
+}
+
+.evaluation-context__item {
+  min-width: 0;
+  padding: 12px 14px;
+  background: var(--rag-surface);
+}
+
+.evaluation-context__item span,
+.evaluation-context__item strong {
+  display: block;
+}
+
+.evaluation-context__item span {
+  margin-bottom: 4px;
+  color: var(--rag-muted);
+  font-size: 0.7rem;
+  font-weight: 740;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.evaluation-context__item strong {
+  overflow-wrap: anywhere;
+  color: var(--rag-text);
+  font-size: 0.86rem;
 }
 
 #evaluation-metrics-table,
 #evaluation-failures-table {
   width: 100%;
   min-width: 0;
-  margin-top: 16px;
+  margin: 0;
 }
 
 .evaluation-metrics-table table {
   font-family: var(--font);
+}
+
+.metric-value,
+.metric-support {
+  display: block;
+}
+
+.metric-value {
+  color: var(--rag-text);
+  font-weight: 740;
+  font-variant-numeric: tabular-nums;
+}
+
+.metric-support {
+  margin-top: 2px;
+  color: var(--rag-muted);
+  font-size: 0.72rem;
+  line-height: 1.35;
+  white-space: normal;
+}
+
+.metric-value--neutral {
+  color: var(--rag-muted);
+  font-weight: 600;
+}
+
+#evaluation-failures-panel {
+  margin-top: 0;
 }
 
 @media (max-width: 1050px) {
@@ -1789,12 +1927,8 @@ button.primary:hover,
     grid-row: 2;
   }
 
-  .evaluation-toolbar {
-    grid-template-columns: minmax(150px, 0.6fr) minmax(0, 1.4fr);
-  }
-
-  .evaluation-toolbar > :last-child {
-    grid-column: 1 / -1;
+  .evaluation-context {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
@@ -1845,12 +1979,31 @@ button.primary:hover,
     align-items: flex-start;
   }
 
-  .evaluation-toolbar {
-    grid-template-columns: minmax(0, 1fr);
+  #evaluation-setup {
     padding: 12px !important;
   }
 
-  .evaluation-toolbar > :last-child {
-    grid-column: auto;
+  .evaluation-config-row,
+  .evaluation-actions-row {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  #evaluation-split {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  #evaluation-systems .wrap {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .evaluation-actions-row button,
+  #evaluation-status {
+    width: 100% !important;
+  }
+
+  .evaluation-context {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

@@ -597,13 +597,61 @@ class RAGApplication:
 
     @staticmethod
     def metrics_html(rows: Sequence[Sequence[Any]] | None) -> str:
-        return render_result_table(
-            EVALUATION_HEADERS,
-            rows,
-            caption="Metrics comparison",
-            empty_message="No evaluation metrics loaded.",
-            table_class="evaluation-metrics-view",
+        normalized = normalize_result_rows(rows)
+        if not normalized:
+            return (
+                '<section class="result-view evaluation-metrics-view" '
+                'aria-label="Metrics comparison">'
+                '<div class="result-empty" role="status">'
+                "No evaluation metrics loaded.</div></section>"
+            )
+
+        body = []
+        for row in normalized:
+            category = escape(str(row[0] if row else "—"))
+            metric = escape(str(row[1] if len(row) > 1 else "—"))
+            cells = [
+                f'<td data-label="Category">{category}</td>',
+                f'<th scope="row" data-label="Metric">{metric}</th>',
+            ]
+            for index, header in enumerate(EVALUATION_HEADERS[2:], start=2):
+                raw_value = str(row[index] if index < len(row) else "—")
+                primary, support = RAGApplication._metric_value_parts(raw_value)
+                neutral = " metric-value--neutral" if primary == "—" else ""
+                support_html = (
+                    f'<span class="metric-support">{escape(support)}</span>'
+                    if support
+                    else ""
+                )
+                cells.append(
+                    f'<td data-label="{escape(header)}">'
+                    f'<span class="metric-value{neutral}">{escape(primary)}</span>'
+                    f"{support_html}</td>"
+                )
+            body.append(f"<tr>{''.join(cells)}</tr>")
+
+        headings = "".join(
+            f'<th scope="col">{escape(header)}</th>' for header in EVALUATION_HEADERS
         )
+        return (
+            '<section class="result-view evaluation-metrics-view">'
+            '<div class="result-scroll">'
+            '<table class="result-table evaluation-matrix">'
+            '<caption>Metrics comparison</caption>'
+            f"<thead><tr>{headings}</tr></thead>"
+            f"<tbody>{''.join(body)}</tbody>"
+            "</table></div></section>"
+        )
+
+    @staticmethod
+    def _metric_value_parts(value: str) -> tuple[str, str]:
+        if value.startswith("— "):
+            detail = value[2:]
+            return "—", detail
+        if " · " in value:
+            primary, support = value.split(" · ", 1)
+            return primary, support
+        return value, ""
 
     @staticmethod
     def failures_html(rows: Sequence[Sequence[Any]] | None) -> str:
@@ -1158,6 +1206,58 @@ class RAGApplication:
         return str(target)
 
     @staticmethod
+    def evaluation_context_html(
+        path: Path,
+        summary: dict[str, Any],
+        case_count: int,
+    ) -> str:
+        configuration = summary.get("configuration", {})
+        if not isinstance(configuration, dict):
+            configuration = {}
+        run_id = configuration.get("run_id") or path.name
+        dataset = configuration.get("dataset_name") or path.parent.name or "—"
+        split = configuration.get("evaluated_split") or "—"
+        configured_systems = configuration.get("systems")
+        if isinstance(configured_systems, list):
+            systems = [str(system) for system in configured_systems]
+        else:
+            metrics = summary.get("metrics", {})
+            systems = list(metrics) if isinstance(metrics, dict) else []
+        system_labels = {
+            "dense": "Dense",
+            "bm25": "BM25",
+            "hybrid": "Hybrid",
+            "agentic": "Agentic",
+        }
+        systems_text = ", ".join(
+            system_labels.get(system, readable_label(system)) for system in systems
+        ) or "—"
+        raw_timestamp = configuration.get("timestamp")
+        try:
+            timestamp = datetime.fromisoformat(str(raw_timestamp).replace("Z", "+00:00"))
+            timestamp = timestamp.astimezone(UTC)
+        except (TypeError, ValueError):
+            timestamp = datetime.fromtimestamp((path / "summary.json").stat().st_mtime, UTC)
+        case_label = f"{case_count} case" if case_count == 1 else f"{case_count} cases"
+        items = (
+            ("Run", run_id),
+            ("Dataset", f"{dataset} · {split}"),
+            ("Systems", systems_text),
+            ("Cases", case_label),
+            ("Result date", timestamp.strftime("%Y-%m-%d %H:%M UTC")),
+        )
+        content = "".join(
+            '<div class="evaluation-context__item">'
+            f'<span>{escape(str(label))}</span><strong>{escape(str(value))}</strong>'
+            "</div>"
+            for label, value in items
+        )
+        return (
+            '<section class="evaluation-context" aria-label="Evaluation result context">'
+            f"{content}</section>"
+        )
+
+    @staticmethod
     def load_evaluation_result(path: Path):
         summary = json.loads((path / "summary.json").read_text(encoding="utf-8"))
         system_metrics = summary.get("metrics", {})
@@ -1204,7 +1304,12 @@ class RAGApplication:
                 ]
             )
         failures = []
-        for line in (path / "cases.jsonl").read_text(encoding="utf-8").splitlines():
+        case_lines = [
+            line
+            for line in (path / "cases.jsonl").read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        for line in case_lines:
             case = json.loads(line)
             if case.get("failure_labels"):
                 failures.append(
@@ -1217,7 +1322,8 @@ class RAGApplication:
                     ]
                 )
         run_id = summary.get("configuration", {}).get("run_id", path.name)
-        return metrics, failures, render_status(
+        context = RAGApplication.evaluation_context_html(path, summary, len(case_lines))
+        return metrics, failures, context, render_status(
             "success", "Evaluation loaded", f"{run_id} · {path}"
         )
 
@@ -1246,6 +1352,7 @@ class RAGApplication:
             else (
                 [],
                 [],
+                "",
                 render_status(
                     "info", "No saved evaluation", "Run an evaluation to create a result."
                 ),
@@ -1254,12 +1361,12 @@ class RAGApplication:
 
     def run_evaluation_ui(self, split: str, systems: list[str] | str | None):
         if not systems:
-            return [], [], render_status(
+            return [], [], "", render_status(
                 "warning", "No systems selected", "Select at least one evaluation system."
             )
         requested = [systems] if isinstance(systems, str) else list(systems)
         if not requested:
-            return [], [], render_status(
+            return [], [], "", render_status(
                 "warning", "No systems selected", "Select at least one evaluation system."
             )
         dataset = PROJECT_ROOT / "evals" / "mvp_cases.jsonl"
@@ -1267,17 +1374,18 @@ class RAGApplication:
             return (
                 [],
                 [],
+                "",
                 render_status(
                     "warning",
                     "Evaluation data needs review",
                     "Replace REVIEW_REQUIRED_* gold chunk IDs after indexing the reviewed corpus.",
                 ),
             )
-        selected = list(SYSTEMS) if "all" in requested else requested
+        selected = requested
         try:
             output = run_evaluation(dataset, selected, split)  # type: ignore[arg-type]
         except (RuntimeError, ValueError) as exc:
-            return [], [], render_status("error", "Evaluation could not run", str(exc))
+            return [], [], "", render_status("error", "Evaluation could not run", str(exc))
         return self.load_evaluation_result(output)
 
     @staticmethod
@@ -1562,21 +1670,45 @@ class RAGApplication:
         )
 
     def load_latest_evaluation_ui(self):
-        metrics, failures, status = self.load_latest_evaluation()
-        return (
-            gr.update(value=self.metrics_html(metrics), visible=True),
-            self.failures_html(failures),
-            gr.update(visible=True),
-            gr.update(value=status, visible=True),
-        )
+        metrics, failures, context, status = self.load_latest_evaluation()
+        return self._evaluation_presentation_updates(metrics, failures, context, status)
 
     def run_evaluation_presentation_ui(self, split: str, systems: list[str] | str | None):
-        metrics, failures, status = self.run_evaluation_ui(split, systems)
+        metrics, failures, context, status = self.run_evaluation_ui(split, systems)
+        return self._evaluation_presentation_updates(metrics, failures, context, status)
+
+    @staticmethod
+    def begin_evaluation_ui():
         return (
-            gr.update(value=self.metrics_html(metrics), visible=True),
+            gr.update(interactive=False),
+            gr.update(interactive=False),
+            gr.update(
+                value=render_status(
+                    "info",
+                    "Running evaluation…",
+                    "This may take several minutes for systems that use the local AI model.",
+                ),
+                visible=True,
+            ),
+        )
+
+    def _evaluation_presentation_updates(
+        self,
+        metrics: Sequence[Sequence[Any]],
+        failures: Sequence[Sequence[Any]],
+        context: str,
+        status: str,
+    ):
+        has_result = bool(metrics) and bool(context)
+        return (
+            gr.update(visible=has_result),
+            gr.update(value=context, visible=has_result),
+            gr.update(value=self.metrics_html(metrics), visible=has_result),
             self.failures_html(failures),
-            gr.update(visible=True),
+            gr.update(visible=has_result),
             gr.update(value=status, visible=True),
+            gr.update(interactive=True),
+            gr.update(interactive=True),
         )
 
     def preflight_presentation_ui(self):
@@ -2275,52 +2407,82 @@ class RAGApplication:
                     gr.HTML(
                         """
                         <div class="evaluation-heading">
-                          <h2>Evaluation</h2>
-                          <p>Compare retrieval and answer quality, then inspect failures.</p>
+                          <div>
+                            <h2>Evaluation</h2>
+                            <p>Compare retrieval and answer quality across the local RAG systems.</p>
+                          </div>
                         </div>
                         """
                     )
-                    with gr.Row(elem_classes="evaluation-toolbar"):
-                        split = gr.Dropdown(
-                            ["development", "test"],
-                            value="development",
-                            label="Split",
-                            elem_id="evaluation-split",
-                            scale=1,
+                    with gr.Group(elem_id="evaluation-setup"):
+                        gr.HTML(
+                            """
+                            <div class="evaluation-setup__heading">
+                              <h3>Evaluation setup</h3>
+                              <p>Choose a dataset split and the systems to compare.</p>
+                            </div>
+                            """
                         )
-                        systems = gr.CheckboxGroup(
-                            [*SYSTEMS, "all"],
-                            value=["dense", "bm25", "hybrid", "agentic"],
-                            label="Systems",
-                            elem_id="evaluation-systems",
-                            scale=3,
+                        with gr.Row(elem_classes="evaluation-config-row"):
+                            split = gr.Dropdown(
+                                ["development", "test"],
+                                value="development",
+                                label="Split",
+                                elem_id="evaluation-split",
+                                min_width=200,
+                                scale=0,
+                            )
+                            systems = gr.CheckboxGroup(
+                                list(SYSTEMS),
+                                value=list(SYSTEMS),
+                                label="Systems",
+                                elem_id="evaluation-systems",
+                                min_width=320,
+                                scale=1,
+                            )
+                        with gr.Row(elem_classes="evaluation-actions-row"):
+                            run_eval = gr.Button(
+                                "Run evaluation",
+                                variant="primary",
+                                elem_id="run-evaluation",
+                            )
+                            load_eval = gr.Button(
+                                "Load latest result",
+                                variant="secondary",
+                                elem_id="load-evaluation",
+                            )
+                            eval_status = gr.HTML(
+                                "",
+                                visible=False,
+                                elem_id="evaluation-status",
+                                elem_classes=["inline-status", "status-host"],
+                            )
+                    with gr.Group(
+                        visible=False,
+                        elem_id="evaluation-results",
+                    ) as evaluation_results:
+                        result_context = gr.HTML(
+                            "",
+                            visible=False,
+                            elem_id="evaluation-result-context",
                         )
-                        with gr.Column(scale=1, min_width=180):
-                            run_eval = gr.Button("Run evaluation", variant="primary")
-                            load_eval = gr.Button("Load latest result")
-                    eval_status = gr.HTML(
-                        "",
-                        visible=False,
-                        elem_id="evaluation-status",
-                        elem_classes=["inline-status", "status-host"],
-                    )
-                    metrics = gr.HTML(
-                        self.metrics_html([]),
-                        visible=False,
-                        elem_id="evaluation-metrics-table",
-                        elem_classes=["evaluation-metrics-table", "overflow-region"],
-                    )
-                    with gr.Accordion(
-                        "Failure details",
-                        open=False,
-                        visible=False,
-                        elem_id="evaluation-failures-panel",
-                    ) as failure_panel:
-                        failures = gr.HTML(
-                            self.failures_html([]),
-                            elem_id="evaluation-failures-table",
-                            elem_classes=["evaluation-failures-table", "overflow-region"],
+                        metrics = gr.HTML(
+                            self.metrics_html([]),
+                            visible=False,
+                            elem_id="evaluation-metrics-table",
+                            elem_classes=["evaluation-metrics-table", "overflow-region"],
                         )
+                        with gr.Accordion(
+                            "Failure details",
+                            open=False,
+                            visible=False,
+                            elem_id="evaluation-failures-panel",
+                        ) as failure_panel:
+                            failures = gr.HTML(
+                                self.failures_html([]),
+                                elem_id="evaluation-failures-table",
+                                elem_classes=["evaluation-failures-table", "overflow-region"],
+                            )
 
             selection_outputs = [
                 selected_document_id,
@@ -2422,18 +2584,38 @@ class RAGApplication:
                 [chatbot, latest_result, answer_state, evidence, sources, scores, trace],
             )
             export.click(self.export_chat_ui, [chatbot, latest_result], export_file)
+            evaluation_outputs = [
+                evaluation_results,
+                result_context,
+                metrics,
+                failures,
+                failure_panel,
+                eval_status,
+                run_eval,
+                load_eval,
+            ]
             run_evaluation_event = run_eval.click(
+                self.begin_evaluation_ui,
+                None,
+                [run_eval, load_eval, eval_status],
+                queue=False,
+            ).then(
                 self.run_evaluation_presentation_ui,
                 [split, systems],
-                [metrics, failures, failure_panel, eval_status],
+                evaluation_outputs,
             )
             run_evaluation_event.then(
                 self.refresh_workspace_state, workspace_inputs, workspace_outputs
             )
             load_evaluation_event = load_eval.click(
+                self.begin_evaluation_ui,
+                None,
+                [run_eval, load_eval, eval_status],
+                queue=False,
+            ).then(
                 self.load_latest_evaluation_ui,
                 None,
-                [metrics, failures, failure_panel, eval_status],
+                evaluation_outputs,
             )
             load_evaluation_event.then(
                 self.refresh_workspace_state, workspace_inputs, workspace_outputs

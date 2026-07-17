@@ -414,12 +414,26 @@ def test_evaluation_tables_and_diagnostics(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     metrics, failures, label = app.load_evaluation_result(result)
-    assert metrics[0] == ["Retrieval", "Recall at 5", "50.0%", "—", "—", "—"]
-    assert ["Answer quality", "Answer token F1", "25.0%", "—", "—", "—"] in metrics
+    assert metrics[0] == [
+        "Retrieval",
+        "Recall at 5",
+        "50.0% · legacy summary",
+        "—",
+        "—",
+        "—",
+    ]
+    assert [
+        "Answer quality",
+        "Answer token F1",
+        "— Not applicable · legacy summary",
+        "—",
+        "—",
+        "—",
+    ] in metrics
     assert metrics[-1] == [
         "Other",
         "Custom grounding metric",
-        "75.0%",
+        "75.0% · legacy summary",
         "—",
         "—",
         "—",
@@ -435,6 +449,53 @@ def test_evaluation_tables_and_diagnostics(tmp_path: Path) -> None:
         row[0] == "Embedding model" and "ollama pull nomic-embed-text" in row[2]
         for row in diagnostics
     )
+
+
+def test_evaluation_loader_formats_v2_support_and_empty_statuses(tmp_path: Path) -> None:
+    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+    result = tmp_path / "run-v2"
+    result.mkdir()
+    (result / "summary.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "configuration": {"run_id": "r2"},
+                "metrics": {
+                    "dense": {
+                        "recall_at_5": {
+                            "value": 0.0,
+                            "status": "measured",
+                            "sample_count": 8,
+                            "note": "Cases with expected chunk evidence.",
+                        },
+                        "citation_precision": {
+                            "value": None,
+                            "status": "not_applicable",
+                            "sample_count": 0,
+                            "note": "Retrieval-only systems do not emit citations.",
+                        },
+                    },
+                    "agentic": {
+                        "citation_precision": {
+                            "value": None,
+                            "status": "no_eligible_cases",
+                            "sample_count": 0,
+                            "note": "No citations were emitted.",
+                        }
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (result / "cases.jsonl").write_text("", encoding="utf-8")
+
+    metrics, _, _ = app.load_evaluation_result(result)
+
+    assert metrics[0][2] == "0.0% · n=8"
+    citation_row = next(row for row in metrics if row[1] == "Citation precision")
+    assert citation_row[2] == "— Not applicable"
+    assert citation_row[5] == "— No eligible cases"
 
 
 def test_semantic_status_banner_escapes_dynamic_content_and_exposes_aria() -> None:

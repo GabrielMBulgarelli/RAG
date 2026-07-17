@@ -47,6 +47,7 @@ METRIC_NAMES = [
     "recall_at_5",
     "mrr_at_5",
     "ndcg_at_5",
+    "document_recall_at_5",
     "route_accuracy",
     "strategy_accuracy",
     "retry_precision",
@@ -54,7 +55,11 @@ METRIC_NAMES = [
     "citation_precision",
     "gold_evidence_citation_coverage",
     "abstention_accuracy",
-    "conflict_accuracy",
+    "unanswerable_abstention_recall",
+    "answerable_response_rate",
+    "conflict_recall",
+    "conflict_false_positive_rate",
+    "normalized_answer_exact_match",
     "answer_token_f1",
     "termination_rate",
     "mean_latency_seconds",
@@ -66,27 +71,38 @@ DISPLAY_METRIC_LABELS = {
     "recall_at_5": "Recall at 5",
     "mrr_at_5": "MRR at 5",
     "ndcg_at_5": "NDCG at 5",
+    "document_recall_at_5": "Document recall at 5",
     "citation_precision": "Citation precision",
     "gold_evidence_citation_coverage": "Gold evidence citation coverage",
     "abstention_accuracy": "Abstention accuracy",
-    "conflict_accuracy": "Conflict accuracy",
+    "unanswerable_abstention_recall": "Unanswerable abstention recall",
+    "answerable_response_rate": "Answerable response rate",
+    "conflict_recall": "Conflict recall",
+    "conflict_false_positive_rate": "Conflict false positive rate",
+    "normalized_answer_exact_match": "Normalized answer exact match",
     "answer_token_f1": "Answer token F1",
     "p95_latency_seconds": "P95 latency",
     "mean_llm_calls_per_query": "Mean LLM calls per query",
     "mean_retrieval_rounds_per_query": "Mean retrieval rounds per query",
 }
 METRIC_GROUPS = (
-    ("Retrieval", ("recall_at_5", "mrr_at_5", "ndcg_at_5")),
+    (
+        "Retrieval",
+        ("recall_at_5", "mrr_at_5", "ndcg_at_5", "document_recall_at_5"),
+    ),
     (
         "Evidence and grounding",
         (
             "citation_precision",
             "gold_evidence_citation_coverage",
             "abstention_accuracy",
-            "conflict_accuracy",
+            "unanswerable_abstention_recall",
+            "answerable_response_rate",
+            "conflict_recall",
+            "conflict_false_positive_rate",
         ),
     ),
-    ("Answer quality", ("answer_token_f1",)),
+    ("Answer quality", ("answer_token_f1", "normalized_answer_exact_match")),
     (
         "Workflow cost",
         (
@@ -103,6 +119,8 @@ HIDDEN_METRICS = {
     "retry_precision",
     "retry_recall",
     "termination_rate",
+    "chunk_recall_at_5",
+    "conflict_accuracy",
 }
 DISPLAY_METRIC_NAMES = [name for _, names in METRIC_GROUPS for name in names]
 EVALUATION_SYSTEMS = ("dense", "bm25", "hybrid", "agentic")
@@ -118,10 +136,30 @@ PERCENTAGE_METRICS = {
     "citation_precision",
     "gold_evidence_citation_coverage",
     "abstention_accuracy",
-    "conflict_accuracy",
+    "unanswerable_abstention_recall",
+    "answerable_response_rate",
+    "conflict_recall",
+    "conflict_false_positive_rate",
+    "normalized_answer_exact_match",
     "answer_token_f1",
     "termination_rate",
 }
+AGENTIC_ONLY_METRICS = {
+    "route_accuracy",
+    "strategy_accuracy",
+    "retry_precision",
+    "retry_recall",
+    "citation_precision",
+    "gold_evidence_citation_coverage",
+    "abstention_accuracy",
+    "unanswerable_abstention_recall",
+    "answerable_response_rate",
+    "conflict_recall",
+    "conflict_false_positive_rate",
+    "normalized_answer_exact_match",
+    "answer_token_f1",
+}
+_MISSING_METRIC = object()
 StatusKind = Literal["info", "success", "warning", "error"]
 APP_STYLESHEET = Path(__file__).with_name("app.css")
 
@@ -155,6 +193,38 @@ def format_metric(name: str, value: Any) -> str:
         return format_duration_ms(float(value) * 1000)
     rounded = Decimal(str(value)).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
     return f"{rounded:.1f}"
+
+
+def format_metric_observation(
+    name: str,
+    raw: Any,
+    *,
+    system: str,
+    schema_version: int,
+    system_present: bool = True,
+) -> str:
+    """Normalize legacy numeric and schema-v2 metric values for the comparison matrix."""
+    if not system_present:
+        return "—"
+    if raw is _MISSING_METRIC:
+        if schema_version < 2 and system != "agentic" and name in AGENTIC_ONLY_METRICS:
+            return "— Not applicable · legacy summary"
+        return "—"
+    if schema_version < 2 or not isinstance(raw, dict):
+        if system != "agentic" and name in AGENTIC_ONLY_METRICS:
+            return "— Not applicable · legacy summary"
+        return f"{format_metric(name, raw)} · legacy summary"
+
+    status = raw.get("status")
+    if status == "not_applicable":
+        return "— Not applicable"
+    if status == "no_eligible_cases":
+        return "— No eligible cases"
+    if status != "measured" or raw.get("value") is None:
+        return "—"
+    sample_count = raw.get("sample_count")
+    support = f" · n={sample_count}" if isinstance(sample_count, int) else ""
+    return f"{format_metric(name, raw['value'])}{support}"
 
 
 def render_status(kind: StatusKind, title: str, detail: str = "") -> str:
@@ -1091,6 +1161,9 @@ class RAGApplication:
     def load_evaluation_result(path: Path):
         summary = json.loads((path / "summary.json").read_text(encoding="utf-8"))
         system_metrics = summary.get("metrics", {})
+        schema_version = summary.get("schema_version", 1)
+        if not isinstance(schema_version, int):
+            schema_version = 1
         metrics = []
         for category, names in METRIC_GROUPS:
             for name in names:
@@ -1099,7 +1172,13 @@ class RAGApplication:
                         category,
                         DISPLAY_METRIC_LABELS[name],
                         *[
-                            format_metric(name, system_metrics.get(system, {}).get(name))
+                            format_metric_observation(
+                                name,
+                                system_metrics.get(system, {}).get(name, _MISSING_METRIC),
+                                system=system,
+                                schema_version=schema_version,
+                                system_present=system in system_metrics,
+                            )
                             for system in EVALUATION_SYSTEMS
                         ],
                     ]
@@ -1113,7 +1192,13 @@ class RAGApplication:
                     "Other",
                     readable_label(name),
                     *[
-                        format_metric(name, system_metrics.get(system, {}).get(name))
+                        format_metric_observation(
+                            name,
+                            system_metrics.get(system, {}).get(name, _MISSING_METRIC),
+                            system=system,
+                            schema_version=schema_version,
+                            system_present=system in system_metrics,
+                        )
                         for system in EVALUATION_SYSTEMS
                     ],
                 ]

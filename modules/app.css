@@ -982,6 +982,46 @@ button.primary:hover,
   }
 }
 
+/* Result-first evaluation workflow */
+#evaluation-workflow,
+#evaluation-advanced-options {
+  min-width: 0;
+}
+
+#evaluation-workflow {
+  padding: 16px;
+}
+
+#evaluation-actions {
+  align-items: center;
+  justify-content: flex-start;
+}
+
+#evaluation-actions button {
+  flex: 0 1 260px;
+  min-width: 180px;
+}
+
+#evaluation-status {
+  margin-top: 12px;
+}
+
+#evaluation-advanced-options {
+  margin-top: 12px;
+}
+
+@media (max-width: 640px) {
+  #evaluation-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  #evaluation-actions button {
+    flex-basis: auto;
+    width: 100%;
+  }
+}
+
 /* Gradio 5.50 internal surfaces */
 #skip-navigation {
   position: fixed !important;
@@ -1768,10 +1808,9 @@ button.primary:hover,
 }
 
 .evaluation-config-row {
-  display: grid !important;
-  grid-template-columns: 200px minmax(0, 1fr);
   gap: 16px !important;
   align-items: start;
+  flex-wrap: wrap !important;
 }
 
 .evaluation-config-row > *,
@@ -1808,9 +1847,15 @@ button.primary:hover,
 
 .evaluation-actions-row {
   display: flex !important;
+  width: fit-content !important;
+  max-width: 100%;
   gap: 12px !important;
   align-items: center;
   flex-wrap: wrap;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
 }
 
 .evaluation-actions-row button {
@@ -1824,7 +1869,7 @@ button.primary:hover,
 }
 
 #evaluation-status {
-  flex: 1 1 320px;
+  width: 100%;
   margin: 0 !important;
 }
 
@@ -1983,9 +2028,13 @@ button.primary:hover,
     padding: 12px !important;
   }
 
-  .evaluation-config-row,
+  .evaluation-config-row {
+    flex-direction: column;
+  }
+
   .evaluation-actions-row {
     display: grid !important;
+    width: 100% !important;
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -1998,8 +2047,7 @@ button.primary:hover,
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .evaluation-actions-row button,
-  #evaluation-status {
+  .evaluation-actions-row button {
     width: 100% !important;
   }
 

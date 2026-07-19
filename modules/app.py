@@ -7,6 +7,7 @@ import json
 import urllib.error
 import urllib.request
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from html import escape
@@ -18,7 +19,14 @@ import gradio as gr
 from gradio.themes import Soft
 
 from modules.config import PROJECT_ROOT, config
-from modules.evaluation import SYSTEMS, run_evaluation
+from modules.evaluation import (
+    SYSTEMS,
+    load_cases,
+    normalize_model_name,
+    preflight_multihop,
+    required_models_for_systems,
+    run_evaluation,
+)
 from modules.rag_graph import RAGGraph
 from modules.vector_db import VectorDBManager
 
@@ -122,6 +130,20 @@ HIDDEN_METRICS = {
     "chunk_recall_at_5",
     "conflict_accuracy",
 }
+
+EvaluationState = Literal["ready", "blocked", "running", "result", "error"]
+
+
+@dataclass(frozen=True)
+class EvaluationReadiness:
+    state: EvaluationState
+    latest_result: Path | None = None
+    systems: tuple[str, ...] = ()
+    split: str = "development"
+    requires_index: bool = True
+    requires_embeddings: bool = False
+    requires_chat: bool = False
+    problems: tuple[str, ...] = ()
 DISPLAY_METRIC_NAMES = [name for _, names in METRIC_GROUPS for name in names]
 EVALUATION_SYSTEMS = ("dense", "bm25", "hybrid", "agentic")
 EVALUATION_HEADERS = ["Category", "Metric", "Dense", "BM25", "Hybrid", "Agentic"]
@@ -203,17 +225,17 @@ def format_metric_observation(
     schema_version: int,
     system_present: bool = True,
 ) -> str:
-    """Normalize legacy numeric and schema-v2 metric values for the comparison matrix."""
+    """Format a schema-v2 metric observation for the comparison matrix."""
+    if schema_version != 2:
+        raise ValueError(
+            "Evaluation summaries must use schema version 2. Run a new evaluation."
+        )
     if not system_present:
         return "—"
     if raw is _MISSING_METRIC:
-        if schema_version < 2 and system != "agentic" and name in AGENTIC_ONLY_METRICS:
-            return "— Not applicable · legacy summary"
         return "—"
-    if schema_version < 2 or not isinstance(raw, dict):
-        if system != "agentic" and name in AGENTIC_ONLY_METRICS:
-            return "— Not applicable · legacy summary"
-        return f"{format_metric(name, raw)} · legacy summary"
+    if not isinstance(raw, dict):
+        return "—"
 
     status = raw.get("status")
     if status == "not_applicable":
@@ -945,7 +967,7 @@ class RAGApplication:
                 if label in checks:
                     actions.append(f"install `{model}` with `ollama pull {model}`")
             if checks - {"Ollama connectivity", "Chat model", "Embedding model"}:
-                actions.append("review Diagnostics and rebuild or reconcile the local index")
+                actions.append("review System status and rebuild the local index if needed")
             summary = render_status(
                 "error", "Not ready for questions", "; ".join(actions) + "."
             )
@@ -1095,7 +1117,7 @@ class RAGApplication:
                 {"role": "user", "content": message},
                 {
                     "role": "assistant",
-                    "content": "The local RAG service is unavailable. Refresh Diagnostics and retry.",
+                    "content": "The local RAG service is unavailable. Review System status and retry.",
                 },
             ]
             return (
@@ -1260,10 +1282,13 @@ class RAGApplication:
     @staticmethod
     def load_evaluation_result(path: Path):
         summary = json.loads((path / "summary.json").read_text(encoding="utf-8"))
+        if summary.get("schema_version") != 2:
+            raise ValueError(
+                "This saved evaluation predates schema version 2. "
+                "Run a new evaluation to create a compatible result."
+            )
         system_metrics = summary.get("metrics", {})
-        schema_version = summary.get("schema_version", 1)
-        if not isinstance(schema_version, int):
-            schema_version = 1
+        schema_version = 2
         metrics = []
         for category, names in METRIC_GROUPS:
             for name in names:
@@ -1329,14 +1354,23 @@ class RAGApplication:
 
     @staticmethod
     def latest_evaluation() -> Path | None:
-        root = PROJECT_ROOT / "evals" / "results"
+        root = PROJECT_ROOT / "evals" / "results" / "multihop"
         candidates: list[tuple[float, Path]] = []
         for summary_path in root.rglob("summary.json"):
             result_path = summary_path.parent
             try:
-                json.loads(summary_path.read_text(encoding="utf-8"))
+                summary = json.loads(summary_path.read_text(encoding="utf-8"))
+                if summary.get("schema_version") != 2:
+                    continue
+                if summary.get("configuration", {}).get("dataset_name") != "multihop":
+                    continue
                 if not (result_path / "cases.jsonl").is_file():
                     continue
+                for line in (result_path / "cases.jsonl").read_text(
+                    encoding="utf-8"
+                ).splitlines():
+                    if line.strip():
+                        json.loads(line)
                 candidates.append((summary_path.stat().st_mtime, result_path))
             except (json.JSONDecodeError, OSError):
                 continue
@@ -1354,9 +1388,63 @@ class RAGApplication:
                 [],
                 "",
                 render_status(
-                    "info", "No saved evaluation", "Run an evaluation to create a result."
+                    "info",
+                    "No compatible saved evaluation",
+                    "Run a new evaluation to create a schema version 2 result.",
                 ),
             )
+        )
+
+    def evaluation_readiness(
+        self,
+        split: str,
+        systems: Sequence[str] | str | None,
+        *,
+        ollama: dict[str, Any] | None = None,
+    ) -> EvaluationReadiness:
+        requested = [systems] if isinstance(systems, str) else list(systems or [])
+        selected = tuple(system for system in requested if system in SYSTEMS)
+        problems: list[str] = []
+        dataset = PROJECT_ROOT / "evals" / "multihop" / "cases.jsonl"
+        if not selected:
+            problems.append("Select at least one system in Advanced options.")
+        if split not in {"development", "test"}:
+            problems.append("Choose the development or held-out test split.")
+        if not dataset.is_file():
+            problems.append(
+                "Prepare MultiHopRAG with: uv run python scripts/prepare_multihop_eval.py --index"
+            )
+        elif selected:
+            try:
+                preflight_multihop(load_cases(dataset), check_models=False)
+            except (RuntimeError, ValueError, OSError, json.JSONDecodeError) as exc:
+                problems.append(str(exc))
+        required = required_models_for_systems(selected)  # type: ignore[arg-type]
+        if required:
+            info = ollama or self._ollama_info()
+            if not info.get("reachable"):
+                problems.append("Start Ollama with: ollama serve")
+            else:
+                available = {
+                    normalize_model_name(name) for name in info.get("models", [])
+                }
+                missing = [name for name in required if name not in available]
+                if missing:
+                    problems.append(
+                        "Install the required model with: "
+                        + " && ".join(f"ollama pull {name}" for name in missing)
+                    )
+        latest = self.latest_evaluation()
+        return EvaluationReadiness(
+            state="blocked" if problems else ("result" if latest else "ready"),
+            latest_result=latest,
+            systems=selected,
+            split=split,
+            requires_embeddings=any(
+                system in {"dense", "hybrid", "agentic"} for system in selected
+            ),
+            requires_chat="agentic" in selected,
+            problems=tuple(dict.fromkeys(problems)),
         )
 
     def run_evaluation_ui(self, split: str, systems: list[str] | str | None):
@@ -1369,29 +1457,19 @@ class RAGApplication:
             return [], [], "", render_status(
                 "warning", "No systems selected", "Select at least one evaluation system."
             )
-        dataset = PROJECT_ROOT / "evals" / "mvp_cases.jsonl"
-        if "REVIEW_REQUIRED_" in dataset.read_text(encoding="utf-8"):
-            return (
-                [],
-                [],
-                "",
-                render_status(
-                    "warning",
-                    "Evaluation data needs review",
-                    "Replace REVIEW_REQUIRED_* gold chunk IDs after indexing the reviewed corpus.",
-                ),
-            )
+        dataset = PROJECT_ROOT / "evals" / "multihop" / "cases.jsonl"
         selected = requested
         try:
-            output = run_evaluation(dataset, selected, split)  # type: ignore[arg-type]
-        except (RuntimeError, ValueError) as exc:
+            output = run_evaluation(
+                dataset, selected, split, dataset_name="multihop"  # type: ignore[arg-type]
+            )
+        except (RuntimeError, ValueError, OSError) as exc:
             return [], [], "", render_status("error", "Evaluation could not run", str(exc))
         return self.load_evaluation_result(output)
 
     @staticmethod
     def _normalize_model_name(name: str) -> str:
-        normalized = name.strip()
-        return normalized if ":" in normalized else f"{normalized}:latest"
+        return normalize_model_name(name)
 
     def diagnostic_rows(self, ollama: dict[str, Any] | None = None) -> list[list[str]]:
         info = ollama or self._ollama_info()
@@ -1669,13 +1747,47 @@ class RAGApplication:
             value=self.export_chat(messages, result), visible=True, interactive=True
         )
 
-    def load_latest_evaluation_ui(self):
+    def load_latest_evaluation_ui(
+        self,
+        split: str = "development",
+        systems: list[str] | str | None = None,
+    ):
         metrics, failures, context, status = self.load_latest_evaluation()
-        return self._evaluation_presentation_updates(metrics, failures, context, status)
+        readiness = self.evaluation_readiness(split, systems or list(SYSTEMS))
+        return self._evaluation_presentation_updates(
+            metrics, failures, context, status, readiness=readiness
+        )
+
+    def initialize_evaluation_ui(
+        self, split: str, systems: list[str] | str | None
+    ):
+        return self.load_latest_evaluation_ui(split, systems)
+
+    def evaluation_options_ui(
+        self, split: str, systems: list[str] | str | None
+    ):
+        readiness = self.evaluation_readiness(split, systems)
+        has_result = readiness.latest_result is not None
+        if readiness.state == "blocked":
+            status = gr.update(
+                value=render_status(
+                    "warning", "Benchmark unavailable", readiness.problems[0]
+                ),
+                visible=True,
+            )
+        else:
+            status = gr.update(value="", visible=False)
+        return status, gr.update(
+            value="Run new evaluation" if has_result else "Run standard benchmark",
+            interactive=readiness.state != "blocked",
+        )
 
     def run_evaluation_presentation_ui(self, split: str, systems: list[str] | str | None):
         metrics, failures, context, status = self.run_evaluation_ui(split, systems)
-        return self._evaluation_presentation_updates(metrics, failures, context, status)
+        readiness = self.evaluation_readiness(split, systems)
+        return self._evaluation_presentation_updates(
+            metrics, failures, context, status, readiness=readiness
+        )
 
     @staticmethod
     def begin_evaluation_ui():
@@ -1698,8 +1810,13 @@ class RAGApplication:
         failures: Sequence[Sequence[Any]],
         context: str,
         status: str,
+        *,
+        readiness: EvaluationReadiness | None = None,
     ):
         has_result = bool(metrics) and bool(context)
+        blocked = readiness is not None and readiness.state == "blocked"
+        if readiness is not None and readiness.state == "blocked" and not has_result:
+            status = render_status("warning", "Benchmark unavailable", readiness.problems[0])
         return (
             gr.update(visible=has_result),
             gr.update(value=context, visible=has_result),
@@ -1707,7 +1824,10 @@ class RAGApplication:
             self.failures_html(failures),
             gr.update(visible=has_result),
             gr.update(value=status, visible=True),
-            gr.update(interactive=True),
+            gr.update(
+                value="Run new evaluation" if has_result else "Run standard benchmark",
+                interactive=not blocked,
+            ),
             gr.update(interactive=True),
         )
 
@@ -1742,398 +1862,6 @@ class RAGApplication:
             send_update,
             gr.update(visible=self.rag_graph is None),
         )
-
-    def _legacy_create_interface(self) -> gr.Blocks:
-        theme = Soft(primary_hue="indigo", neutral_hue="slate").set(
-            body_background_fill="#080d18",
-            body_text_color="#e7ecf6",
-            background_fill_primary="#101827",
-            background_fill_secondary="#172237",
-            block_background_fill="#101827",
-            block_border_color="#2b3952",
-            block_label_background_fill="#101827",
-            block_label_text_color="#a9b5c8",
-            input_background_fill="#101827",
-            input_border_color="#41516c",
-            input_placeholder_color="#7e8ca4",
-            button_secondary_background_fill="#172237",
-            button_secondary_background_fill_hover="#1d2a42",
-            button_secondary_border_color="#41516c",
-            button_secondary_text_color="#e7ecf6",
-        )
-        with gr.Blocks(
-            title="Local Document RAG",
-            theme=theme,
-            css_paths=APP_STYLESHEET,
-            js=ACCESSIBILITY_BOOTSTRAP,
-            fill_width=True,
-        ) as interface:
-            session_id, latest_result = gr.State(lambda: str(uuid4())), gr.State({})
-            gr.HTML(
-                '<a class="skip-link" href="#chat-workspace">Skip to workspace</a>',
-                elem_id="skip-navigation",
-            )
-            with gr.Column(elem_id="app-shell"):
-                gr.HTML(
-                    """
-                    <header class="app-header">
-                      <div class="app-identity">
-                        <span class="app-mark" aria-hidden="true">R</span>
-                        <div>
-                          <h1>Local Document RAG</h1>
-                          <p>Private document questions with inspectable evidence.</p>
-                        </div>
-                      </div>
-                    </header>
-                    """
-                )
-                with gr.Row(elem_classes="readiness-bar"):
-                    readiness = gr.HTML(
-                        render_status(
-                            "info",
-                            "Interface ready",
-                            "Load the local AI models when you are ready to ask questions.",
-                        ),
-                        elem_id="readiness-status",
-                        elem_classes=["readiness-summary", "status-host"],
-                    )
-                    load_ai = gr.Button(
-                        "Load AI models",
-                        variant="primary",
-                        elem_classes=["primary-action", "load-models-action"],
-                    )
-            with gr.Tabs(elem_id="primary-tabs"):
-                with gr.Tab("Workspace", elem_id="workspace-tab"):
-                    with gr.Row(equal_height=False, elem_id="workspace-grid"):
-                        with gr.Column(scale=4, min_width=0, elem_id="chat-workspace"):
-                            gr.HTML(
-                                """
-                                <div class="workspace-heading">
-                                  <div>
-                                    <p class="section-kicker">WORKSPACE</p>
-                                    <h2>Ask your documents</h2>
-                                    <p>Answers stay connected to the evidence used to produce them.</p>
-                                  </div>
-                                  <a class="manage-documents-link" href="#corpus-management">
-                                    Manage documents
-                                  </a>
-                                </div>
-                                """
-                            )
-                            answer_state = gr.HTML(
-                                render_status("info", "No answer yet", "Ask a question to begin."),
-                                elem_id="answer-status",
-                                elem_classes=["answer-state", "status-host"],
-                            )
-                            chatbot = gr.Chatbot(
-                                label="Conversation",
-                                type="messages",
-                                allow_tags=False,
-                                height=420,
-                                elem_id="conversation-region",
-                                elem_classes=[
-                                    "conversation",
-                                    "overflow-region",
-                                    "fixed-scroll-region",
-                                ],
-                            )
-                            message = gr.Textbox(
-                                label="Question",
-                                placeholder="Load AI models before asking about your documents",
-                                interactive=False,
-                                lines=2,
-                                elem_classes="question-composer",
-                            )
-                            with gr.Row(elem_classes=["action-row", "chat-actions"]):
-                                send = gr.Button(
-                                    "Ask", variant="primary", interactive=False
-                                )
-                                clear = gr.Button("Clear")
-                                export = gr.Button("Export")
-                                export_file = gr.DownloadButton(
-                                    "Download export",
-                                    visible=False,
-                                    interactive=False,
-                                    elem_id="conversation-export",
-                                )
-                            gr.HTML(
-                                """
-                                <div class="section-heading">
-                                  <div>
-                                    <p class="section-kicker">EVIDENCE</p>
-                                    <h3>Cited sources</h3>
-                                  </div>
-                                  <p>Only sources cited by the current answer appear here.</p>
-                                </div>
-                                """
-                            )
-                            sources = gr.HTML(
-                                self.evidence_html({}),
-                                elem_id="evidence-list",
-                                elem_classes=["evidence-region", "overflow-region"],
-                            )
-                            with gr.Accordion(
-                                "Technical details", open=False, elem_id="technical-details"
-                            ):
-                                evidence = gr.Markdown(
-                                    "Routing and evidence details will appear after a question."
-                                )
-                                scores = gr.HTML(
-                                    self.scores_html([]),
-                                    elem_id="retrieval-scores-table",
-                                    elem_classes=[
-                                        "retrieval-scores-table",
-                                        "overflow-region",
-                                    ],
-                                )
-                                trace = gr.HTML(
-                                    self.trace_html([]),
-                                    elem_id="retrieval-trace-table",
-                                    elem_classes=[
-                                        "retrieval-trace-table",
-                                        "overflow-region",
-                                    ],
-                                )
-                        with gr.Column(
-                            scale=1,
-                            min_width=296,
-                            elem_id="corpus-rail",
-                            elem_classes=["overflow-region", "fixed-scroll-region"],
-                        ):
-                            with gr.Accordion(
-                                "Manage documents",
-                                open=True,
-                                elem_id="corpus-management",
-                            ):
-                                gr.HTML(
-                                    f"""
-                                    <div class="corpus-summary">
-                                      <span class="corpus-summary__value">{len(self.document_rows())}</span>
-                                      <span class="corpus-summary__label">indexed documents</span>
-                                    </div>
-                                    """
-                                )
-                                files = gr.File(
-                                    label="PDF/TXT uploads",
-                                    file_count="multiple",
-                                    file_types=[".pdf", ".txt"],
-                                    type="filepath",
-                                    height=132,
-                                    elem_id="document-upload",
-                                    elem_classes="upload-compact",
-                                )
-                                index_button = gr.Button(
-                                    "Index document",
-                                    variant="primary",
-                                    elem_classes="primary-action",
-                                )
-                                ingestion_status = gr.HTML(
-                                    render_status(
-                                        "info",
-                                        "Ready to index",
-                                        "Select one or more files to begin.",
-                                    ),
-                                    elem_id="ingestion-status",
-                                    elem_classes=["inline-status", "status-host"],
-                                )
-                                refresh_button = gr.Button("Refresh document status")
-                                selected_id = gr.Dropdown(
-                                    label="Document ID to delete",
-                                    choices=[row[2] for row in self.document_rows()],
-                                )
-                                delete_button = gr.Button(
-                                    "Review deletion", elem_classes="destructive-review"
-                                )
-                                with gr.Group(
-                                    visible=False,
-                                    elem_id="deletion-alert",
-                                    elem_classes="delete-confirmation",
-                                ) as delete_confirmation:
-                                    delete_confirmation_text = gr.HTML()
-                                    gr.Markdown(
-                                        "This removes the local document and its indexed chunks. "
-                                        "This action cannot be undone."
-                                    )
-                                    with gr.Row(elem_classes="action-row"):
-                                        cancel_delete = gr.Button("Cancel")
-                                        confirm_delete = gr.Button(
-                                            "Confirm deletion", variant="stop"
-                                        )
-                                documents = gr.Dataframe(
-                                    headers=DOCUMENT_HEADERS,
-                                    value=self.document_rows(),
-                                    label="Indexed documents",
-                                    interactive=False,
-                                    wrap=True,
-                                    show_search="filter",
-                                    max_height=360,
-                                    column_widths=[180, 220, 200, 80, 80, 130, 100, 240],
-                                    elem_id="documents-table",
-                                    elem_classes=[
-                                        "rag-table",
-                                        "documents-table",
-                                        "overflow-region",
-                                    ],
-                                )
-                                with gr.Accordion(
-                                    "Maintenance", open=False, elem_id="maintenance-panel"
-                                ):
-                                    gr.Markdown(
-                                        "Repair or rebuild the local corpus when source files or "
-                                        "index state change."
-                                    )
-                                    reindex_button = gr.Button("Reindex changed documents")
-                                    reconcile_button = gr.Button("Reconcile manifest/index")
-                                    rebuild_button = gr.Button("Rebuild complete index")
-                                with gr.Accordion(
-                                    "Indexing errors", open=False, elem_id="index-errors-panel"
-                                ):
-                                    errors = gr.HTML(
-                                        self.indexing_errors_html([]),
-                                        elem_id="indexing-errors-table",
-                                        elem_classes=[
-                                            "indexing-errors-table",
-                                            "overflow-region",
-                                        ],
-                                    )
-                with gr.Tab("Evaluation", elem_id="evaluation-tab"):
-                    gr.HTML(
-                        """
-                        <div class="view-heading">
-                          <p class="section-kicker">QUALITY REVIEW</p>
-                          <h2>Evaluation</h2>
-                          <p>Compare retrieval and answer quality, then inspect failing cases.</p>
-                        </div>
-                        """
-                    )
-                    with gr.Group(elem_classes="evaluation-controls"):
-                        with gr.Row(elem_classes="action-row"):
-                            split = gr.Dropdown(
-                                ["development", "test"],
-                                value="development",
-                                label="Split",
-                                elem_id="evaluation-split",
-                            )
-                            systems = gr.CheckboxGroup(
-                                [*SYSTEMS, "all"],
-                                value=["dense", "bm25", "hybrid", "agentic"],
-                                label="Systems",
-                                elem_id="evaluation-systems",
-                            )
-                        with gr.Row(elem_classes="action-row"):
-                            run_eval = gr.Button("Run evaluation", variant="primary")
-                            load_eval = gr.Button("Load latest result")
-                    eval_status = gr.HTML(
-                        render_status(
-                            "info", "Evaluation ready", "Choose systems and a split."
-                        ),
-                        elem_id="evaluation-status",
-                        elem_classes=["inline-status", "status-host"],
-                    )
-                    metrics = gr.HTML(
-                        self.metrics_html([]),
-                        elem_id="evaluation-metrics-table",
-                        elem_classes=[
-                            "evaluation-metrics-table",
-                            "overflow-region",
-                        ],
-                    )
-                    gr.HTML('<h3 class="result-heading">Failure details</h3>')
-                    failures = gr.HTML(
-                        self.failures_html([]),
-                        elem_id="evaluation-failures-table",
-                        elem_classes=[
-                            "evaluation-failures-table",
-                            "overflow-region",
-                        ],
-                    )
-                with gr.Tab("Diagnostics", elem_id="diagnostics-tab"):
-                    gr.HTML(
-                        """
-                        <div class="view-heading">
-                          <p class="section-kicker">LOCAL RECOVERY</p>
-                          <h2>Diagnostics</h2>
-                          <p>Review runtime, model, index, and saved-evaluation readiness.</p>
-                        </div>
-                        """
-                    )
-                    refresh_diagnostics = gr.Button(
-                        "Refresh diagnostics", elem_classes="diagnostics-refresh"
-                    )
-                    diagnostics = gr.HTML(
-                        self.system_status_html([]),
-                        elem_id="diagnostics-table",
-                        elem_classes=[
-                            "diagnostics-table",
-                            "overflow-region",
-                        ],
-                    )
-
-            index_button.click(
-                self.index_selected_ui,
-                files,
-                [documents, ingestion_status, errors, readiness, selected_id],
-            )
-            document_outputs = [documents, ingestion_status, errors, selected_id]
-            reindex_button.click(self.reindex_changed_ui, None, document_outputs)
-            rebuild_button.click(self.rebuild_index_ui, None, document_outputs)
-            reconcile_button.click(self.reconcile_manifest_index_ui, None, document_outputs)
-            delete_button.click(
-                self.prepare_deletion,
-                selected_id,
-                [delete_confirmation_text, delete_confirmation],
-            )
-            cancel_delete.click(
-                self.cancel_deletion,
-                None,
-                [delete_confirmation_text, delete_confirmation],
-            )
-            selected_id.change(
-                self.cancel_deletion,
-                None,
-                [delete_confirmation_text, delete_confirmation],
-            )
-            confirm_delete.click(
-                self.delete_selected_ui,
-                selected_id,
-                [*document_outputs, delete_confirmation_text, delete_confirmation],
-            )
-            refresh_button.click(self.refresh_documents, None, [documents, readiness, selected_id])
-            for trigger in (send.click, message.submit):
-                trigger(
-                    self.chat_ui,
-                    [message, chatbot, session_id],
-                    [
-                        message,
-                        chatbot,
-                        latest_result,
-                        answer_state,
-                        evidence,
-                        sources,
-                        scores,
-                        trace,
-                    ],
-                )
-            clear.click(
-                self.clear_ui,
-                session_id,
-                [chatbot, latest_result, answer_state, evidence, sources, scores, trace],
-            )
-            export.click(self.export_chat_ui, [chatbot, latest_result], export_file)
-            run_eval.click(
-                self.run_evaluation_presentation_ui,
-                [split, systems],
-                [metrics, failures, eval_status],
-            )
-            load_eval.click(
-                self.load_latest_evaluation_ui, None, [metrics, failures, eval_status]
-            )
-            preflight_outputs = [readiness, diagnostics, message, send]
-            refresh_diagnostics.click(
-                self.preflight_presentation_ui, None, preflight_outputs
-            )
-            load_ai.click(self.load_ai_models_presentation_ui, None, preflight_outputs)
-        return interface
 
     def create_interface(self) -> gr.Blocks:
         theme = Soft(primary_hue="indigo", neutral_hue="slate").set(
@@ -2414,49 +2142,6 @@ class RAGApplication:
                         </div>
                         """
                     )
-                    with gr.Group(elem_id="evaluation-setup"):
-                        gr.HTML(
-                            """
-                            <div class="evaluation-setup__heading">
-                              <h3>Evaluation setup</h3>
-                              <p>Choose a dataset split and the systems to compare.</p>
-                            </div>
-                            """
-                        )
-                        with gr.Row(elem_classes="evaluation-config-row"):
-                            split = gr.Dropdown(
-                                ["development", "test"],
-                                value="development",
-                                label="Split",
-                                elem_id="evaluation-split",
-                                min_width=200,
-                                scale=0,
-                            )
-                            systems = gr.CheckboxGroup(
-                                list(SYSTEMS),
-                                value=list(SYSTEMS),
-                                label="Systems",
-                                elem_id="evaluation-systems",
-                                min_width=320,
-                                scale=1,
-                            )
-                        with gr.Row(elem_classes="evaluation-actions-row"):
-                            run_eval = gr.Button(
-                                "Run evaluation",
-                                variant="primary",
-                                elem_id="run-evaluation",
-                            )
-                            load_eval = gr.Button(
-                                "Load latest result",
-                                variant="secondary",
-                                elem_id="load-evaluation",
-                            )
-                            eval_status = gr.HTML(
-                                "",
-                                visible=False,
-                                elem_id="evaluation-status",
-                                elem_classes=["inline-status", "status-host"],
-                            )
                     with gr.Group(
                         visible=False,
                         elem_id="evaluation-results",
@@ -2483,7 +2168,56 @@ class RAGApplication:
                                 elem_id="evaluation-failures-table",
                                 elem_classes=["evaluation-failures-table", "overflow-region"],
                             )
-
+                    with gr.Group(elem_id="evaluation-workflow"):
+                        with gr.Row(
+                            elem_id="evaluation-actions",
+                            elem_classes="evaluation-actions-row",
+                        ):
+                            run_eval = gr.Button(
+                                "Run standard benchmark",
+                                variant="primary",
+                                elem_id="run-evaluation",
+                            )
+                            load_eval = gr.Button(
+                                "Refresh latest result",
+                                variant="secondary",
+                                elem_id="load-evaluation",
+                            )
+                        eval_status = gr.HTML(
+                            "",
+                            visible=False,
+                            elem_id="evaluation-status",
+                            elem_classes=["inline-status", "status-host"],
+                        )
+                    with gr.Accordion(
+                        "Advanced options",
+                        open=False,
+                        elem_id="evaluation-advanced-options",
+                    ):
+                        gr.Markdown(
+                            "Standard: development split and all systems. "
+                            "Agentic runs can take considerably longer."
+                        )
+                        with gr.Row(elem_classes="evaluation-config-row"):
+                            split = gr.Dropdown(
+                                [
+                                    ("Development", "development"),
+                                    ("Test — held-out final validation", "test"),
+                                ],
+                                value="development",
+                                label="Split",
+                                elem_id="evaluation-split",
+                                min_width=200,
+                                scale=0,
+                            )
+                            systems = gr.CheckboxGroup(
+                                list(SYSTEMS),
+                                value=list(SYSTEMS),
+                                label="Systems",
+                                elem_id="evaluation-systems",
+                                min_width=320,
+                                scale=1,
+                            )
             selection_outputs = [
                 selected_document_id,
                 selected_document,
@@ -2614,12 +2348,19 @@ class RAGApplication:
                 queue=False,
             ).then(
                 self.load_latest_evaluation_ui,
-                None,
+                [split, systems],
                 evaluation_outputs,
             )
             load_evaluation_event.then(
                 self.refresh_workspace_state, workspace_inputs, workspace_outputs
             )
+            for option_event in (split.change, systems.change):
+                option_event(
+                    self.evaluation_options_ui,
+                    [split, systems],
+                    [eval_status, run_eval],
+                    show_progress="hidden",
+                )
             preflight_outputs = [readiness, system_status, message, send, load_ai]
             load_models_event = load_ai.click(
                 self.load_ai_models_shell_ui, None, preflight_outputs
@@ -2631,6 +2372,12 @@ class RAGApplication:
                 self.refresh_workspace_state,
                 workspace_inputs,
                 workspace_outputs,
+                show_progress="hidden",
+            )
+            interface.load(
+                self.initialize_evaluation_ui,
+                [split, systems],
+                evaluation_outputs,
                 show_progress="hidden",
             )
         return interface

@@ -651,7 +651,23 @@ def write_experiment(
     return output
 
 
-def _require_ollama() -> None:
+def normalize_model_name(name: str) -> str:
+    """Return the exact Ollama identifier, adding the implicit latest tag."""
+    normalized = name.strip()
+    return normalized if ":" in normalized else f"{normalized}:latest"
+
+
+def required_models_for_systems(systems: Sequence[SystemName]) -> tuple[str, ...]:
+    """Return only the local models needed by the selected evaluation systems."""
+    required: list[str] = []
+    if any(system in {"dense", "hybrid", "agentic"} for system in systems):
+        required.append(normalize_model_name(config.embedding_model))
+    if "agentic" in systems:
+        required.append(normalize_model_name(config.llm_model))
+    return tuple(dict.fromkeys(required))
+
+
+def _require_ollama(required_models: Sequence[str] | None = None) -> None:
     try:
         with urllib.request.urlopen(f"{config.ollama_base_url}/api/tags", timeout=3) as response:
             payload = json.load(response)
@@ -660,8 +676,13 @@ def _require_ollama() -> None:
             f"Live evaluation requires Ollama at {config.ollama_base_url}. "
             "Start Ollama and pull the configured chat and embedding models."
         ) from exc
-    available = {item.get("name", "").split(":")[0] for item in payload.get("models", [])}
-    required = {config.llm_model.split(":")[0], config.embedding_model.split(":")[0]}
+    available = {
+        normalize_model_name(str(item.get("name", "")))
+        for item in payload.get("models", [])
+        if item.get("name")
+    }
+    configured = required_models or (config.llm_model, config.embedding_model)
+    required = {normalize_model_name(name) for name in configured}
     missing = sorted(required - available)
     if missing:
         commands = ", ".join(f"ollama pull {name}" for name in missing)
@@ -768,31 +789,39 @@ def preflight_multihop(
 def run_evaluation(
     dataset: Path, systems: Sequence[SystemName], split: Split, *, dataset_name: str = "custom"
 ) -> Path:
+    selected = tuple(dict.fromkeys(systems))
+    if not selected:
+        raise ValueError("Select at least one evaluation system.")
     raw = dataset.read_bytes()
     all_cases = load_cases(dataset)
     if dataset_name == "multihop":
         manager = VectorDBManager(multihop_settings())
-        all_cases = preflight_multihop(all_cases, manager=manager)
+        all_cases = preflight_multihop(all_cases, manager=manager, check_models=False)
     else:
-        _require_ollama()
         manager = VectorDBManager()
+    required_models = required_models_for_systems(selected)
+    if required_models:
+        _require_ollama(required_models)
     cases = filter_cases(all_cases, split)
     if not cases:
         raise ValueError(f"Dataset has no cases for split '{split}'")
     retriever = Retriever(manager.setup())
-    counted = CountingModel(
-        ChatOllama(
-            model=config.llm_model,
-            base_url=config.ollama_base_url,
-            temperature=config.temperature,
+    counted: CountingModel | None = None
+    graph: RAGGraph | None = None
+    if "agentic" in selected:
+        counted = CountingModel(
+            ChatOllama(
+                model=config.llm_model,
+                base_url=config.ollama_base_url,
+                temperature=config.temperature,
+            )
         )
-    )
-    graph = RAGGraph(manager, llm=counted)  # type: ignore[arg-type]
+        graph = RAGGraph(manager, llm=counted)  # type: ignore[arg-type]
     results: list[CaseResult] = []
-    for system in systems:
+    for system in selected:
         for case in cases:
             results.append(
-                run_agentic_case(case, graph, counted)
+                run_agentic_case(case, graph, counted)  # type: ignore[arg-type]
                 if system == "agentic"
                 else run_retrieval_case(case, system, retriever)
             )
@@ -802,7 +831,7 @@ def run_evaluation(
             [item for item in results if item.system == system],
             system=system,
         )
-        for system in systems
+        for system in selected
     }
     now = datetime.now(UTC)
     run_id = now.strftime("%Y%m%dT%H%M%SZ") + f"-{split}"
@@ -812,7 +841,7 @@ def run_evaluation(
         git_commit=_git_commit(),
         dataset_hash=hashlib.sha256(raw).hexdigest(),
         evaluated_split=split,
-        systems=list(systems),
+        systems=list(selected),
         chat_model=config.llm_model,
         embedding_model=config.embedding_model,
         chunk_size=config.chunk_size,

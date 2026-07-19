@@ -1,3 +1,4 @@
+import io
 import json
 import urllib.error
 from pathlib import Path
@@ -232,6 +233,76 @@ def test_missing_ollama_has_actionable_error(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(evaluation.urllib.request, "urlopen", unavailable)
     with pytest.raises(RuntimeError, match="Start Ollama"):
         evaluation._require_ollama()
+
+
+def test_required_models_depend_on_selected_systems() -> None:
+    assert evaluation.required_models_for_systems(["bm25"]) == ()
+    assert evaluation.required_models_for_systems(["dense", "hybrid"]) == (
+        evaluation.normalize_model_name(evaluation.config.embedding_model),
+    )
+    assert set(evaluation.required_models_for_systems(["agentic"])) == {
+        evaluation.normalize_model_name(evaluation.config.embedding_model),
+        evaluation.normalize_model_name(evaluation.config.llm_model),
+    }
+
+
+def test_ollama_model_matching_uses_exact_normalized_tags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def response(models: list[str]):
+        return io.BytesIO(json.dumps({"models": [{"name": name} for name in models]}).encode())
+
+    monkeypatch.setattr(
+        evaluation.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: response(["qwen3.5:latest"]),
+    )
+    with pytest.raises(RuntimeError, match="qwen3.5:9b"):
+        evaluation._require_ollama(["qwen3.5:9b"])
+
+    monkeypatch.setattr(
+        evaluation.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: response(["nomic-embed-text:latest"]),
+    )
+    evaluation._require_ollama(["nomic-embed-text"])
+
+
+def test_bm25_evaluation_does_not_construct_ollama_or_agentic_graph(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dataset = tmp_path / "cases.jsonl"
+    dataset.write_text(case().model_dump_json() + "\n", encoding="utf-8")
+
+    class Manager:
+        def setup(self):
+            return object()
+
+    monkeypatch.setattr(evaluation, "VectorDBManager", Manager)
+    monkeypatch.setattr(evaluation, "Retriever", lambda _collection: object())
+    monkeypatch.setattr(
+        evaluation,
+        "_require_ollama",
+        lambda *_args, **_kwargs: pytest.fail("BM25 must not require Ollama"),
+    )
+    monkeypatch.setattr(
+        evaluation,
+        "ChatOllama",
+        lambda **_kwargs: pytest.fail("BM25 must not construct the chat model"),
+    )
+    monkeypatch.setattr(
+        evaluation,
+        "RAGGraph",
+        lambda *_args, **_kwargs: pytest.fail("BM25 must not construct the agentic graph"),
+    )
+    monkeypatch.setattr(
+        evaluation,
+        "run_retrieval_case",
+        lambda item, system, _retriever: result(case_id=item.id, system=system),
+    )
+    monkeypatch.setattr(evaluation, "write_experiment", lambda *_args, **_kwargs: tmp_path)
+
+    assert evaluation.run_evaluation(dataset, ["bm25"], "development") == tmp_path
 
 
 class FakeModel:

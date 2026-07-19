@@ -2,11 +2,14 @@ import json
 import os
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, Mapping, cast
+
+import pytest
 
 import modules.app as app_module
 from modules.app import (
-    DISPLAY_METRIC_LABELS,
     EVALUATION_HEADERS,
+    EvaluationReadiness,
     RAGApplication,
     format_duration_ms,
     format_metric,
@@ -357,8 +360,11 @@ def test_evaluation_selection_handles_empty_and_scalar_values(tmp_path: Path, mo
     app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
     calls: list[tuple[Path, list[str], str]] = []
 
-    def fake_run_evaluation(dataset: Path, systems: list[str], split: str) -> Path:
+    def fake_run_evaluation(
+        dataset: Path, systems: list[str], split: str, *, dataset_name: str
+    ) -> Path:
         calls.append((dataset, systems, split))
+        assert dataset_name == "multihop"
         return tmp_path / "result"
 
     monkeypatch.setattr(app_module, "run_evaluation", fake_run_evaluation)
@@ -379,7 +385,7 @@ def test_evaluation_selection_handles_empty_and_scalar_values(tmp_path: Path, mo
     assert calls == []
 
     monkeypatch.setattr(app_module, "PROJECT_ROOT", tmp_path)
-    dataset = tmp_path / "evals" / "mvp_cases.jsonl"
+    dataset = tmp_path / "evals" / "multihop" / "cases.jsonl"
     dataset.parent.mkdir(parents=True)
     dataset.write_text("{}\n", encoding="utf-8")
 
@@ -389,7 +395,13 @@ def test_evaluation_selection_handles_empty_and_scalar_values(tmp_path: Path, mo
     assert calls == [(dataset, ["dense"], "development")]
 
 
-def test_evaluation_tables_and_diagnostics(tmp_path: Path) -> None:
+def test_evaluation_readiness_represents_all_workflow_states() -> None:
+    for state in ("ready", "blocked", "running", "result", "error"):
+        readiness = EvaluationReadiness(state=state)
+        assert readiness.state == state
+
+
+def test_legacy_evaluation_summary_is_rejected(tmp_path: Path) -> None:
     manager = FakeManager(tmp_path)
     app = RAGApplication(vector_db=manager)  # type: ignore[arg-type]
     result = tmp_path / "run"
@@ -416,38 +428,8 @@ def test_evaluation_tables_and_diagnostics(tmp_path: Path) -> None:
         + "\n",
         encoding="utf-8",
     )
-    metrics, failures, context, label = app.load_evaluation_result(result)
-    assert metrics[0] == [
-        "Retrieval",
-        "Recall at 5",
-        "50.0% · legacy summary",
-        "—",
-        "—",
-        "—",
-    ]
-    assert [
-        "Answer quality",
-        "Answer token F1",
-        "— Not applicable · legacy summary",
-        "—",
-        "—",
-        "—",
-    ] in metrics
-    assert metrics[-1] == [
-        "Other",
-        "Custom grounding metric",
-        "75.0% · legacy summary",
-        "—",
-        "—",
-        "—",
-    ]
-    assert not any(row[1] in {"Route accuracy", "Mean latency"} for row in metrics)
-    assert len(metrics) == len(DISPLAY_METRIC_LABELS) + 1
-    assert failures[0][-1] == "Retrieval miss"
-    assert 'aria-label="Evaluation result context"' in context
-    assert "r1" in context
-    assert "1 case" in context
-    assert "r1" in label
+    with pytest.raises(ValueError, match="schema version 2"):
+        app.load_evaluation_result(result)
 
     diagnostics = app.diagnostic_rows(ollama={"reachable": False, "models": []})
     assert ["Orphan Chroma chunks", "warning", "1"] in diagnostics
@@ -610,13 +592,19 @@ def test_latest_evaluation_finds_the_newest_valid_nested_run(tmp_path: Path, mon
 
     older = results / "multihop" / "older"
     older.mkdir(parents=True)
-    (older / "summary.json").write_text("{}", encoding="utf-8")
+    (older / "summary.json").write_text(
+        '{"schema_version": 2, "configuration": {"dataset_name": "multihop"}}',
+        encoding="utf-8",
+    )
     (older / "cases.jsonl").write_text("", encoding="utf-8")
     os.utime(older / "summary.json", (10, 10))
 
     newer = results / "multihop" / "newer"
     newer.mkdir(parents=True)
-    (newer / "summary.json").write_text("{}", encoding="utf-8")
+    (newer / "summary.json").write_text(
+        '{"schema_version": 2, "configuration": {"dataset_name": "multihop"}}',
+        encoding="utf-8",
+    )
     (newer / "cases.jsonl").write_text("", encoding="utf-8")
     os.utime(newer / "summary.json", (20, 20))
 
@@ -628,10 +616,44 @@ def test_latest_evaluation_finds_the_newest_valid_nested_run(tmp_path: Path, mon
 
     incomplete = results / "multihop" / "incomplete"
     incomplete.mkdir(parents=True)
-    (incomplete / "summary.json").write_text("{}", encoding="utf-8")
+    (incomplete / "summary.json").write_text('{"schema_version": 2}', encoding="utf-8")
     os.utime(incomplete / "summary.json", (40, 40))
 
+    historical = results / "multihop" / "historical"
+    historical.mkdir(parents=True)
+    (historical / "summary.json").write_text("{}", encoding="utf-8")
+    (historical / "cases.jsonl").write_text("{}\n", encoding="utf-8")
+    os.utime(historical / "summary.json", (50, 50))
+
+    unrelated = results / "custom" / "newer"
+    unrelated.mkdir(parents=True)
+    (unrelated / "summary.json").write_text(
+        '{"schema_version": 2, "configuration": {"dataset_name": "custom"}}',
+        encoding="utf-8",
+    )
+    (unrelated / "cases.jsonl").write_text("", encoding="utf-8")
+    os.utime(unrelated / "summary.json", (60, 60))
+
     assert RAGApplication.latest_evaluation() == newer
+
+
+def test_latest_evaluation_rejects_historical_only_results(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(app_module, "PROJECT_ROOT", tmp_path)
+    result = tmp_path / "evals" / "results" / "multihop" / "historical"
+    result.mkdir(parents=True)
+    (result / "summary.json").write_text("{}", encoding="utf-8")
+    (result / "cases.jsonl").write_text("{}\n", encoding="utf-8")
+
+    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+    metrics, failures, context, status = app.load_latest_evaluation()
+
+    assert metrics == []
+    assert failures == []
+    assert context == ""
+    assert "No compatible saved evaluation" in status
+    assert "Run a new evaluation" in status
 
 
 def test_interface_construction_does_not_require_live_ollama(tmp_path: Path) -> None:
@@ -702,7 +724,7 @@ def test_interface_exposes_responsive_hierarchy_and_hides_mean_latency(tmp_path:
         "Ask",
         "Clear",
         "Export",
-        "Run evaluation",
+        "Run standard benchmark",
     ):
         assert action_labels.count(label) == 1
     assert "Refresh document status" not in action_labels
@@ -786,6 +808,9 @@ def test_local_stylesheet_covers_mobile_tables_and_keyboard_focus() -> None:
     assert ".metric-support" in css
     assert ".evaluation-toolbar" not in css
     assert "  .view-heading {\n    flex-direction: column;" in css
+    config_row_rule = css.split(".evaluation-config-row {", 1)[1].split("}", 1)[0]
+    assert "display: grid" not in config_row_rule
+    assert "flex-wrap: wrap" in config_row_rule
 
 
 def test_statuses_have_typed_aria_semantics_and_escape_content() -> None:
@@ -959,7 +984,7 @@ def test_evaluation_adapters_hide_results_on_validation_error(tmp_path: Path) ->
     assert updates[2]["visible"] is False
     assert updates[4]["visible"] is False
     assert "select at least one" in updates[5]["value"].lower()
-    assert updates[6]["interactive"] is True
+    assert updates[6]["interactive"] is False
     assert updates[7]["interactive"] is True
 
 
@@ -981,6 +1006,7 @@ def test_evaluation_context_escapes_metadata(tmp_path: Path) -> None:
     (result / "summary.json").write_text(
         json.dumps(
             {
+                "schema_version": 2,
                 "configuration": {
                     "run_id": "<script>bad()</script>",
                     "dataset_name": "multi<hop",
@@ -1014,6 +1040,10 @@ def test_evaluation_interface_has_task_order_and_four_systems(tmp_path: Path) ->
     }
 
     assert by_id["evaluation-split"]["label"] == "Split"
+    assert by_id["evaluation-split"]["choices"] == [
+        ("Development", "development"),
+        ("Test — held-out final validation", "test"),
+    ]
     assert by_id["evaluation-systems"]["label"] == "Systems"
     assert by_id["evaluation-systems"]["choices"] == [
         ("dense", "dense"),
@@ -1022,9 +1052,33 @@ def test_evaluation_interface_has_task_order_and_four_systems(tmp_path: Path) ->
         ("agentic", "agentic"),
     ]
     assert by_id["evaluation-systems"]["value"] == list(app_module.SYSTEMS)
+    assert by_id["evaluation-advanced-options"]["open"] is False
     assert by_id["evaluation-results"]["visible"] is False
     assert by_id["evaluation-result-context"]["visible"] is False
     action_values = [props.get("value") for props in components]
-    assert action_values.count("Run evaluation") == 1
-    assert action_values.count("Load latest result") == 1
+    assert action_values.count("Run standard benchmark") == 1
+    assert action_values.count("Refresh latest result") == 1
     assert "all" not in by_id["evaluation-systems"]["value"]
+
+    component_ids = {
+        component["props"].get("elem_id"): component["id"]
+        for component in config["components"]
+        if component["props"].get("elem_id")
+    }
+    parents: dict[int, int] = {}
+
+    def record_parents(
+        node: Mapping[str, Any], parent_id: int | None = None
+    ) -> None:
+        node_id = node.get("id")
+        if node_id is not None and parent_id is not None:
+            parents[node_id] = parent_id
+        for child in node.get("children", []):
+            record_parents(child, node_id)
+
+    layout = config.get("layout")
+    assert layout is not None
+    record_parents(cast(Mapping[str, Any], layout))
+    run_parent = parents[component_ids["run-evaluation"]]
+    assert parents[component_ids["load-evaluation"]] == run_parent
+    assert parents[component_ids["evaluation-status"]] != run_parent

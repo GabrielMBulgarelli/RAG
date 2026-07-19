@@ -1212,6 +1212,7 @@ class RAGApplication:
             "retry_count": result.get("retry_count", 0),
             "evidence_status": result.get("evidence_status"),
             "citations": result.get("sources", []),
+            "validation": result.get("validation"),
             "public_trace": result.get("trace", []),
         }
 

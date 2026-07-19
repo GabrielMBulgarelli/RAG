@@ -263,6 +263,11 @@ def test_export_is_public_and_trace_and_scores_preserve_observability(tmp_path: 
         "subqueries": ["one", "two"],
         "retry_count": 1,
         "evidence_status": "limited",
+        "validation": {
+            "is_valid": True,
+            "violations": [],
+            "repair_attempted": False,
+        },
         "sources": [{"label": "C1", "chunk_id": "c1", "filename": "a.pdf", "page": 2}],
         "trace": [
             {
@@ -298,8 +303,10 @@ def test_export_is_public_and_trace_and_scores_preserve_observability(tmp_path: 
         "retry_count",
         "evidence_status",
         "citations",
+        "validation",
         "public_trace",
     }
+    assert exported["validation"] == result["validation"]
     assert "prompt" not in json.dumps(exported)
     assert app.trace_rows(result) == [
         ["Retrieve", "—", 20, 12, 6, 0, "—", "12 ms"]

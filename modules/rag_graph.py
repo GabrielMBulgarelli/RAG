@@ -12,9 +12,10 @@ from langchain_ollama import ChatOllama
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
-from modules.citations import build_cited_context, validate_citations
+from modules.citations import build_cited_context, build_relevant_context, validate_answer
 from modules.config import config
 from modules.models import (
+    AnswerValidation,
     CitationSource,
     EvidenceGrade,
     EvidenceStatus,
@@ -45,6 +46,7 @@ class RAGState(TypedDict):
     filters: dict[str, str]
     trace: list[TraceEvent]
     result: RAGResult
+    validation: AnswerValidation
 
 
 def decide_after_grading(status: EvidenceStatus, retry_count: int) -> str:
@@ -283,9 +285,14 @@ Request: {state["rewritten_query"]}"""
     def _grade(self, state: RAGState) -> dict:
         started = perf_counter()
         hits = state.get("hits", [])
+        queries = state.get("queries") or [state["rewritten_query"]]
         if not hits:
             return {
-                "grade": EvidenceGrade(status=EvidenceStatus.INSUFFICIENT, reason="No evidence."),
+                "grade": EvidenceGrade(
+                    status=EvidenceStatus.INSUFFICIENT,
+                    unsupported_subqueries=queries,
+                    reason="No evidence.",
+                ),
                 "trace": _trace(
                     state,
                     TraceEvent(
@@ -298,14 +305,63 @@ Request: {state["rewritten_query"]}"""
                 ),
             }
         context, _ = build_cited_context(hits)
-        grade = cast(
+        proposed = cast(
             EvidenceGrade,
             self._structured(
                 EvidenceGrade,
-                f"""Grade whether the evidence answers the question. Use sufficient for full
-support, limited for a useful partial answer, and insufficient otherwise. List only
-relevant [C#] labels. Question: {state["rewritten_query"]}\nEvidence:\n{context}""",
+                f"""Grade the evidence separately for every required subquery. Reproduce each
+subquery exactly in supported_subqueries or unsupported_subqueries and map its relevant
+[C#] labels in relevant_labels_by_subquery. Evidence is sufficient only when every
+subquery is supported. Use limited for partial coverage or conflicting evidence, and
+insufficient when none is useful. Identify conflicting labels when present.
+Question: {state["rewritten_query"]}
+Subqueries: {queries}\nEvidence:\n{context}""",
             ),
+        )
+        valid_labels = {f"C{index}" for index in range(1, len(hits) + 1)}
+        labels_by_query = {
+            query: [
+                label
+                for label in proposed.relevant_labels_by_subquery.get(query, [])
+                if label in valid_labels
+            ]
+            for query in queries
+        }
+        if len(queries) == 1 and not labels_by_query[queries[0]]:
+            labels_by_query[queries[0]] = [
+                label for label in proposed.relevant_labels if label in valid_labels
+            ]
+        supported = [
+            query
+            for query in queries
+            if query in proposed.supported_subqueries and labels_by_query[query]
+        ]
+        unsupported = [query for query in queries if query not in supported]
+        relevant_labels = list(
+            dict.fromkeys(label for query in queries for label in labels_by_query[query])
+        )
+        coverage = len(supported) / len(queries) if queries else 0.0
+        conflict_labels = [label for label in proposed.conflicting_labels if label in valid_labels]
+        conflict = proposed.conflict and bool(conflict_labels)
+        if not supported:
+            status = EvidenceStatus.INSUFFICIENT
+        elif coverage < 1.0 or conflict:
+            status = EvidenceStatus.LIMITED
+        else:
+            status = EvidenceStatus.SUFFICIENT
+        grade = proposed.model_copy(
+            update={
+                "status": status,
+                "relevant_labels": relevant_labels,
+                "supported_subqueries": supported,
+                "unsupported_subqueries": unsupported,
+                "relevant_labels_by_subquery": labels_by_query,
+                "coverage_fraction": coverage,
+                "fully_supported": coverage == 1.0 and not conflict,
+                "partially_supported": 0.0 < coverage < 1.0,
+                "conflict": conflict,
+                "conflicting_labels": conflict_labels,
+            }
         )
         return {
             "grade": grade,
@@ -348,13 +404,16 @@ relevant [C#] labels. Question: {state["rewritten_query"]}\nEvidence:\n{context}
         }
 
     def _answer(self, state: RAGState) -> dict:
-        context, sources = build_cited_context(state["hits"])
+        context, sources = build_relevant_context(
+            state["hits"], set(state["grade"].relevant_labels)
+        )
         qualifier = (
             "Clearly say the answer is limited. "
             if state["grade"].status == EvidenceStatus.LIMITED
             else ""
         )
-        prompt = f"""Answer only from the evidence. {qualifier}Cite every factual claim with
+        prompt = f"""Begin with a direct, concise answer, followed only by the synthesis needed.
+Answer only from the evidence. {qualifier}Cite every factual claim with
 its exact [C#] label. Do not invent labels, filenames, confidence, or a sources list.
 Question: {state["rewritten_query"]}\nEvidence:\n{context}"""
         return {
@@ -370,13 +429,75 @@ Question: {state["rewritten_query"]}\nEvidence:\n{context}"""
 
     def _validate(self, state: RAGState) -> dict:
         started = perf_counter()
-        answer, cited = validate_citations(state["answer"], state.get("sources", []))
+        requires_grounding = (
+            state["route"] in {Route.SIMPLE_SEARCH, Route.COMPLEX_SEARCH}
+            and state["grade"].status != EvidenceStatus.INSUFFICIENT
+        )
+        known_labels = {f"C{index}" for index in range(1, len(state.get("hits", [])) + 1)}
+        initial = validate_answer(
+            state["answer"],
+            state.get("sources", []),
+            known_labels=known_labels,
+            require_citations=requires_grounding,
+        )
+        validation = initial
+        answer = initial.sanitized_text
+        cited = initial.used_sources
+        validation_failed = False
+        validation_decision = "valid"
+        if requires_grounding and not initial.is_valid:
+            context, relevant_sources = build_relevant_context(
+                state.get("hits", []), set(state["grade"].relevant_labels)
+            )
+            labels = ", ".join(f"[{source.label}]" for source in relevant_sources)
+            prompt = f"""Repair the answer using only the evidence below. Begin with a direct,
+concise answer and cite every factual claim. Use only these labels: {labels}. Return
+only the repaired answer.
+Question: {state.get("rewritten_query", state.get("query", ""))}
+Violations: {[item.value for item in initial.violations]}
+Original answer: {state["answer"]}
+Evidence:\n{context}"""
+            repaired_text = _text(self.llm.invoke([HumanMessage(content=prompt)], think=False))
+            repaired = validate_answer(
+                repaired_text,
+                relevant_sources,
+                known_labels=known_labels,
+                require_citations=True,
+            )
+            if repaired.is_valid:
+                answer = repaired.sanitized_text
+                cited = repaired.used_sources
+                validation = repaired.model_copy(
+                    update={
+                        "repair_attempted": True,
+                        "repair_succeeded": True,
+                        "initial_violations": initial.violations,
+                    }
+                )
+                validation_decision = "repaired"
+            else:
+                answer = "I could not produce a fully cited answer from the available evidence."
+                cited = []
+                validation = validate_answer(
+                    answer, [], known_labels=set(), require_citations=False
+                ).model_copy(
+                    update={
+                        "repair_attempted": True,
+                        "repair_succeeded": False,
+                        "initial_violations": initial.violations,
+                        "repair_violations": repaired.violations,
+                    }
+                )
+                validation_failed = True
+                validation_decision = "fallback"
         if state["route"] == Route.CLARIFICATION:
             termination = "clarification"
         elif state["route"] == Route.CATALOG:
             termination = "catalog"
         elif state["route"] == Route.OUT_OF_SCOPE:
             termination = "out_of_scope"
+        elif validation_failed:
+            termination = "validation_failed"
         elif state["grade"].status == EvidenceStatus.INSUFFICIENT:
             termination = "unsupported"
         elif state["grade"].status == EvidenceStatus.LIMITED:
@@ -386,12 +507,20 @@ Question: {state["rewritten_query"]}\nEvidence:\n{context}"""
         trace = _trace(
             state,
             TraceEvent(
+                stage="validate",
+                decision=validation_decision,
+                retry_count=state.get("retry_count", 0),
+                duration_ms=(perf_counter() - started) * 1000,
+            ),
+        )
+        trace.append(
+            TraceEvent(
                 stage="terminate",
                 decision=state["grade"].status.value,
                 retry_count=state.get("retry_count", 0),
-                duration_ms=(perf_counter() - started) * 1000,
+                duration_ms=0.0,
                 termination=termination,
-            ),
+            )
         )
         result = RAGResult(
             answer=answer,
@@ -404,8 +533,16 @@ Question: {state["rewritten_query"]}\nEvidence:\n{context}"""
             subqueries=state.get("queries", []),
             retrieval_hits=state.get("hits", []),
             trace=trace,
+            validation=validation,
+            conflict=state["grade"].conflict,
         )
-        return {"answer": answer, "sources": cited, "trace": trace, "result": result}
+        return {
+            "answer": answer,
+            "sources": cited,
+            "validation": validation,
+            "trace": trace,
+            "result": result,
+        }
 
     def _compile(self):
         graph = StateGraph(RAGState)

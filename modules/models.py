@@ -26,6 +26,14 @@ class EvidenceStatus(StrEnum):
     INSUFFICIENT = "insufficient"
 
 
+class AnswerViolation(StrEnum):
+    EMPTY_ANSWER = "empty_answer"
+    CITATIONS_ONLY = "citations_only"
+    UNKNOWN_LABEL = "unknown_label"
+    IRRELEVANT_CITATION = "irrelevant_citation"
+    UNCITED_CLAIM = "uncited_claim"
+
+
 class RouteDecision(BaseModel):
     route: Route
     strategy: RetrievalStrategy = RetrievalStrategy.SEMANTIC
@@ -39,6 +47,14 @@ class QueryDecomposition(BaseModel):
 class EvidenceGrade(BaseModel):
     status: EvidenceStatus
     relevant_labels: list[str] = Field(default_factory=list)
+    supported_subqueries: list[str] = Field(default_factory=list)
+    unsupported_subqueries: list[str] = Field(default_factory=list)
+    relevant_labels_by_subquery: dict[str, list[str]] = Field(default_factory=dict)
+    coverage_fraction: float = Field(default=0.0, ge=0.0, le=1.0)
+    fully_supported: bool = False
+    partially_supported: bool = False
+    conflict: bool = False
+    conflicting_labels: list[str] = Field(default_factory=list)
     reason: str = ""
 
 
@@ -83,6 +99,22 @@ class CitationSource(BaseModel):
     excerpt: str
 
 
+class AnswerValidation(BaseModel):
+    sanitized_text: str
+    used_sources: list[CitationSource] = Field(default_factory=list)
+    violations: list[AnswerViolation] = Field(default_factory=list)
+    unknown_labels: list[str] = Field(default_factory=list)
+    irrelevant_labels: list[str] = Field(default_factory=list)
+    uncited_claims: list[str] = Field(default_factory=list)
+    empty_answer: bool = False
+    citations_only: bool = False
+    is_valid: bool = True
+    repair_attempted: bool = False
+    repair_succeeded: bool = False
+    initial_violations: list[AnswerViolation] = Field(default_factory=list)
+    repair_violations: list[AnswerViolation] = Field(default_factory=list)
+
+
 class RAGResult(BaseModel):
     answer: str
     standalone_query: str = ""
@@ -94,6 +126,10 @@ class RAGResult(BaseModel):
     subqueries: list[str] = Field(default_factory=list, max_length=4)
     retrieval_hits: list[RetrievalHit] = Field(default_factory=list)
     trace: list[TraceEvent] = Field(default_factory=list)
+    validation: AnswerValidation = Field(
+        default_factory=lambda: AnswerValidation(sanitized_text="")
+    )
+    conflict: bool = False
 
 
 class ManifestDocument(BaseModel):

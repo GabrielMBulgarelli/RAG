@@ -63,12 +63,12 @@ flowchart LR
 
 ## Application experience
 
-The Gradio interface organizes the complete local workflow into four tabs:
+The Gradio interface organizes the complete local workflow into two task-focused views:
 
-- **Documents:** upload PDF/TXT files, index or reindex content, delete documents, rebuild the index, and reconcile the manifest with ChromaDB.
-- **Chat:** ask questions, review route and evidence status, inspect cited excerpts and retrieval scores, view the execution trace, and export the conversation.
-- **Evaluation:** run the existing benchmark across dense, BM25, hybrid, and agentic systems and compare recorded metrics and cases.
-- **Diagnostics:** confirm Ollama connectivity, required models, storage paths, and manifest/index integrity.
+- **Workspace:** ask questions, inspect cited evidence, export conversations, and manage the PDF/TXT corpus. Index repair, indexing errors, and local system status remain available as collapsed supporting details.
+- **Evaluation:** automatically review the newest compatible MultiHopRAG result or run the standard development benchmark across dense, BM25, hybrid, and agentic systems. Split and system selection remain available under Advanced options.
+
+The interface can open without loading Ollama models. When generation or embedding is needed, the compact application status explains the missing requirement and exposes **Load AI models**.
 
 ## Technology stack
 

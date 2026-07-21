@@ -87,6 +87,7 @@ class TraceEvent(BaseModel):
     fused_count: int | None = Field(default=None, ge=0)
     selected_count: int | None = Field(default=None, ge=0)
     retry_count: int = Field(default=0, ge=0, le=1)
+    llm_calls: int = Field(default=0, ge=0)
     duration_ms: float = Field(ge=0)
     termination: str | None = None
 

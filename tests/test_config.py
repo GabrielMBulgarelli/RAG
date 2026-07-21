@@ -16,6 +16,17 @@ def test_settings_read_rag_prefixed_environment(monkeypatch: pytest.MonkeyPatch)
     assert settings.chunk_size == 900
 
 
+def test_temperature_is_deterministic_by_default_and_can_be_overridden(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(_env_file=None)  # pyright: ignore[reportCallIssue]
+    assert settings.temperature == 0
+
+    monkeypatch.setenv("RAG_TEMPERATURE", "0.25")
+    overridden = Settings(_env_file=None)  # pyright: ignore[reportCallIssue]
+    assert overridden.temperature == 0.25
+
+
 def test_settings_reject_unknown_environment_setting(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

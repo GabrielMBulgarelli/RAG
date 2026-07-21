@@ -38,6 +38,7 @@ TRACE_HEADERS = [
     "Fused",
     "Selected",
     "Retry",
+    "LLM calls",
     "Termination",
     "Duration (ms)",
 ]
@@ -1075,6 +1076,7 @@ class RAGApplication:
                 event.get("fused_count") if event.get("fused_count") is not None else "—",
                 event.get("selected_count") if event.get("selected_count") is not None else "—",
                 event.get("retry_count", 0),
+                event.get("llm_calls", 0),
                 readable_label(event.get("termination")),
                 format_duration_ms(event.get("duration_ms")),
             ]
@@ -1741,6 +1743,7 @@ class RAGApplication:
             self.evidence_html({}),
             self.scores_html([]),
             self.trace_html([]),
+            str(uuid4()),
         )
 
     def export_chat_ui(self, messages: list[Any], result: dict[str, Any]):
@@ -2316,7 +2319,16 @@ class RAGApplication:
             clear.click(
                 self.clear_ui,
                 session_id,
-                [chatbot, latest_result, answer_state, evidence, sources, scores, trace],
+                [
+                    chatbot,
+                    latest_result,
+                    answer_state,
+                    evidence,
+                    sources,
+                    scores,
+                    trace,
+                    session_id,
+                ],
             )
             export.click(self.export_chat_ui, [chatbot, latest_result], export_file)
             evaluation_outputs = [

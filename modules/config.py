@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     llm_model: str = "qwen3.5:9b"
     embedding_model: str = "nomic-embed-text"
-    temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    temperature: float = Field(default=0.0, ge=0.0, le=2.0)
 
     sources_dir: Path = PROJECT_ROOT / "sources"
     data_dir: Path = PROJECT_ROOT / "data"

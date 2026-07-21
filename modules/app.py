@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from html import escape
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from uuid import uuid4
 
 import gradio as gr
@@ -21,6 +21,10 @@ from gradio.themes import Soft
 from modules.config import PROJECT_ROOT, config
 from modules.evaluation import (
     SYSTEMS,
+    Split,
+    SystemName,
+    evaluation_result_kind,
+    is_standard_benchmark_summary,
     load_cases,
     normalize_model_name,
     preflight_multihop,
@@ -145,6 +149,8 @@ class EvaluationReadiness:
     requires_embeddings: bool = False
     requires_chat: bool = False
     problems: tuple[str, ...] = ()
+
+
 DISPLAY_METRIC_NAMES = [name for _, names in METRIC_GROUPS for name in names]
 EVALUATION_SYSTEMS = ("dense", "bm25", "hybrid", "agentic")
 EVALUATION_HEADERS = ["Category", "Metric", "Dense", "BM25", "Hybrid", "Agentic"]
@@ -208,9 +214,7 @@ def format_duration_ms(value: Any) -> str:
 def format_metric(name: str, value: Any) -> str:
     if value is None or value == "":
         return "—"
-    if name in PERCENTAGE_METRICS or (
-        name not in METRIC_NAMES and 0 <= float(value) <= 1
-    ):
+    if name in PERCENTAGE_METRICS or (name not in METRIC_NAMES and 0 <= float(value) <= 1):
         return f"{float(value) * 100:.1f}%"
     if name == "p95_latency_seconds":
         return format_duration_ms(float(value) * 1000)
@@ -228,9 +232,7 @@ def format_metric_observation(
 ) -> str:
     """Format a schema-v2 metric observation for the comparison matrix."""
     if schema_version != 2:
-        raise ValueError(
-            "Evaluation summaries must use schema version 2. Run a new evaluation."
-        )
+        raise ValueError("Evaluation summaries must use schema version 2. Run a new evaluation.")
     if not system_present:
         return "—"
     if raw is _MISSING_METRIC:
@@ -312,9 +314,7 @@ def render_result_table(
             safe_value = escape(display_value)
             status = status_kinds.get(display_value.strip().lower())
             status_attribute = f' data-status="{status}"' if status else ""
-            cells.append(
-                f'<td data-label="{header}"{status_attribute}>{safe_value}</td>'
-            )
+            cells.append(f'<td data-label="{header}"{status_attribute}>{safe_value}</td>')
         body.append(f"<tr>{''.join(cells)}</tr>")
 
     headings = "".join(f'<th scope="col">{header}</th>' for header in safe_headers)
@@ -509,8 +509,8 @@ class RAGApplication:
         chunks = sum(int(row[2] or 0) for row in rows)
         return (
             '<div class="corpus-summary" role="status" aria-live="polite">'
-            f'<strong>{len(rows)} document(s)</strong>'
-            f'<span>{pages} page(s) · {chunks} chunk(s)</span>'
+            f"<strong>{len(rows)} document(s)</strong>"
+            f"<span>{pages} page(s) · {chunks} chunk(s)</span>"
             "</div>"
         )
 
@@ -551,8 +551,8 @@ class RAGApplication:
             return self.reset_document_selection(normalized)
         summary = (
             '<div class="selected-document">'
-            f'<strong>{escape(record.relative_path)}</strong>'
-            f'<span>{record.page_count} page(s) · {record.chunk_count} chunk(s)</span>'
+            f"<strong>{escape(record.relative_path)}</strong>"
+            f"<span>{record.page_count} page(s) · {record.chunk_count} chunk(s)</span>"
             "</div>"
         )
         return (
@@ -642,9 +642,7 @@ class RAGApplication:
                 primary, support = RAGApplication._metric_value_parts(raw_value)
                 neutral = " metric-value--neutral" if primary == "—" else ""
                 support_html = (
-                    f'<span class="metric-support">{escape(support)}</span>'
-                    if support
-                    else ""
+                    f'<span class="metric-support">{escape(support)}</span>' if support else ""
                 )
                 cells.append(
                     f'<td data-label="{escape(header)}">'
@@ -660,7 +658,7 @@ class RAGApplication:
             '<section class="result-view evaluation-metrics-view">'
             '<div class="result-scroll">'
             '<table class="result-table evaluation-matrix">'
-            '<caption>Metrics comparison</caption>'
+            "<caption>Metrics comparison</caption>"
             f"<thead><tr>{headings}</tr></thead>"
             f"<tbody>{''.join(body)}</tbody>"
             "</table></div></section>"
@@ -703,18 +701,15 @@ class RAGApplication:
                 '<section class="system-status" aria-label="System status" '
                 'role="status" aria-live="polite">'
                 '<div class="system-status__summary system-status__summary--unknown">'
-                '<strong>Status unknown</strong>'
-                '<span>Workspace checks have not run yet.</span></div>'
+                "<strong>Status unknown</strong>"
+                "<span>Workspace checks have not run yet.</span></div>"
                 '<h4 class="system-status__technical-title">Technical values</h4>'
                 f"{technical}</section>"
             )
-        problem_rows = [
-            row for row in normalized if len(row) >= 4 and str(row[2]) != "Ready"
-        ]
+        problem_rows = [row for row in normalized if len(row) >= 4 and str(row[2]) != "Ready"]
         if problem_rows:
             has_error = any(
-                str(row[2]).casefold() in {"error", "unavailable"}
-                for row in problem_rows
+                str(row[2]).casefold() in {"error", "unavailable"} for row in problem_rows
             )
             groups: dict[str, list[list[Any]]] = {}
             for row in problem_rows:
@@ -726,11 +721,11 @@ class RAGApplication:
                 f"<strong>{title}</strong>"
             ]
             for category, items in groups.items():
-                overview.append(f'<section><h4>{escape(category)}</h4><ul>')
+                overview.append(f"<section><h4>{escape(category)}</h4><ul>")
                 for item in items:
                     overview.append(
-                        f'<li><strong>{escape(str(item[1]))}</strong>'
-                        f'<span>{escape(str(item[3]))}</span></li>'
+                        f"<li><strong>{escape(str(item[1]))}</strong>"
+                        f"<span>{escape(str(item[3]))}</span></li>"
                     )
                 overview.append("</ul></section>")
             overview.append("</div>")
@@ -738,8 +733,8 @@ class RAGApplication:
         else:
             summary = (
                 '<div class="system-status__summary system-status__summary--ready">'
-                '<strong>System ready</strong>'
-                '<span>Local services, models, and indexed data are available.</span></div>'
+                "<strong>System ready</strong>"
+                "<span>Local services, models, and indexed data are available.</span></div>"
             )
         technical = render_result_table(
             ["Area", "Check", "Status", "Details"],
@@ -749,9 +744,11 @@ class RAGApplication:
             mobile_cards=True,
             table_class="system-status-view",
         )
-        role = "alert" if any(
-            str(row[2]).casefold() in {"error", "unavailable"} for row in problem_rows
-        ) else "status"
+        role = (
+            "alert"
+            if any(str(row[2]).casefold() in {"error", "unavailable"} for row in problem_rows)
+            else "status"
+        )
         return (
             '<section class="system-status" aria-label="System status" '
             f'role="{role}" aria-live="polite">{summary}'
@@ -905,9 +902,7 @@ class RAGApplication:
                 detail,
             )
         except Exception as exc:
-            status = render_status(
-                "error", "Reconciliation failed", f"{type(exc).__name__}: {exc}"
-            )
+            status = render_status("error", "Reconciliation failed", f"{type(exc).__name__}: {exc}")
         return self.document_rows(), status, []
 
     def refresh_documents(self):
@@ -969,9 +964,7 @@ class RAGApplication:
                     actions.append(f"install `{model}` with `ollama pull {model}`")
             if checks - {"Ollama connectivity", "Chat model", "Embedding model"}:
                 actions.append("review System status and rebuild the local index if needed")
-            summary = render_status(
-                "error", "Not ready for questions", "; ".join(actions) + "."
-            )
+            summary = render_status("error", "Not ready for questions", "; ".join(actions) + ".")
         return (
             summary,
             self.diagnostic_display_rows(rows),
@@ -985,9 +978,7 @@ class RAGApplication:
         if any(row[1] == "error" for row in rows):
             _, display_rows, message_update, send_update = self.preflight(ollama=ollama)
             return (
-                render_status(
-                    "error", "AI models not loaded", "Open System status, then retry."
-                ),
+                render_status("error", "AI models not loaded", "Open System status, then retry."),
                 display_rows,
                 message_update,
                 send_update,
@@ -999,9 +990,7 @@ class RAGApplication:
             ai_row = next(index for index, row in enumerate(rows) if row[0] == "AI models")
             rows[ai_row] = ["AI models", "error", f"{type(exc).__name__}: {exc}"]
             return (
-                render_status(
-                    "error", "AI models not loaded", "Open System status, then retry."
-                ),
+                render_status("error", "AI models not loaded", "Open System status, then retry."),
                 self.diagnostic_display_rows(rows),
                 gr.update(interactive=False),
                 gr.update(interactive=False),
@@ -1199,9 +1188,7 @@ class RAGApplication:
                 "Abstention",
                 "The indexed evidence is insufficient for a grounded answer.",
             )
-        return render_status(
-            "info", "Completed", "Review the evidence and citations below."
-        )
+        return render_status("info", "Completed", "Review the evidence and citations below.")
 
     @staticmethod
     def public_export(messages: list[Any], result: dict[str, Any]) -> dict[str, Any]:
@@ -1254,9 +1241,10 @@ class RAGApplication:
             "hybrid": "Hybrid",
             "agentic": "Agentic",
         }
-        systems_text = ", ".join(
-            system_labels.get(system, readable_label(system)) for system in systems
-        ) or "—"
+        systems_text = (
+            ", ".join(system_labels.get(system, readable_label(system)) for system in systems)
+            or "—"
+        )
         raw_timestamp = configuration.get("timestamp")
         try:
             timestamp = datetime.fromisoformat(str(raw_timestamp).replace("Z", "+00:00"))
@@ -1264,7 +1252,12 @@ class RAGApplication:
         except (TypeError, ValueError):
             timestamp = datetime.fromtimestamp((path / "summary.json").stat().st_mtime, UTC)
         case_label = f"{case_count} case" if case_count == 1 else f"{case_count} cases"
+        result_kind = evaluation_result_kind(summary)
+        result_label = (
+            "Standard benchmark" if result_kind == "standard_benchmark" else "Custom evaluation"
+        )
         items = (
+            ("Type", result_label),
             ("Run", run_id),
             ("Dataset", f"{dataset} · {split}"),
             ("Systems", systems_text),
@@ -1273,7 +1266,7 @@ class RAGApplication:
         )
         content = "".join(
             '<div class="evaluation-context__item">'
-            f'<span>{escape(str(label))}</span><strong>{escape(str(value))}</strong>'
+            f"<span>{escape(str(label))}</span><strong>{escape(str(value))}</strong>"
             "</div>"
             for label, value in items
         )
@@ -1311,9 +1304,7 @@ class RAGApplication:
                         ],
                     ]
                 )
-        available_names = {
-            name for values in system_metrics.values() for name in values
-        }
+        available_names = {name for values in system_metrics.values() for name in values}
         for name in sorted(available_names - set(DISPLAY_METRIC_NAMES) - HIDDEN_METRICS):
             metrics.append(
                 [
@@ -1350,9 +1341,17 @@ class RAGApplication:
                     ]
                 )
         run_id = summary.get("configuration", {}).get("run_id", path.name)
+        result_label = (
+            "Standard benchmark"
+            if evaluation_result_kind(summary) == "standard_benchmark"
+            else "Custom evaluation"
+        )
         context = RAGApplication.evaluation_context_html(path, summary, len(case_lines))
-        return metrics, failures, context, render_status(
-            "success", "Evaluation loaded", f"{run_id} · {path}"
+        return (
+            metrics,
+            failures,
+            context,
+            render_status("success", f"{result_label} loaded", f"{run_id} · {path}"),
         )
 
     @staticmethod
@@ -1363,15 +1362,11 @@ class RAGApplication:
             result_path = summary_path.parent
             try:
                 summary = json.loads(summary_path.read_text(encoding="utf-8"))
-                if summary.get("schema_version") != 2:
-                    continue
-                if summary.get("configuration", {}).get("dataset_name") != "multihop":
+                if not is_standard_benchmark_summary(summary):
                     continue
                 if not (result_path / "cases.jsonl").is_file():
                     continue
-                for line in (result_path / "cases.jsonl").read_text(
-                    encoding="utf-8"
-                ).splitlines():
+                for line in (result_path / "cases.jsonl").read_text(encoding="utf-8").splitlines():
                     if line.strip():
                         json.loads(line)
                 candidates.append((summary_path.stat().st_mtime, result_path))
@@ -1392,8 +1387,8 @@ class RAGApplication:
                 "",
                 render_status(
                     "info",
-                    "No compatible saved evaluation",
-                    "Run a new evaluation to create a schema version 2 result.",
+                    "No standard benchmark available",
+                    "Run the standard benchmark to create a complete schema version 2 result.",
                 ),
             )
         )
@@ -1428,9 +1423,7 @@ class RAGApplication:
             if not info.get("reachable"):
                 problems.append("Start Ollama with: ollama serve")
             else:
-                available = {
-                    normalize_model_name(name) for name in info.get("models", [])
-                }
+                available = {normalize_model_name(name) for name in info.get("models", [])}
                 missing = [name for name in required if name not in available]
                 if missing:
                     problems.append(
@@ -1452,19 +1445,33 @@ class RAGApplication:
 
     def run_evaluation_ui(self, split: str, systems: list[str] | str | None):
         if not systems:
-            return [], [], "", render_status(
-                "warning", "No systems selected", "Select at least one evaluation system."
+            return (
+                [],
+                [],
+                "",
+                render_status(
+                    "warning", "No systems selected", "Select at least one evaluation system."
+                ),
             )
         requested = [systems] if isinstance(systems, str) else list(systems)
         if not requested:
-            return [], [], "", render_status(
-                "warning", "No systems selected", "Select at least one evaluation system."
+            return (
+                [],
+                [],
+                "",
+                render_status(
+                    "warning", "No systems selected", "Select at least one evaluation system."
+                ),
             )
         dataset = PROJECT_ROOT / "evals" / "multihop" / "cases.jsonl"
-        selected = requested
+        selected = cast(list[SystemName], requested)
+        evaluated_split = cast(Split, split)
         try:
             output = run_evaluation(
-                dataset, selected, split, dataset_name="multihop"  # type: ignore[arg-type]
+                dataset,
+                selected,
+                evaluated_split,
+                dataset_name="multihop",
             )
         except (RuntimeError, ValueError, OSError) as exc:
             return [], [], "", render_status("error", "Evaluation could not run", str(exc))
@@ -1584,10 +1591,7 @@ class RAGApplication:
                 return "Document index"
             return "Other"
 
-        return [
-            [category(row[0]), row[0], row[1], row[2]]
-            for row in rows
-        ]
+        return [[category(row[0]), row[0], row[1], row[2]] for row in rows]
 
     def preflight_ui(self):
         summary, rows, message_update, send_update = self.preflight()
@@ -1627,9 +1631,9 @@ class RAGApplication:
                 gr.update(
                     value=(
                         '<div class="selected-document">'
-                        f'<strong>{escape(record.relative_path)}</strong>'
-                        f'<span>{record.page_count} page(s) · '
-                        f'{record.chunk_count} chunk(s)</span></div>'
+                        f"<strong>{escape(record.relative_path)}</strong>"
+                        f"<span>{record.page_count} page(s) · "
+                        f"{record.chunk_count} chunk(s)</span></div>"
                     ),
                     visible=True,
                 ),
@@ -1662,22 +1666,16 @@ class RAGApplication:
         _documents, status, _errors, _readiness = self.index_selected(files, progress)
         return gr.update(value=status, visible=True)
 
-    def reindex_changed_action_ui(
-        self, progress: gr.Progress = gr.Progress(track_tqdm=False)
-    ):
+    def reindex_changed_action_ui(self, progress: gr.Progress = gr.Progress(track_tqdm=False)):
         _documents, status, _errors = self.reindex_changed(progress)
         return gr.update(value=status, visible=True)
 
-    def rebuild_index_action_ui(
-        self, progress: gr.Progress = gr.Progress(track_tqdm=False)
-    ):
+    def rebuild_index_action_ui(self, progress: gr.Progress = gr.Progress(track_tqdm=False)):
         _documents, status, _errors = self.rebuild_index(progress)
         return gr.update(value=status, visible=True)
 
     def delete_selected_action_ui(self, document_id: str | None):
-        _documents, status, _errors, text, confirmation = self.delete_selected(
-            document_id
-        )
+        _documents, status, _errors, text, confirmation = self.delete_selected(document_id)
         return gr.update(value=status, visible=True), text, confirmation
 
     def index_selected_ui(
@@ -1747,9 +1745,7 @@ class RAGApplication:
         )
 
     def export_chat_ui(self, messages: list[Any], result: dict[str, Any]):
-        return gr.update(
-            value=self.export_chat(messages, result), visible=True, interactive=True
-        )
+        return gr.update(value=self.export_chat(messages, result), visible=True, interactive=True)
 
     def load_latest_evaluation_ui(
         self,
@@ -1762,21 +1758,15 @@ class RAGApplication:
             metrics, failures, context, status, readiness=readiness
         )
 
-    def initialize_evaluation_ui(
-        self, split: str, systems: list[str] | str | None
-    ):
+    def initialize_evaluation_ui(self, split: str, systems: list[str] | str | None):
         return self.load_latest_evaluation_ui(split, systems)
 
-    def evaluation_options_ui(
-        self, split: str, systems: list[str] | str | None
-    ):
+    def evaluation_options_ui(self, split: str, systems: list[str] | str | None):
         readiness = self.evaluation_readiness(split, systems)
         has_result = readiness.latest_result is not None
         if readiness.state == "blocked":
             status = gr.update(
-                value=render_status(
-                    "warning", "Benchmark unavailable", readiness.problems[0]
-                ),
+                value=render_status("warning", "Benchmark unavailable", readiness.problems[0]),
                 visible=True,
             )
         else:
@@ -1844,9 +1834,7 @@ class RAGApplication:
         return summary, self.system_status_html(rows), message_update, send_update
 
     def preflight_shell_ui(self):
-        summary, system_status, message_update, send_update = (
-            self.preflight_presentation_ui()
-        )
+        summary, system_status, message_update, send_update = self.preflight_presentation_ui()
         return (
             summary,
             system_status,
@@ -1856,9 +1844,7 @@ class RAGApplication:
         )
 
     def load_ai_models_shell_ui(self):
-        summary, system_status, message_update, send_update = (
-            self.load_ai_models_presentation_ui()
-        )
+        summary, system_status, message_update, send_update = self.load_ai_models_presentation_ui()
         return (
             summary,
             system_status,
@@ -1972,9 +1958,7 @@ class RAGApplication:
                                 elem_classes="question-composer",
                             )
                             with gr.Row(elem_classes=["action-row", "chat-actions"]):
-                                send = gr.Button(
-                                    "Ask", variant="primary", interactive=False
-                                )
+                                send = gr.Button("Ask", variant="primary", interactive=False)
                                 clear = gr.Button("Clear")
                                 export = gr.Button("Export")
                                 export_file = gr.DownloadButton(
@@ -2098,9 +2082,7 @@ class RAGApplication:
                                 )
                                 with gr.Row(elem_classes="action-row"):
                                     cancel_delete = gr.Button("Cancel")
-                                    confirm_delete = gr.Button(
-                                        "Confirm deletion", variant="stop"
-                                    )
+                                    confirm_delete = gr.Button("Confirm deletion", variant="stop")
                             with gr.Accordion(
                                 "Maintenance", open=False, elem_id="maintenance-panel"
                             ):
@@ -2247,25 +2229,19 @@ class RAGApplication:
                 files,
                 ingestion_status,
             )
-            index_event.then(
-                self.refresh_workspace_state, workspace_inputs, workspace_outputs
-            )
+            index_event.then(self.refresh_workspace_state, workspace_inputs, workspace_outputs)
             reindex_event = reindex_button.click(
                 self.reindex_changed_action_ui,
                 None,
                 ingestion_status,
             )
-            reindex_event.then(
-                self.refresh_workspace_state, workspace_inputs, workspace_outputs
-            )
+            reindex_event.then(self.refresh_workspace_state, workspace_inputs, workspace_outputs)
             rebuild_event = rebuild_button.click(
                 self.rebuild_index_action_ui,
                 None,
                 ingestion_status,
             )
-            rebuild_event.then(
-                self.refresh_workspace_state, workspace_inputs, workspace_outputs
-            )
+            rebuild_event.then(self.refresh_workspace_state, workspace_inputs, workspace_outputs)
 
             documents.select(
                 self.select_document,
@@ -2297,9 +2273,7 @@ class RAGApplication:
                     delete_confirmation,
                 ],
             )
-            delete_event.then(
-                self.refresh_workspace_state, workspace_inputs, workspace_outputs
-            )
+            delete_event.then(self.refresh_workspace_state, workspace_inputs, workspace_outputs)
 
             for trigger in (send.click, message.submit):
                 trigger(
@@ -2375,9 +2349,7 @@ class RAGApplication:
                     show_progress="hidden",
                 )
             preflight_outputs = [readiness, system_status, message, send, load_ai]
-            load_models_event = load_ai.click(
-                self.load_ai_models_shell_ui, None, preflight_outputs
-            )
+            load_models_event = load_ai.click(self.load_ai_models_shell_ui, None, preflight_outputs)
             load_models_event.then(
                 self.refresh_workspace_state, workspace_inputs, workspace_outputs
             )

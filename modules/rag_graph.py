@@ -91,9 +91,7 @@ def deterministic_route(query: str) -> RouteDecision | None:
         r"\b(?:documents?|files?|articles?|reports?)\b.*\band\b.*\b(?:documents?|files?|articles?|reports?)\b",
     )
     if any(re.search(pattern, normalized) for pattern in complex_patterns):
-        return RouteDecision(
-            route=Route.COMPLEX_SEARCH, strategy=RetrievalStrategy.HYBRID
-        )
+        return RouteDecision(route=Route.COMPLEX_SEARCH, strategy=RetrievalStrategy.HYBRID)
 
     direct_question = re.match(
         r"^(?:what\s+(?:is|are|was|were|does|did)|who|when|where|which|how\s+(?:many|much|long))\b",
@@ -102,9 +100,7 @@ def deterministic_route(query: str) -> RouteDecision | None:
     if direct_question and not re.search(
         r"\b(?:compare|contrast|versus|vs\.?|and|or)\b", normalized
     ):
-        return RouteDecision(
-            route=Route.SIMPLE_SEARCH, strategy=RetrievalStrategy.SEMANTIC
-        )
+        return RouteDecision(route=Route.SIMPLE_SEARCH, strategy=RetrievalStrategy.SEMANTIC)
     return None
 
 
@@ -377,9 +373,7 @@ Request: {state["rewritten_query"]}"""
         started = perf_counter()
         hits = state.get("hits", [])
         queries = (
-            state.get("required_queries")
-            or state.get("queries")
-            or [state["rewritten_query"]]
+            state.get("required_queries") or state.get("queries") or [state["rewritten_query"]]
         )
         if not hits:
             return {

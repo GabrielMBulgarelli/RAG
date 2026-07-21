@@ -1,211 +1,130 @@
-# RAG Application
+# Local Document RAG
 
-A simple Retrieval-Augmented Generation application with advanced capabilities for document-based question answering.
+A local-first Retrieval-Augmented Generation application for asking questions about PDF and TXT documents with inspectable evidence. It combines hybrid retrieval, bounded multi-step reasoning, citation validation, and a built-in evaluation workspace while keeping documents and model inference on the user's machine.
 
-## Features
+![Local Document RAG workspace](docs/assets/workspace-no-models.jpg)
 
-- Document processing and retrieval
-- LLM-powered question answering
-- Support for multiple document formats (PDF, TXT)
-- Vector database storage with ChromaDB
-- Conversation memory and context awareness
-- Web interface with Gradio
-- Document management and system monitoring
+## Highlights
 
-## Prerequisites
+- **Local document workflow** — upload, index, inspect, update, and delete PDF or TXT sources from the Gradio interface.
+- **Hybrid retrieval** — combines semantic search and BM25 with Reciprocal Rank Fusion, deterministic diversity selection, and stable chunk provenance.
+- **Bounded RAG orchestration** — routes simple questions directly, decomposes genuinely multi-hop questions, searches independent subqueries concurrently, and permits at most one targeted retry.
+- **Evidence-aware answers** — grades support per subquery, filters irrelevant context, validates citations, and returns a limited answer or abstains when evidence is insufficient.
+- **Inspectable results** — exposes cited excerpts, source pages, retrieval scores, public traces, and a downloadable conversation export without revealing private reasoning.
+- **Schema v2 evaluation** — compares Dense, BM25, Hybrid, and Agentic systems on MultiHopRAG using retrieval, grounding, answer-quality, and workflow-cost metrics.
+- **Graceful local startup** — the interface can open without Ollama; required models are initialized manually when the user is ready.
 
-- [UV](https://docs.astral.sh/uv/)
-- [Ollama](https://ollama.com/) installed and running
-- Required models:
-  - qwen3.5:9b
-  - nomic-embed-text
+## How it works
 
-## Installation
-
-1. Clone the repository:
-```bash
-git clone https://github.com/GabrielMBulgarelli/RAG
-cd RAG
+```mermaid
+flowchart LR
+    A[PDF or TXT] --> B[Parse and chunk]
+    B --> C[Chroma embeddings]
+    B --> D[BM25 index]
+    Q[Question] --> E[Deterministic routing]
+    E --> F[Hybrid retrieval]
+    C --> F
+    D --> F
+    F --> G[Evidence grading]
+    G --> H[Answer generation]
+    H --> I[Citation validation]
+    I --> J[Answer and cited sources]
 ```
 
-2. Install the managed Python interpreter and project environment:
+Documents are assigned stable identifiers and stored in a local manifest. At query time, semantic and sparse candidates are fused and selected using score, subquery coverage, document diversity, and redundancy penalties. The application then checks whether every required part of the question is supported before generating and validating the final answer.
+
+## Requirements
+
+- Python 3.12
+- [uv](https://docs.astral.sh/uv/)
+- [Ollama](https://ollama.com/)
+- `qwen3.5:9b`
+- `nomic-embed-text`
+
+## Quickstart
+
 ```bash
+git clone https://github.com/GabrielMBulgarelli/RAG.git
+cd RAG
+
 uv python install 3.12
 uv sync
-```
 
-3. Install and start Ollama:
-- Download from [ollama.com](https://ollama.com)
-- Install and start the application
-- Pull required models:
-```bash
 ollama pull qwen3.5:9b
 ollama pull nomic-embed-text
+ollama serve
 ```
 
-## Usage
+Start the interface:
 
-1. Add your documents:
-- Place PDF or TXT files in the `sources/` directory
-- The system will automatically process them
-
-2. Start the application:
 ```bash
 uv run python -m modules.run
 ```
 
-3. Access the web interface:
-- Open your browser and go to [http://localhost:7860](http://localhost:7860)
-- Use the chat interface to ask questions about your documents
+Open [http://127.0.0.1:7860](http://127.0.0.1:7860), add documents in **Workspace**, select **Index files**, and load the AI models when prompted. The UI remains available in limited-readiness mode if Ollama is not running.
 
-## Project Structure
+## Evaluation
 
+Run the standard schema v2 benchmark on the MultiHopRAG development split:
+
+```bash
+uv run python -m modules.evaluation \
+  --systems all \
+  --split development \
+  --dataset multihop
 ```
-RAG/
-├── pyproject.toml         # Project metadata, dependencies, and quality configuration
-├── uv.lock                # Reproducible dependency lock
-├── sources/              # Document storage
-├── data/chroma/          # Vector database
-├── logs/                # Application logs
-└── modules/
-    ├── app.py           # Main application
-    ├── config.py        # Configuration
-    ├── error_handler.py # Error handling
-    ├── rag_graph.py    # RAG implementation
-    ├── run.py          # Application runner
-    ├── setup.py        # Setup script
-    ├── tools.py        # Utility tools
-    └── vector_db.py    # Vector DB management
+
+The **Evaluation** view automatically loads the latest compatible standard result. Partial system comparisons remain identifiable as custom evaluations and cannot replace the standard benchmark.
+
+## Quality checks
+
+```bash
+./scripts/verify.sh
 ```
+
+The verification gate runs Ruff, Pyright, and the complete offline test suite. Tests do not require Ollama unless explicitly marked for live-model integration.
 
 ## Configuration
 
-Copy `.env.example` to `.env` and customize the `RAG_`-prefixed settings.
-Unknown or invalid settings are rejected before Ollama or Chroma clients are
-constructed.
+Settings use the `RAG_` prefix and can be placed in `.env`. Common options include:
 
-## Features in Detail
-
-### Document Processing
-- Automatic text extraction from PDFs
-- Smart text chunking for better retrieval
-- Metadata extraction and storage
-
-### RAG System
-- Advanced retrieval using vector similarity
-- Context-aware response generation
-- Source tracking and citation
-
-### User Interface
-- Interactive chat interface
-- System status monitoring
-- Document management
-- Conversation history
-
-## Troubleshooting
-
-1. If Ollama is not running:
-```bash
-ollama serve
+```dotenv
+RAG_OLLAMA_BASE_URL=http://localhost:11434
+RAG_LLM_MODEL=qwen3.5:9b
+RAG_EMBEDDING_MODEL=nomic-embed-text
+RAG_GRADIO_HOST=127.0.0.1
+RAG_GRADIO_PORT=7860
 ```
 
-2. If dependencies need to be refreshed:
-```bash
-uv sync
+Configuration is validated before Ollama or Chroma clients are constructed. Retrieval budgets, chunking, retry limits, paths, and UI settings are also configurable in [`modules/config.py`](modules/config.py).
+
+## Project structure
+
+```text
+modules/
+├── app.py          # Gradio workspace, callbacks, and presentation adapters
+├── citations.py    # Deterministic answer and citation validation
+├── evaluation.py   # Schema v2 benchmark runner and metrics
+├── rag_graph.py    # Bounded retrieval and answer workflow
+├── retrieval.py    # Semantic, BM25, fusion, and final selection
+├── vector_db.py    # Ingestion, manifest, and Chroma lifecycle
+└── run.py          # Package-safe local entrypoint
+
+scripts/
+├── prepare_multihop_eval.py
+└── verify.sh
+
+tests/              # Offline unit and integration coverage
 ```
 
-3. To reset the vector database:
-```bash
-rm -rf chroma_db/*
-```
-## License
+## What this project demonstrates
 
-This project is adapted from the [AI Workshop 2025 GenAI Session](https://github.com/Antonio-Tresol/ai_workshop_2025_gen_ai_session). Please refer to the original project's license terms when using this code.
-
-## Planned acceptance checklist
-
-The following items reflect the pending acceptance criteria still to be implemented.
-
-### Ingestion
-- [ ] TXT supported
-- [ ] Stable document and chunk IDs
-- [ ] Unchanged reindex creates no duplicates
-- [ ] Modified files replace stale chunks
-- [ ] Deleted files remove chunks
-- [ ] Duplicate filenames remain distinct by path
-- [ ] Failed ingestion preserves prior usable version
-- [ ] Page/filename metadata present
-- [ ] Atomic manifest writes
-- [ ] Manifest/Chroma reconciliation
-
-### Agentic workflow
-- [ ] Follow-up rewriting only when needed
-- [ ] Catalog, clarification, and out-of-scope avoid retrieval
-- [ ] Simple search uses a direct bounded path
-- [ ] Complex search may create a bounded plan
-- [ ] Strategy selection changes retrieval
-- [ ] Evidence assessment changes execution
-- [ ] Retry only when justified
-- [ ] Default retry never exceeds one
-- [ ] Every path terminates
-- [ ] Supported, limited, unsupported, clarification, catalog, and out-of-scope outcomes
-
-### Retrieval and citations
-- [ ] Semantic, BM25, and hybrid retrieval
-- [ ] Reciprocal rank fusion
-- [ ] Scores retained
-- [ ] ID-based deduplication
-- [ ] Filename filters
-- [ ] Subquery provenance
-- [ ] Every citation maps to a retrieved chunk
-- [ ] Correct filename/page
-- [ ] Unknown citation IDs rejected
-- [ ] Unsupported answers do not fabricate citations
-- [ ] No second model call invents sources/confidence
-
-### Trace
-- [ ] Structured public events
-- [ ] Counts, decisions, and durations where practical
-- [ ] No private chain-of-thought
-
-### Evaluation
-- [ ] Development and held-out splits
-- [ ] Dense, BM25, hybrid, and agentic systems
-- [ ] Recall@5, MRR@5, nDCG@5
-- [ ] Route and strategy accuracy
-- [ ] Retry precision/recall
-- [ ] Citation precision/coverage
-- [ ] Abstention/conflict accuracy
-- [ ] Termination rate
-- [ ] Mean and p95 latency
-- [ ] LLM calls per query
-- [ ] Stored experiment configuration
-- [ ] Failure taxonomy
-
-### UI
-- [ ] Gradio retained
-- [ ] Upload/index/reindex/delete/rebuild
-- [ ] Progress, status, page/chunk counts, errors
-- [ ] Clear/export chat
-- [ ] Citations and excerpts
-- [ ] Route, strategy, subqueries, retry, evidence, trace
-- [ ] Evaluation comparison and failed cases
-- [ ] Diagnostics
-- [ ] No uncalibrated confidence percentage
-- [ ] No hidden reasoning
-
-### Initial quality gates
-- [ ] Route accuracy ≥ 0.90
-- [ ] Workflow termination = 1.00
-- [ ] Citation integrity = 1.00
-- [ ] Retrieval Recall@5 ≥ 0.85
-- [ ] Unanswerable abstention accuracy ≥ 0.85
-- [ ] No path exceeds configured retry/subquery limits
-- [ ] Ordinary CI does not require Ollama
+- Practical RAG design beyond a basic vector-search demo.
+- Deterministic safeguards around probabilistic model behavior.
+- Retrieval and answer evaluation with explicit metric applicability.
+- Local model integration with graceful failure handling.
+- Typed Python, automated quality gates, and an accessible task-oriented UI.
 
 ## Acknowledgments
 
-- Built with [LangChain](https://python.langchain.com/)
-- Uses [Ollama](https://ollama.com/) for local LLM
-- Interface powered by [Gradio](https://gradio.app/)
-- Special thanks to Antonio-Tresol for providing the foundation for this implementation
+The project began from the [AI Workshop 2025 GenAI Session](https://github.com/Antonio-Tresol/ai_workshop_2025_gen_ai_session) and has since been expanded with document lifecycle management, hybrid retrieval, bounded orchestration, citation validation, evaluation, and a redesigned local interface.

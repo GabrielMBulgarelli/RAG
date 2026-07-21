@@ -96,7 +96,7 @@ def test_validation_rejects_empty_and_citations_only_answers() -> None:
 
 def test_grade_requires_every_subquery_for_sufficient_evidence() -> None:
     graph = RAGGraph.__new__(RAGGraph)
-    graph._structured = lambda _schema, _prompt: EvidenceGrade(
+    cast(Any, graph)._structured = lambda _schema, _prompt: EvidenceGrade(
         status=EvidenceStatus.SUFFICIENT,
         supported_subqueries=["policy"],
         unsupported_subqueries=["exception"],
@@ -121,7 +121,7 @@ def test_grade_requires_every_subquery_for_sufficient_evidence() -> None:
 
 def test_grade_keeps_conflicting_full_coverage_limited() -> None:
     graph = RAGGraph.__new__(RAGGraph)
-    graph._structured = lambda _schema, _prompt: EvidenceGrade(
+    cast(Any, graph)._structured = lambda _schema, _prompt: EvidenceGrade(
         status=EvidenceStatus.SUFFICIENT,
         supported_subqueries=["deadline"],
         relevant_labels=["C1", "C2"],
@@ -183,19 +183,21 @@ def answer_state(answer: str, *, status: EvidenceStatus = EvidenceStatus.SUFFICI
 
 def test_generator_receives_only_relevant_evidence_with_stable_labels() -> None:
     graph = RAGGraph.__new__(RAGGraph)
-    graph.llm = AnswerLLM(["The answer is 42 [C2]."])
+    llm = AnswerLLM(["The answer is 42 [C2]."])
+    cast(Any, graph).llm = llm
 
     update = graph._answer(cast(Any, answer_state("")))
 
-    assert "[C2] guide.txt" in graph.llm.prompts[0]
-    assert "[C1] guide.txt" not in graph.llm.prompts[0]
+    assert "[C2] guide.txt" in llm.prompts[0]
+    assert "[C1] guide.txt" not in llm.prompts[0]
     assert [item.label for item in update["sources"]] == ["C2"]
-    assert "Begin with a direct, concise answer" in graph.llm.prompts[0]
+    assert "Begin with a direct, concise answer" in llm.prompts[0]
 
 
 def test_invalid_answer_is_repaired_once_and_exposes_validation() -> None:
     graph = RAGGraph.__new__(RAGGraph)
-    graph.llm = AnswerLLM(["The answer is 42 [C2]."])
+    llm = AnswerLLM(["The answer is 42 [C2]."])
+    cast(Any, graph).llm = llm
 
     result = graph._validate(cast(Any, answer_state("The answer is 42.")))["result"]
 
@@ -205,14 +207,15 @@ def test_invalid_answer_is_repaired_once_and_exposes_validation() -> None:
     assert result.validation.repair_attempted
     assert result.validation.repair_succeeded
     assert result.validation.initial_violations == [models.AnswerViolation.UNCITED_CLAIM]
-    assert len(graph.llm.prompts) == 1
+    assert len(llm.prompts) == 1
     assert result.trace[-2].stage == "validate"
     assert result.trace[-2].decision == "repaired"
 
 
 def test_failed_repair_returns_safe_fallback_without_sources() -> None:
     graph = RAGGraph.__new__(RAGGraph)
-    graph.llm = AnswerLLM(["Still unsupported."])
+    llm = AnswerLLM(["Still unsupported."])
+    cast(Any, graph).llm = llm
 
     result = graph._validate(cast(Any, answer_state("The answer is 42.")))["result"]
 
@@ -222,5 +225,5 @@ def test_failed_repair_returns_safe_fallback_without_sources() -> None:
     assert result.validation.repair_attempted
     assert not result.validation.repair_succeeded
     assert result.validation.repair_violations == [models.AnswerViolation.UNCITED_CLAIM]
-    assert len(graph.llm.prompts) == 1
+    assert len(llm.prompts) == 1
     assert result.trace[-1].termination == "validation_failed"

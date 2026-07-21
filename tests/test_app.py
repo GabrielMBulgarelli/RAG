@@ -309,7 +309,7 @@ def test_export_is_public_and_trace_and_scores_preserve_observability(tmp_path: 
     assert exported["validation"] == result["validation"]
     assert "prompt" not in json.dumps(exported)
     assert app.trace_rows(result) == [
-        ["Retrieve", "—", 20, 12, 6, 0, "—", "12 ms"]
+        ["Retrieve", "—", 20, 12, 6, 0, 0, "—", "12 ms"]
     ]
     assert app.score_rows(result)[0][3:6] == ["0.8000", "4.0000", "0.0300"]
     assert app.score_rows(result)[0][6] == "0.7700"
@@ -324,6 +324,20 @@ def test_answer_status_distinguishes_supported_abstention_and_errors(tmp_path: P
     assert "Supported" in app.answer_status({"evidence_status": "sufficient"})
     assert "Abstention" in app.answer_status({"evidence_status": "insufficient", "trace": []})
     assert "Unavailable" in app.answer_status({}, error="connection refused")
+
+
+def test_clear_ui_rotates_the_session_checkpoint(tmp_path: Path) -> None:
+    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+    cleared: list[str] = []
+    app.rag_graph = cast(
+        Any, SimpleNamespace(clear=lambda session_id: cleared.append(session_id))
+    )
+
+    result = app.clear_ui("session-before-clear")
+
+    assert cleared == ["session-before-clear"]
+    assert result[-1] != "session-before-clear"
+    assert result[-1]
 
 
 def test_reconciliation_action_refreshes_document_controls(tmp_path: Path) -> None:

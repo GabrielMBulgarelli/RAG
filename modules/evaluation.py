@@ -30,7 +30,10 @@ from modules.vector_db import VectorDBManager
 Split = Literal["development", "test"]
 SystemName = Literal["dense", "bm25", "hybrid", "agentic"]
 MetricStatus = Literal["measured", "not_applicable", "no_eligible_cases"]
+EvaluationResultKind = Literal["standard_benchmark", "custom_evaluation"]
 SYSTEMS: tuple[SystemName, ...] = ("dense", "bm25", "hybrid", "agentic")
+STANDARD_BENCHMARK_DATASET = "multihop"
+STANDARD_BENCHMARK_SPLIT: Split = "development"
 FAILURE_ORDER = (
     "route_error",
     "strategy_error",
@@ -46,6 +49,29 @@ FAILURE_ORDER = (
 )
 
 MULTIHOP_ROOT = PROJECT_ROOT / "evals" / "multihop"
+
+
+def is_standard_benchmark_summary(summary: dict[str, Any]) -> bool:
+    """Return whether a schema-v2 result satisfies the canonical benchmark contract."""
+    if summary.get("schema_version") != 2:
+        return False
+    configuration = summary.get("configuration")
+    if not isinstance(configuration, dict):
+        return False
+    systems = configuration.get("systems")
+    if not isinstance(systems, list):
+        return False
+    return (
+        configuration.get("dataset_name") == STANDARD_BENCHMARK_DATASET
+        and configuration.get("evaluated_split") == STANDARD_BENCHMARK_SPLIT
+        and len(systems) == len(SYSTEMS)
+        and set(systems) == set(SYSTEMS)
+    )
+
+
+def evaluation_result_kind(summary: dict[str, Any]) -> EvaluationResultKind:
+    """Classify compatible results without presenting partial runs as benchmarks."""
+    return "standard_benchmark" if is_standard_benchmark_summary(summary) else "custom_evaluation"
 
 
 class BenchmarkEvidence(BaseModel):
@@ -278,9 +304,7 @@ def aggregate_metrics(
     conflict_positive = [(case, result) for case, result in agentic if case.expected_conflict]
     conflict_negative = [(case, result) for case, result in agentic if not case.expected_conflict]
     coverage_pairs = [
-        (case, result)
-        for case, result in agentic
-        if case.answerable and case.relevant_chunk_ids
+        (case, result) for case, result in agentic if case.answerable and case.relevant_chunk_ids
     ]
     emitted_citations = [
         (chunk_id, set(result.retrieved_chunk_ids))
@@ -622,19 +646,33 @@ def write_experiment(
         for result in results:
             handle.write(result.model_dump_json() + "\n")
     serialized_metrics = {
-        system: {
-            name: observation.model_dump(mode="json")
-            for name, observation in values.items()
-        }
+        system: {name: observation.model_dump(mode="json") for name, observation in values.items()}
         for system, values in metrics.items()
     }
-    summary = {
+    configuration = experiment.model_dump(mode="json")
+    summary_core = {
         "schema_version": 2,
-        "configuration": experiment.model_dump(mode="json"),
+        "configuration": configuration,
+    }
+    summary = {
+        **summary_core,
+        "result_kind": evaluation_result_kind(summary_core),
         "metrics": serialized_metrics,
     }
     (output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
-    lines = [f"# Evaluation {experiment.run_id}", "", f"Split: `{experiment.evaluated_split}`", ""]
+    result_label = (
+        "Standard benchmark"
+        if summary["result_kind"] == "standard_benchmark"
+        else "Custom evaluation"
+    )
+    lines = [
+        f"# Evaluation {experiment.run_id}",
+        "",
+        f"Result: **{result_label}**",
+        "",
+        f"Split: `{experiment.evaluated_split}`",
+        "",
+    ]
     for system, values in metrics.items():
         lines.extend([f"## {system}", ""])
         for name, observation in values.items():
@@ -872,7 +910,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--systems", type=_parse_systems, default=list(SYSTEMS))
     parser.add_argument("--split", choices=("development", "test"), default="development")
-    parser.add_argument("--dataset", default="regression")
+    parser.add_argument("--dataset", default="multihop")
     args = parser.parse_args()
     try:
         dataset_name = str(args.dataset)

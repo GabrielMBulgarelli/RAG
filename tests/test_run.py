@@ -77,9 +77,7 @@ def test_main_runs_injected_application_after_prerequisites_pass(tmp_path: Path)
     assert calls == ["launched"]
 
 
-def test_main_launches_ui_when_ollama_is_unavailable(
-    tmp_path: Path, monkeypatch, capsys
-) -> None:
+def test_main_launches_ui_when_ollama_is_unavailable(tmp_path: Path, monkeypatch, capsys) -> None:
     settings = Settings(
         sources_dir=tmp_path / "sources",
         _env_file=None,  # pyright: ignore[reportCallIssue]

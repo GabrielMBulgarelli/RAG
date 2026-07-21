@@ -69,9 +69,7 @@ def select_candidates(
             item.chunk_id,
         ),
     )
-    relevance = {
-        item.chunk_id: 1.0 - (rank / len(ordered)) for rank, item in enumerate(ordered)
-    }
+    relevance = {item.chunk_id: 1.0 - (rank / len(ordered)) for rank, item in enumerate(ordered)}
     all_queries = {query for item in ordered for query in item.subqueries}
     selected: list[RetrievalHit] = []
     remaining = list(ordered)

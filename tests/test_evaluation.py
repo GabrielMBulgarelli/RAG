@@ -1,5 +1,6 @@
 import io
 import json
+import sys
 import urllib.error
 from pathlib import Path
 from typing import cast
@@ -76,7 +77,11 @@ def assert_observation(
     sample_count: int,
 ) -> None:
     observation = metrics[name]
-    assert observation.value == pytest.approx(value) if value is not None else observation.value is None
+    assert (
+        observation.value == pytest.approx(value)
+        if value is not None
+        else observation.value is None
+    )
     assert observation.status == status
     assert observation.sample_count == sample_count
 
@@ -118,12 +123,8 @@ def test_agent_accuracy_denominators_exclude_non_agentic_results() -> None:
         result(case_id="a", system="dense", route=None, strategy=None),
     ]
     metrics = aggregate_metrics(cases, results)
-    assert_observation(
-        metrics, "route_accuracy", value=0.5, status="measured", sample_count=2
-    )
-    assert_observation(
-        metrics, "strategy_accuracy", value=1.0, status="measured", sample_count=2
-    )
+    assert_observation(metrics, "route_accuracy", value=0.5, status="measured", sample_count=2)
+    assert_observation(metrics, "strategy_accuracy", value=1.0, status="measured", sample_count=2)
 
 
 def test_retry_precision_and_recall_edge_cases() -> None:
@@ -141,20 +142,14 @@ def test_retry_precision_and_recall_edge_cases() -> None:
         cases,
         [result(case_id="p", retry_count=1), result(case_id="n", retry_count=1)],
     )
-    assert_observation(
-        metrics, "retry_precision", value=0.5, status="measured", sample_count=2
-    )
-    assert_observation(
-        metrics, "retry_recall", value=1.0, status="measured", sample_count=1
-    )
+    assert_observation(metrics, "retry_precision", value=0.5, status="measured", sample_count=2)
+    assert_observation(metrics, "retry_recall", value=1.0, status="measured", sample_count=1)
 
     missed = aggregate_metrics([case(expected_retry=True)], [result()])
     assert_observation(
         missed, "retry_precision", value=None, status="no_eligible_cases", sample_count=0
     )
-    assert_observation(
-        missed, "retry_recall", value=0.0, status="measured", sample_count=1
-    )
+    assert_observation(missed, "retry_recall", value=0.0, status="measured", sample_count=1)
 
 
 def test_citation_metrics() -> None:
@@ -181,9 +176,7 @@ def test_abstention_conflict_and_termination_metrics() -> None:
             ),
         ],
     )
-    assert_observation(
-        metrics, "abstention_accuracy", value=1.0, status="measured", sample_count=2
-    )
+    assert_observation(metrics, "abstention_accuracy", value=1.0, status="measured", sample_count=2)
     assert_observation(
         metrics,
         "unanswerable_abstention_recall",
@@ -198,9 +191,7 @@ def test_abstention_conflict_and_termination_metrics() -> None:
         status="measured",
         sample_count=1,
     )
-    assert_observation(
-        metrics, "conflict_recall", value=1.0, status="measured", sample_count=1
-    )
+    assert_observation(metrics, "conflict_recall", value=1.0, status="measured", sample_count=1)
     assert_observation(
         metrics,
         "conflict_false_positive_rate",
@@ -208,9 +199,7 @@ def test_abstention_conflict_and_termination_metrics() -> None:
         status="measured",
         sample_count=1,
     )
-    assert_observation(
-        metrics, "termination_rate", value=0.5, status="measured", sample_count=2
-    )
+    assert_observation(metrics, "termination_rate", value=0.5, status="measured", sample_count=2)
     assert "conflict_accuracy" not in metrics
 
 
@@ -377,6 +366,108 @@ def test_experiment_configuration_serializes(tmp_path: Path) -> None:
     assert "Cases with expected chunk evidence." in markdown
 
 
+@pytest.mark.parametrize(
+    ("dataset_name", "split", "systems", "expected"),
+    [
+        ("multihop", "development", ["dense", "bm25", "hybrid", "agentic"], True),
+        ("multihop", "development", ["agentic", "hybrid", "bm25", "dense"], True),
+        ("multihop", "development", ["bm25"], False),
+        ("multihop", "test", ["dense", "bm25", "hybrid", "agentic"], False),
+        ("regression", "development", ["dense", "bm25", "hybrid", "agentic"], False),
+    ],
+)
+def test_standard_benchmark_contract(
+    dataset_name: str,
+    split: str,
+    systems: list[str],
+    expected: bool,
+) -> None:
+    summary = {
+        "schema_version": 2,
+        "configuration": {
+            "dataset_name": dataset_name,
+            "evaluated_split": split,
+            "systems": systems,
+        },
+    }
+
+    assert evaluation.is_standard_benchmark_summary(summary) is expected
+    assert evaluation.evaluation_result_kind(summary) == (
+        "standard_benchmark" if expected else "custom_evaluation"
+    )
+
+
+def test_experiment_summary_records_standard_or_custom_kind(tmp_path: Path) -> None:
+    base = {
+        "timestamp": "2026-01-02T03:04:05Z",
+        "git_commit": "abc123",
+        "dataset_hash": "sha256",
+        "chat_model": "chat",
+        "embedding_model": "embed",
+        "chunk_size": 700,
+        "chunk_overlap": 100,
+        "retrieval_limit": 5,
+        "semantic_candidates": 10,
+        "sparse_candidates": 10,
+        "retry_limit": 1,
+        "subquery_limit": 4,
+        "dataset_name": "multihop",
+    }
+    metric = {
+        "bm25": {"recall_at_5": MetricObservation(value=1.0, status="measured", sample_count=1)}
+    }
+    standard = ExperimentConfig(
+        run_id="standard",
+        evaluated_split="development",
+        systems=["dense", "bm25", "hybrid", "agentic"],
+        **base,
+    )
+    custom = ExperimentConfig(
+        run_id="custom",
+        evaluated_split="development",
+        systems=["bm25"],
+        **base,
+    )
+
+    standard_path = write_experiment(tmp_path, standard, [result()], metric)
+    custom_path = write_experiment(tmp_path, custom, [result()], metric)
+
+    assert json.loads((standard_path / "summary.json").read_text())["result_kind"] == (
+        "standard_benchmark"
+    )
+    assert json.loads((custom_path / "summary.json").read_text())["result_kind"] == (
+        "custom_evaluation"
+    )
+
+
+def test_cli_defaults_to_multihop_benchmark(tmp_path: Path, monkeypatch) -> None:
+    calls: list[tuple[Path, list[str], str, str]] = []
+
+    def fake_run(
+        dataset: Path,
+        systems: list[str],
+        split: str,
+        *,
+        dataset_name: str,
+    ) -> Path:
+        calls.append((dataset, systems, split, dataset_name))
+        return tmp_path / "result"
+
+    monkeypatch.setattr(evaluation, "run_evaluation", fake_run)
+    monkeypatch.setattr(sys, "argv", ["evaluation"])
+
+    evaluation.main()
+
+    assert calls == [
+        (
+            evaluation.MULTIHOP_ROOT / "cases.jsonl",
+            list(evaluation.SYSTEMS),
+            "development",
+            "multihop",
+        )
+    ]
+
+
 def test_failure_labels_are_deterministic_and_composable() -> None:
     labels = failure_labels(
         case(expected_retry=True, expected_conflict=True),
@@ -447,9 +538,7 @@ def test_document_and_answer_metrics() -> None:
     )
     metrics = aggregate_metrics([benchmark], [measured])
     assert "chunk_recall_at_5" not in metrics
-    assert_observation(
-        metrics, "recall_at_5", value=0.5, status="measured", sample_count=1
-    )
+    assert_observation(metrics, "recall_at_5", value=0.5, status="measured", sample_count=1)
     assert_observation(
         metrics, "document_recall_at_5", value=0.5, status="measured", sample_count=1
     )
@@ -460,9 +549,7 @@ def test_document_and_answer_metrics() -> None:
         status="measured",
         sample_count=1,
     )
-    assert_observation(
-        metrics, "answer_token_f1", value=1.0, status="measured", sample_count=1
-    )
+    assert_observation(metrics, "answer_token_f1", value=1.0, status="measured", sample_count=1)
     assert normalized_exact_match("The Answer!", "the answer") == 1.0
     assert token_f1("alpha beta", "alpha gamma") == 0.5
 
@@ -470,9 +557,7 @@ def test_document_and_answer_metrics() -> None:
 def test_retrieval_only_response_metrics_are_not_applicable() -> None:
     metrics = aggregate_metrics([case()], [result(system="dense", route=None, strategy=None)])
 
-    assert_observation(
-        metrics, "recall_at_5", value=0.5, status="measured", sample_count=1
-    )
+    assert_observation(metrics, "recall_at_5", value=0.5, status="measured", sample_count=1)
     for name in (
         "citation_precision",
         "gold_evidence_citation_coverage",
@@ -484,9 +569,7 @@ def test_retrieval_only_response_metrics_are_not_applicable() -> None:
         "normalized_answer_exact_match",
         "answer_token_f1",
     ):
-        assert_observation(
-            metrics, name, value=None, status="not_applicable", sample_count=0
-        )
+        assert_observation(metrics, name, value=None, status="not_applicable", sample_count=0)
 
 
 def test_conditioned_metrics_distinguish_empty_denominators_from_measured_zero() -> None:
@@ -495,9 +578,7 @@ def test_conditioned_metrics_distinguish_empty_denominators_from_measured_zero()
         [result(cited_chunk_ids=["unknown"], answer="different")],
     )
 
-    assert_observation(
-        metrics, "citation_precision", value=0.0, status="measured", sample_count=1
-    )
+    assert_observation(metrics, "citation_precision", value=0.0, status="measured", sample_count=1)
     assert_observation(
         metrics,
         "gold_evidence_citation_coverage",
@@ -505,9 +586,7 @@ def test_conditioned_metrics_distinguish_empty_denominators_from_measured_zero()
         status="measured",
         sample_count=1,
     )
-    assert_observation(
-        metrics, "answer_token_f1", value=0.0, status="measured", sample_count=1
-    )
+    assert_observation(metrics, "answer_token_f1", value=0.0, status="measured", sample_count=1)
     assert_observation(
         metrics, "conflict_recall", value=None, status="no_eligible_cases", sample_count=0
     )

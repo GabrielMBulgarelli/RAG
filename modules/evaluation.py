@@ -13,13 +13,13 @@ import time
 import urllib.error
 import urllib.request
 from collections import Counter
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Self
 
 from langchain_ollama import ChatOllama
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from modules.config import PROJECT_ROOT, Settings, config
 from modules.models import RetrievalHit
@@ -29,7 +29,11 @@ from modules.vector_db import VectorDBManager
 
 Split = Literal["development", "test"]
 SystemName = Literal["dense", "bm25", "hybrid", "agentic"]
+MetricStatus = Literal["measured", "not_applicable", "no_eligible_cases"]
+EvaluationResultKind = Literal["standard_benchmark", "custom_evaluation"]
 SYSTEMS: tuple[SystemName, ...] = ("dense", "bm25", "hybrid", "agentic")
+STANDARD_BENCHMARK_DATASET = "multihop"
+STANDARD_BENCHMARK_SPLIT: Split = "development"
 FAILURE_ORDER = (
     "route_error",
     "strategy_error",
@@ -45,6 +49,29 @@ FAILURE_ORDER = (
 )
 
 MULTIHOP_ROOT = PROJECT_ROOT / "evals" / "multihop"
+
+
+def is_standard_benchmark_summary(summary: dict[str, Any]) -> bool:
+    """Return whether a schema-v2 result satisfies the canonical benchmark contract."""
+    if summary.get("schema_version") != 2:
+        return False
+    configuration = summary.get("configuration")
+    if not isinstance(configuration, dict):
+        return False
+    systems = configuration.get("systems")
+    if not isinstance(systems, list):
+        return False
+    return (
+        configuration.get("dataset_name") == STANDARD_BENCHMARK_DATASET
+        and configuration.get("evaluated_split") == STANDARD_BENCHMARK_SPLIT
+        and len(systems) == len(SYSTEMS)
+        and set(systems) == set(SYSTEMS)
+    )
+
+
+def evaluation_result_kind(summary: dict[str, Any]) -> EvaluationResultKind:
+    """Classify compatible results without presenting partial runs as benchmarks."""
+    return "standard_benchmark" if is_standard_benchmark_summary(summary) else "custom_evaluation"
 
 
 class BenchmarkEvidence(BaseModel):
@@ -115,6 +142,23 @@ class ExperimentConfig(BaseModel):
     dataset_license: str = "unspecified"
 
 
+class MetricObservation(BaseModel):
+    """A metric value together with its applicability and evaluated denominator."""
+
+    value: float | None
+    status: MetricStatus
+    sample_count: int = Field(ge=0)
+    note: str | None = None
+
+    @model_validator(mode="after")
+    def validate_value_matches_status(self) -> Self:
+        if self.status == "measured" and self.value is None:
+            raise ValueError("measured metrics require a value")
+        if self.status != "measured" and self.value is not None:
+            raise ValueError("unmeasured metrics must use a null value")
+        return self
+
+
 def recall_at_k(retrieved: Sequence[str], relevant: set[str], k: int = 5) -> float:
     if not relevant:
         return 1.0
@@ -152,17 +196,18 @@ def p95(values: Sequence[float]) -> float:
     return ordered[lower] + fraction * (ordered[min(lower + 1, len(ordered) - 1)] - ordered[lower])
 
 
-def citation_precision(cited: Sequence[str], retrieved: Sequence[str]) -> float:
+def citation_precision(cited: Sequence[str], retrieved: Sequence[str]) -> float | None:
     if not cited:
-        return 1.0
-    return len(set(cited) & set(retrieved)) / len(set(cited))
+        return None
+    retrieved_ids = set(retrieved)
+    return sum(chunk_id in retrieved_ids for chunk_id in cited) / len(cited)
 
 
-def gold_citation_coverage(cited: Sequence[str], relevant: Sequence[str]) -> float:
+def gold_citation_coverage(cited: Sequence[str], relevant: Sequence[str]) -> float | None:
     """Fraction of expected relevant chunk IDs cited (not claim-level coverage)."""
     gold = set(relevant)
     if not gold:
-        return 1.0
+        return None
     return len(set(cited) & gold) / len(gold)
 
 
@@ -189,22 +234,58 @@ def token_f1(prediction: str, expected: str) -> float:
     return 2 * precision * recall / (precision + recall)
 
 
-def _safe_ratio(numerator: int, denominator: int, *, empty: float = 1.0) -> float:
-    return numerator / denominator if denominator else empty
+def _measured(value: float, sample_count: int, note: str) -> MetricObservation:
+    return MetricObservation(
+        value=value,
+        status="measured",
+        sample_count=sample_count,
+        note=note,
+    )
+
+
+def _no_eligible(note: str) -> MetricObservation:
+    return MetricObservation(
+        value=None,
+        status="no_eligible_cases",
+        sample_count=0,
+        note=note,
+    )
+
+
+def _not_applicable(note: str) -> MetricObservation:
+    return MetricObservation(
+        value=None,
+        status="not_applicable",
+        sample_count=0,
+        note=note,
+    )
+
+
+def _mean_observation(values: Sequence[float], note: str) -> MetricObservation:
+    if not values:
+        return _no_eligible(note)
+    return _measured(sum(values) / len(values), len(values), note)
+
+
+def _ratio_observation(numerator: int, denominator: int, note: str) -> MetricObservation:
+    if not denominator:
+        return _no_eligible(note)
+    return _measured(numerator / denominator, denominator, note)
 
 
 def aggregate_metrics(
-    cases: Sequence[EvaluationCase], results: Sequence[CaseResult]
-) -> dict[str, float]:
+    cases: Sequence[EvaluationCase],
+    results: Sequence[CaseResult],
+    *,
+    system: SystemName | None = None,
+) -> dict[str, MetricObservation]:
     by_id = {item.id: item for item in cases}
     paired = [(by_id[item.case_id], item) for item in results if item.case_id in by_id]
     retrieval = [(case, result) for case, result in paired if case.relevant_chunk_ids]
     document_retrieval = [(case, result) for case, result in paired if case.relevant_document_ids]
     agentic = [(case, result) for case, result in paired if result.system == "agentic"]
-
-    def mean(values: Iterable[float]) -> float:
-        materialized = list(values)
-        return sum(materialized) / len(materialized) if materialized else 0.0
+    evaluated_system = system or (paired[0][1].system if paired else None)
+    produces_answers = evaluated_system == "agentic"
 
     route = [(case, result) for case, result in agentic if result.route is not None]
     strategy = [(case, result) for case, result in agentic if result.strategy is not None]
@@ -213,74 +294,182 @@ def aggregate_metrics(
     retry_fn = sum(case.expected_retry and result.retry_count == 0 for case, result in agentic)
     retry_expected = retry_tp + retry_fn
     retry_predicted = retry_tp + retry_fp
-    retry_precision_empty = 0.0 if retry_expected else 1.0
-
-    chunk_recall = mean(
-        recall_at_k(result.retrieved_chunk_ids, set(case.relevant_chunk_ids))
-        for case, result in retrieval
-    )
     answer_pairs = [
         (case, result)
         for case, result in agentic
         if case.expected_answer is not None and case.answerable
     ]
-    return {
-        "recall_at_5": chunk_recall,
-        "chunk_recall_at_5": chunk_recall,
-        "document_recall_at_5": mean(
-            recall_at_k(result.retrieved_document_ids, set(case.relevant_document_ids))
-            for case, result in document_retrieval
+    answerable = [(case, result) for case, result in agentic if case.answerable]
+    unanswerable = [(case, result) for case, result in agentic if not case.answerable]
+    conflict_positive = [(case, result) for case, result in agentic if case.expected_conflict]
+    conflict_negative = [(case, result) for case, result in agentic if not case.expected_conflict]
+    coverage_pairs = [
+        (case, result) for case, result in agentic if case.answerable and case.relevant_chunk_ids
+    ]
+    emitted_citations = [
+        (chunk_id, set(result.retrieved_chunk_ids))
+        for _, result in agentic
+        for chunk_id in result.cited_chunk_ids
+    ]
+
+    retrieval_note = "Cases with expected chunk evidence."
+    response_only = "Retrieval-only systems do not produce answers or answer-level signals."
+    metrics = {
+        "recall_at_5": _mean_observation(
+            [
+                recall_at_k(result.retrieved_chunk_ids, set(case.relevant_chunk_ids))
+                for case, result in retrieval
+            ],
+            retrieval_note,
         ),
-        "mrr_at_5": mean(
-            mrr_at_k(result.retrieved_chunk_ids, set(case.relevant_chunk_ids))
-            for case, result in retrieval
+        "document_recall_at_5": _mean_observation(
+            [
+                recall_at_k(result.retrieved_document_ids, set(case.relevant_document_ids))
+                for case, result in document_retrieval
+            ],
+            "Cases with expected document evidence.",
         ),
-        "ndcg_at_5": mean(
-            ndcg_at_k(result.retrieved_chunk_ids, set(case.relevant_chunk_ids))
-            for case, result in retrieval
+        "mrr_at_5": _mean_observation(
+            [
+                mrr_at_k(result.retrieved_chunk_ids, set(case.relevant_chunk_ids))
+                for case, result in retrieval
+            ],
+            retrieval_note,
         ),
-        "route_accuracy": _safe_ratio(
-            sum(result.route == case.expected_route for case, result in route), len(route)
+        "ndcg_at_5": _mean_observation(
+            [
+                ndcg_at_k(result.retrieved_chunk_ids, set(case.relevant_chunk_ids))
+                for case, result in retrieval
+            ],
+            retrieval_note,
         ),
-        "strategy_accuracy": _safe_ratio(
-            sum(result.strategy == case.expected_strategy for case, result in strategy),
-            len(strategy),
+        "termination_rate": _ratio_observation(
+            sum(result.terminated for _, result in paired),
+            len(paired),
+            "All evaluated cases.",
         ),
-        "retry_precision": _safe_ratio(retry_tp, retry_predicted, empty=retry_precision_empty),
-        "retry_recall": _safe_ratio(retry_tp, retry_expected),
-        "conflict_accuracy": _safe_ratio(
-            sum(result.conflict_detected == case.expected_conflict for case, result in agentic),
-            len(agentic),
+        "mean_latency_seconds": _mean_observation(
+            [result.latency_seconds for _, result in paired], "All evaluated cases."
         ),
-        "termination_rate": _safe_ratio(
-            sum(result.terminated for _, result in paired), len(paired)
+        "p95_latency_seconds": (
+            _measured(
+                p95([result.latency_seconds for _, result in paired]),
+                len(paired),
+                "All evaluated cases.",
+            )
+            if paired
+            else _no_eligible("All evaluated cases.")
         ),
-        "citation_precision": mean(
-            citation_precision(result.cited_chunk_ids, result.retrieved_chunk_ids)
-            for _, result in agentic
+        "mean_llm_calls_per_query": _mean_observation(
+            [float(result.llm_calls) for _, result in paired], "All evaluated cases."
         ),
-        "gold_evidence_citation_coverage": mean(
-            gold_citation_coverage(result.cited_chunk_ids, case.relevant_chunk_ids)
-            for case, result in agentic
-        ),
-        "abstention_accuracy": _safe_ratio(
-            sum(result.abstained == (not case.answerable) for case, result in agentic),
-            len(agentic),
-        ),
-        "mean_latency_seconds": mean(result.latency_seconds for _, result in paired),
-        "p95_latency_seconds": p95([result.latency_seconds for _, result in paired]),
-        "mean_llm_calls_per_query": mean(float(result.llm_calls) for _, result in paired),
-        "mean_retrieval_rounds_per_query": mean(
-            float(result.retrieval_rounds) for _, result in paired
-        ),
-        "normalized_answer_exact_match": mean(
-            normalized_exact_match(result.answer, case.expected_answer or "")
-            for case, result in answer_pairs
-        ),
-        "answer_token_f1": mean(
-            token_f1(result.answer, case.expected_answer or "") for case, result in answer_pairs
+        "mean_retrieval_rounds_per_query": _mean_observation(
+            [float(result.retrieval_rounds) for _, result in paired],
+            "All evaluated cases.",
         ),
     }
+
+    if not produces_answers:
+        metrics.update(
+            {
+                name: _not_applicable(response_only)
+                for name in (
+                    "route_accuracy",
+                    "strategy_accuracy",
+                    "retry_precision",
+                    "retry_recall",
+                    "citation_precision",
+                    "gold_evidence_citation_coverage",
+                    "abstention_accuracy",
+                    "unanswerable_abstention_recall",
+                    "answerable_response_rate",
+                    "conflict_recall",
+                    "conflict_false_positive_rate",
+                    "normalized_answer_exact_match",
+                    "answer_token_f1",
+                )
+            }
+        )
+        return metrics
+
+    metrics.update(
+        {
+            "route_accuracy": _ratio_observation(
+                sum(result.route == case.expected_route for case, result in route),
+                len(route),
+                "Agentic cases with a recorded route.",
+            ),
+            "strategy_accuracy": _ratio_observation(
+                sum(result.strategy == case.expected_strategy for case, result in strategy),
+                len(strategy),
+                "Agentic cases with a recorded retrieval strategy.",
+            ),
+            "retry_precision": _ratio_observation(
+                retry_tp, retry_predicted, "Agentic cases where a retry was attempted."
+            ),
+            "retry_recall": _ratio_observation(
+                retry_tp, retry_expected, "Agentic cases where a retry was expected."
+            ),
+            "citation_precision": _ratio_observation(
+                sum(chunk_id in retrieved for chunk_id, retrieved in emitted_citations),
+                len(emitted_citations),
+                "Citations emitted by agentic answers.",
+            ),
+            "gold_evidence_citation_coverage": _mean_observation(
+                [
+                    coverage
+                    for case, result in coverage_pairs
+                    if (
+                        coverage := gold_citation_coverage(
+                            result.cited_chunk_ids, case.relevant_chunk_ids
+                        )
+                    )
+                    is not None
+                ],
+                "Answerable cases with expected chunk evidence.",
+            ),
+            "abstention_accuracy": _ratio_observation(
+                sum(result.abstained == (not case.answerable) for case, result in agentic),
+                len(agentic),
+                "All agentic cases.",
+            ),
+            "unanswerable_abstention_recall": _ratio_observation(
+                sum(result.abstained for _, result in unanswerable),
+                len(unanswerable),
+                "Unanswerable agentic cases.",
+            ),
+            "answerable_response_rate": _ratio_observation(
+                sum(not result.abstained for _, result in answerable),
+                len(answerable),
+                "Answerable agentic cases.",
+            ),
+            "conflict_recall": _ratio_observation(
+                sum(result.conflict_detected for _, result in conflict_positive),
+                len(conflict_positive),
+                "Agentic cases expected to contain a conflict.",
+            ),
+            "conflict_false_positive_rate": _ratio_observation(
+                sum(result.conflict_detected for _, result in conflict_negative),
+                len(conflict_negative),
+                "Agentic cases not expected to contain a conflict.",
+            ),
+            "normalized_answer_exact_match": _mean_observation(
+                [
+                    normalized_exact_match(result.answer, case.expected_answer or "")
+                    for case, result in answer_pairs
+                ],
+                "Answerable agentic cases with an expected answer.",
+            ),
+            "answer_token_f1": _mean_observation(
+                [
+                    token_f1(result.answer, case.expected_answer or "")
+                    for case, result in answer_pairs
+                ],
+                "Answerable agentic cases with an expected answer.",
+            ),
+        }
+    )
+    return metrics
 
 
 def failure_labels(case: EvaluationCase, result: CaseResult) -> list[str]:
@@ -295,7 +484,8 @@ def failure_labels(case: EvaluationCase, result: CaseResult) -> list[str]:
         labels.add("retrieval_miss")
     if set(result.cited_chunk_ids) - set(result.retrieved_chunk_ids):
         labels.add("invalid_citation")
-    if gold_citation_coverage(result.cited_chunk_ids, case.relevant_chunk_ids) < 1:
+    coverage = gold_citation_coverage(result.cited_chunk_ids, case.relevant_chunk_ids)
+    if coverage is not None and coverage < 1:
         labels.add("citation_coverage_miss")
     if case.answerable and result.abstained:
         labels.add("over_abstention")
@@ -448,25 +638,74 @@ def write_experiment(
     results_root: Path,
     experiment: ExperimentConfig,
     results: Sequence[CaseResult],
-    metrics: dict[str, dict[str, float]],
+    metrics: dict[str, dict[str, MetricObservation]],
 ) -> Path:
     output = results_root / experiment.run_id
     output.mkdir(parents=True, exist_ok=False)
     with (output / "cases.jsonl").open("w", encoding="utf-8") as handle:
         for result in results:
             handle.write(result.model_dump_json() + "\n")
-    summary = {"configuration": experiment.model_dump(mode="json"), "metrics": metrics}
+    serialized_metrics = {
+        system: {name: observation.model_dump(mode="json") for name, observation in values.items()}
+        for system, values in metrics.items()
+    }
+    configuration = experiment.model_dump(mode="json")
+    summary_core = {
+        "schema_version": 2,
+        "configuration": configuration,
+    }
+    summary = {
+        **summary_core,
+        "result_kind": evaluation_result_kind(summary_core),
+        "metrics": serialized_metrics,
+    }
     (output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
-    lines = [f"# Evaluation {experiment.run_id}", "", f"Split: `{experiment.evaluated_split}`", ""]
+    result_label = (
+        "Standard benchmark"
+        if summary["result_kind"] == "standard_benchmark"
+        else "Custom evaluation"
+    )
+    lines = [
+        f"# Evaluation {experiment.run_id}",
+        "",
+        f"Result: **{result_label}**",
+        "",
+        f"Split: `{experiment.evaluated_split}`",
+        "",
+    ]
     for system, values in metrics.items():
         lines.extend([f"## {system}", ""])
-        lines.extend(f"- {name}: {value:.6f}" for name, value in values.items())
+        for name, observation in values.items():
+            if observation.status == "measured":
+                display = f"{observation.value:.6f} · n={observation.sample_count}"
+            elif observation.status == "not_applicable":
+                display = "Not applicable"
+            else:
+                display = "No eligible cases"
+            note = f" — {observation.note}" if observation.note else ""
+            lines.append(f"- {name}: {display}{note}")
         lines.append("")
     (output / "summary.md").write_text("\n".join(lines), encoding="utf-8")
     return output
 
 
-def _require_ollama() -> None:
+def normalize_model_name(name: str) -> str:
+    """Return the exact Ollama identifier, adding the implicit latest tag."""
+    normalized = name.strip()
+    return normalized if ":" in normalized else f"{normalized}:latest"
+
+
+def required_models_for_systems(systems: Sequence[SystemName]) -> tuple[str, ...]:
+    """Return only the local models needed by the selected evaluation systems."""
+    required: list[str] = []
+    if any(system in {"dense", "hybrid", "agentic"} for system in systems):
+        required.append(normalize_model_name(config.embedding_model))
+    if "agentic" in systems:
+        required.append(normalize_model_name(config.llm_model))
+    return tuple(dict.fromkeys(required))
+
+
+def _require_ollama(required_models: Sequence[str] | None = None) -> None:
     try:
         with urllib.request.urlopen(f"{config.ollama_base_url}/api/tags", timeout=3) as response:
             payload = json.load(response)
@@ -475,8 +714,13 @@ def _require_ollama() -> None:
             f"Live evaluation requires Ollama at {config.ollama_base_url}. "
             "Start Ollama and pull the configured chat and embedding models."
         ) from exc
-    available = {item.get("name", "").split(":")[0] for item in payload.get("models", [])}
-    required = {config.llm_model.split(":")[0], config.embedding_model.split(":")[0]}
+    available = {
+        normalize_model_name(str(item.get("name", "")))
+        for item in payload.get("models", [])
+        if item.get("name")
+    }
+    configured = required_models or (config.llm_model, config.embedding_model)
+    required = {normalize_model_name(name) for name in configured}
     missing = sorted(required - available)
     if missing:
         commands = ", ".join(f"ollama pull {name}" for name in missing)
@@ -583,37 +827,49 @@ def preflight_multihop(
 def run_evaluation(
     dataset: Path, systems: Sequence[SystemName], split: Split, *, dataset_name: str = "custom"
 ) -> Path:
+    selected = tuple(dict.fromkeys(systems))
+    if not selected:
+        raise ValueError("Select at least one evaluation system.")
     raw = dataset.read_bytes()
     all_cases = load_cases(dataset)
     if dataset_name == "multihop":
         manager = VectorDBManager(multihop_settings())
-        all_cases = preflight_multihop(all_cases, manager=manager)
+        all_cases = preflight_multihop(all_cases, manager=manager, check_models=False)
     else:
-        _require_ollama()
         manager = VectorDBManager()
+    required_models = required_models_for_systems(selected)
+    if required_models:
+        _require_ollama(required_models)
     cases = filter_cases(all_cases, split)
     if not cases:
         raise ValueError(f"Dataset has no cases for split '{split}'")
     retriever = Retriever(manager.setup())
-    counted = CountingModel(
-        ChatOllama(
-            model=config.llm_model,
-            base_url=config.ollama_base_url,
-            temperature=config.temperature,
+    counted: CountingModel | None = None
+    graph: RAGGraph | None = None
+    if "agentic" in selected:
+        counted = CountingModel(
+            ChatOllama(
+                model=config.llm_model,
+                base_url=config.ollama_base_url,
+                temperature=config.temperature,
+            )
         )
-    )
-    graph = RAGGraph(manager, llm=counted)  # type: ignore[arg-type]
+        graph = RAGGraph(manager, llm=counted)  # type: ignore[arg-type]
     results: list[CaseResult] = []
-    for system in systems:
+    for system in selected:
         for case in cases:
             results.append(
-                run_agentic_case(case, graph, counted)
+                run_agentic_case(case, graph, counted)  # type: ignore[arg-type]
                 if system == "agentic"
                 else run_retrieval_case(case, system, retriever)
             )
     metrics = {
-        system: aggregate_metrics(cases, [item for item in results if item.system == system])
-        for system in systems
+        system: aggregate_metrics(
+            cases,
+            [item for item in results if item.system == system],
+            system=system,
+        )
+        for system in selected
     }
     now = datetime.now(UTC)
     run_id = now.strftime("%Y%m%dT%H%M%SZ") + f"-{split}"
@@ -623,7 +879,7 @@ def run_evaluation(
         git_commit=_git_commit(),
         dataset_hash=hashlib.sha256(raw).hexdigest(),
         evaluated_split=split,
-        systems=list(systems),
+        systems=list(selected),
         chat_model=config.llm_model,
         embedding_model=config.embedding_model,
         chunk_size=config.chunk_size,
@@ -654,7 +910,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--systems", type=_parse_systems, default=list(SYSTEMS))
     parser.add_argument("--split", choices=("development", "test"), default="development")
-    parser.add_argument("--dataset", default="regression")
+    parser.add_argument("--dataset", default="multihop")
     args = parser.parse_args()
     try:
         dataset_name = str(args.dataset)

@@ -53,7 +53,12 @@ def _lexical_similarity(first: str, second: str) -> float:
     return len(first_tokens & second_tokens) / len(union) if union else 0.0
 
 
-def select_candidates(candidates: list[RetrievalHit], *, limit: int) -> list[RetrievalHit]:
+def select_candidates(
+    candidates: list[RetrievalHit],
+    *,
+    limit: int,
+    preserve_chunk_ids: set[str] | None = None,
+) -> list[RetrievalHit]:
     """Greedily balance fused relevance, query coverage, sources, and redundancy."""
     if limit <= 0 or not candidates:
         return []
@@ -64,17 +69,16 @@ def select_candidates(candidates: list[RetrievalHit], *, limit: int) -> list[Ret
             item.chunk_id,
         ),
     )
-    relevance = {
-        item.chunk_id: 1.0 - (rank / len(ordered)) for rank, item in enumerate(ordered)
-    }
+    relevance = {item.chunk_id: 1.0 - (rank / len(ordered)) for rank, item in enumerate(ordered)}
     all_queries = {query for item in ordered for query in item.subqueries}
     selected: list[RetrievalHit] = []
     remaining = list(ordered)
+    preserved = preserve_chunk_ids or set()
     covered_queries: set[str] = set()
     covered_documents: set[str] = set()
 
     while remaining and len(selected) < limit:
-        scored: list[tuple[float, float, str, RetrievalHit]] = []
+        scored: list[tuple[bool, float, float, str, RetrievalHit]] = []
         for item in remaining:
             new_queries = set(item.subqueries) - covered_queries
             coverage_bonus = 0.2 * len(new_queries) / max(len(all_queries), 1)
@@ -91,10 +95,16 @@ def select_candidates(candidates: list[RetrievalHit], *, limit: int) -> list[Ret
                 - 0.25 * redundancy
             )
             scored.append(
-                (selection_score, relevance[item.chunk_id], item.chunk_id, item)
+                (
+                    item.chunk_id in preserved,
+                    selection_score,
+                    relevance[item.chunk_id],
+                    item.chunk_id,
+                    item,
+                )
             )
-        selection_score, _, _, chosen = min(
-            scored, key=lambda value: (-value[0], -value[1], value[2])
+        _, selection_score, _, _, chosen = min(
+            scored, key=lambda value: (-value[0], -value[1], -value[2], value[3])
         )
         chosen = chosen.model_copy(update={"selection_score": selection_score})
         selected.append(chosen)

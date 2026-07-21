@@ -1,4 +1,6 @@
+import io
 import json
+import sys
 import urllib.error
 from pathlib import Path
 from typing import cast
@@ -12,6 +14,7 @@ from modules.evaluation import (
     CountingModel,
     EvaluationCase,
     ExperimentConfig,
+    MetricObservation,
     aggregate_metrics,
     citation_precision,
     failure_labels,
@@ -65,6 +68,24 @@ def result(**updates: object) -> CaseResult:
     return CaseResult.model_validate(values)
 
 
+def assert_observation(
+    metrics: dict[str, MetricObservation],
+    name: str,
+    *,
+    value: float | None,
+    status: str,
+    sample_count: int,
+) -> None:
+    observation = metrics[name]
+    assert (
+        observation.value == pytest.approx(value)
+        if value is not None
+        else observation.value is None
+    )
+    assert observation.status == status
+    assert observation.sample_count == sample_count
+
+
 @pytest.mark.parametrize(
     ("retrieved", "expected"),
     [([], 0.0), (["a", "x"], 0.5), (["b", "a"], 1.0)],
@@ -102,33 +123,40 @@ def test_agent_accuracy_denominators_exclude_non_agentic_results() -> None:
         result(case_id="a", system="dense", route=None, strategy=None),
     ]
     metrics = aggregate_metrics(cases, results)
-    assert metrics["route_accuracy"] == 0.5
-    assert metrics["strategy_accuracy"] == 1.0
+    assert_observation(metrics, "route_accuracy", value=0.5, status="measured", sample_count=2)
+    assert_observation(metrics, "strategy_accuracy", value=1.0, status="measured", sample_count=2)
 
 
 def test_retry_precision_and_recall_edge_cases() -> None:
     negatives = [case(id="n", expected_retry=False)]
-    assert aggregate_metrics(negatives, [result(case_id="n")])["retry_precision"] == 1.0
-    assert aggregate_metrics(negatives, [result(case_id="n")])["retry_recall"] == 1.0
+    metrics = aggregate_metrics(negatives, [result(case_id="n")])
+    assert_observation(
+        metrics, "retry_precision", value=None, status="no_eligible_cases", sample_count=0
+    )
+    assert_observation(
+        metrics, "retry_recall", value=None, status="no_eligible_cases", sample_count=0
+    )
 
     cases = [case(id="p", expected_retry=True), case(id="n", expected_retry=False)]
     metrics = aggregate_metrics(
         cases,
         [result(case_id="p", retry_count=1), result(case_id="n", retry_count=1)],
     )
-    assert metrics["retry_precision"] == 0.5
-    assert metrics["retry_recall"] == 1.0
+    assert_observation(metrics, "retry_precision", value=0.5, status="measured", sample_count=2)
+    assert_observation(metrics, "retry_recall", value=1.0, status="measured", sample_count=1)
 
     missed = aggregate_metrics([case(expected_retry=True)], [result()])
-    assert missed["retry_precision"] == 0.0
-    assert missed["retry_recall"] == 0.0
+    assert_observation(
+        missed, "retry_precision", value=None, status="no_eligible_cases", sample_count=0
+    )
+    assert_observation(missed, "retry_recall", value=0.0, status="measured", sample_count=1)
 
 
 def test_citation_metrics() -> None:
     assert citation_precision(["a", "unknown"], ["a", "b"]) == 0.5
-    assert citation_precision([], ["a"]) == 1.0
+    assert citation_precision([], ["a"]) is None
     assert gold_citation_coverage(["a"], ["a", "b"]) == 0.5
-    assert gold_citation_coverage([], []) == 1.0
+    assert gold_citation_coverage([], []) is None
 
 
 def test_abstention_conflict_and_termination_metrics() -> None:
@@ -148,9 +176,31 @@ def test_abstention_conflict_and_termination_metrics() -> None:
             ),
         ],
     )
-    assert metrics["abstention_accuracy"] == 1.0
-    assert metrics["conflict_accuracy"] == 1.0
-    assert metrics["termination_rate"] == 0.5
+    assert_observation(metrics, "abstention_accuracy", value=1.0, status="measured", sample_count=2)
+    assert_observation(
+        metrics,
+        "unanswerable_abstention_recall",
+        value=1.0,
+        status="measured",
+        sample_count=1,
+    )
+    assert_observation(
+        metrics,
+        "answerable_response_rate",
+        value=1.0,
+        status="measured",
+        sample_count=1,
+    )
+    assert_observation(metrics, "conflict_recall", value=1.0, status="measured", sample_count=1)
+    assert_observation(
+        metrics,
+        "conflict_false_positive_rate",
+        value=0.0,
+        status="measured",
+        sample_count=1,
+    )
+    assert_observation(metrics, "termination_rate", value=0.5, status="measured", sample_count=2)
+    assert "conflict_accuracy" not in metrics
 
 
 def test_split_filtering() -> None:
@@ -172,6 +222,76 @@ def test_missing_ollama_has_actionable_error(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(evaluation.urllib.request, "urlopen", unavailable)
     with pytest.raises(RuntimeError, match="Start Ollama"):
         evaluation._require_ollama()
+
+
+def test_required_models_depend_on_selected_systems() -> None:
+    assert evaluation.required_models_for_systems(["bm25"]) == ()
+    assert evaluation.required_models_for_systems(["dense", "hybrid"]) == (
+        evaluation.normalize_model_name(evaluation.config.embedding_model),
+    )
+    assert set(evaluation.required_models_for_systems(["agentic"])) == {
+        evaluation.normalize_model_name(evaluation.config.embedding_model),
+        evaluation.normalize_model_name(evaluation.config.llm_model),
+    }
+
+
+def test_ollama_model_matching_uses_exact_normalized_tags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def response(models: list[str]):
+        return io.BytesIO(json.dumps({"models": [{"name": name} for name in models]}).encode())
+
+    monkeypatch.setattr(
+        evaluation.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: response(["qwen3.5:latest"]),
+    )
+    with pytest.raises(RuntimeError, match="qwen3.5:9b"):
+        evaluation._require_ollama(["qwen3.5:9b"])
+
+    monkeypatch.setattr(
+        evaluation.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: response(["nomic-embed-text:latest"]),
+    )
+    evaluation._require_ollama(["nomic-embed-text"])
+
+
+def test_bm25_evaluation_does_not_construct_ollama_or_agentic_graph(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dataset = tmp_path / "cases.jsonl"
+    dataset.write_text(case().model_dump_json() + "\n", encoding="utf-8")
+
+    class Manager:
+        def setup(self):
+            return object()
+
+    monkeypatch.setattr(evaluation, "VectorDBManager", Manager)
+    monkeypatch.setattr(evaluation, "Retriever", lambda _collection: object())
+    monkeypatch.setattr(
+        evaluation,
+        "_require_ollama",
+        lambda *_args, **_kwargs: pytest.fail("BM25 must not require Ollama"),
+    )
+    monkeypatch.setattr(
+        evaluation,
+        "ChatOllama",
+        lambda **_kwargs: pytest.fail("BM25 must not construct the chat model"),
+    )
+    monkeypatch.setattr(
+        evaluation,
+        "RAGGraph",
+        lambda *_args, **_kwargs: pytest.fail("BM25 must not construct the agentic graph"),
+    )
+    monkeypatch.setattr(
+        evaluation,
+        "run_retrieval_case",
+        lambda item, system, _retriever: result(case_id=item.id, system=system),
+    )
+    monkeypatch.setattr(evaluation, "write_experiment", lambda *_args, **_kwargs: tmp_path)
+
+    assert evaluation.run_evaluation(dataset, ["bm25"], "development") == tmp_path
 
 
 class FakeModel:
@@ -214,13 +334,138 @@ def test_experiment_configuration_serializes(tmp_path: Path) -> None:
         retry_limit=1,
         subquery_limit=4,
     )
-    output = write_experiment(tmp_path, config, [result()], {"agentic": {"recall_at_5": 1.0}})
+    output = write_experiment(
+        tmp_path,
+        config,
+        [result()],
+        {
+            "agentic": {
+                "recall_at_5": MetricObservation(
+                    value=1.0,
+                    status="measured",
+                    sample_count=1,
+                    note="Cases with expected chunk evidence.",
+                )
+            }
+        },
+    )
 
     summary = json.loads((output / "summary.json").read_text())
+    assert summary["schema_version"] == 2
     assert summary["configuration"]["systems"] == ["dense", "agentic"]
-    assert summary["metrics"]["agentic"]["recall_at_5"] == 1.0
+    assert summary["metrics"]["agentic"]["recall_at_5"] == {
+        "value": 1.0,
+        "status": "measured",
+        "sample_count": 1,
+        "note": "Cases with expected chunk evidence.",
+    }
     assert (output / "cases.jsonl").read_text().strip()
-    assert "agentic" in (output / "summary.md").read_text()
+    markdown = (output / "summary.md").read_text()
+    assert "agentic" in markdown
+    assert "1.000000 · n=1" in markdown
+    assert "Cases with expected chunk evidence." in markdown
+
+
+@pytest.mark.parametrize(
+    ("dataset_name", "split", "systems", "expected"),
+    [
+        ("multihop", "development", ["dense", "bm25", "hybrid", "agentic"], True),
+        ("multihop", "development", ["agentic", "hybrid", "bm25", "dense"], True),
+        ("multihop", "development", ["bm25"], False),
+        ("multihop", "test", ["dense", "bm25", "hybrid", "agentic"], False),
+        ("regression", "development", ["dense", "bm25", "hybrid", "agentic"], False),
+    ],
+)
+def test_standard_benchmark_contract(
+    dataset_name: str,
+    split: str,
+    systems: list[str],
+    expected: bool,
+) -> None:
+    summary = {
+        "schema_version": 2,
+        "configuration": {
+            "dataset_name": dataset_name,
+            "evaluated_split": split,
+            "systems": systems,
+        },
+    }
+
+    assert evaluation.is_standard_benchmark_summary(summary) is expected
+    assert evaluation.evaluation_result_kind(summary) == (
+        "standard_benchmark" if expected else "custom_evaluation"
+    )
+
+
+def test_experiment_summary_records_standard_or_custom_kind(tmp_path: Path) -> None:
+    base = {
+        "timestamp": "2026-01-02T03:04:05Z",
+        "git_commit": "abc123",
+        "dataset_hash": "sha256",
+        "chat_model": "chat",
+        "embedding_model": "embed",
+        "chunk_size": 700,
+        "chunk_overlap": 100,
+        "retrieval_limit": 5,
+        "semantic_candidates": 10,
+        "sparse_candidates": 10,
+        "retry_limit": 1,
+        "subquery_limit": 4,
+        "dataset_name": "multihop",
+    }
+    metric = {
+        "bm25": {"recall_at_5": MetricObservation(value=1.0, status="measured", sample_count=1)}
+    }
+    standard = ExperimentConfig(
+        run_id="standard",
+        evaluated_split="development",
+        systems=["dense", "bm25", "hybrid", "agentic"],
+        **base,
+    )
+    custom = ExperimentConfig(
+        run_id="custom",
+        evaluated_split="development",
+        systems=["bm25"],
+        **base,
+    )
+
+    standard_path = write_experiment(tmp_path, standard, [result()], metric)
+    custom_path = write_experiment(tmp_path, custom, [result()], metric)
+
+    assert json.loads((standard_path / "summary.json").read_text())["result_kind"] == (
+        "standard_benchmark"
+    )
+    assert json.loads((custom_path / "summary.json").read_text())["result_kind"] == (
+        "custom_evaluation"
+    )
+
+
+def test_cli_defaults_to_multihop_benchmark(tmp_path: Path, monkeypatch) -> None:
+    calls: list[tuple[Path, list[str], str, str]] = []
+
+    def fake_run(
+        dataset: Path,
+        systems: list[str],
+        split: str,
+        *,
+        dataset_name: str,
+    ) -> Path:
+        calls.append((dataset, systems, split, dataset_name))
+        return tmp_path / "result"
+
+    monkeypatch.setattr(evaluation, "run_evaluation", fake_run)
+    monkeypatch.setattr(sys, "argv", ["evaluation"])
+
+    evaluation.main()
+
+    assert calls == [
+        (
+            evaluation.MULTIHOP_ROOT / "cases.jsonl",
+            list(evaluation.SYSTEMS),
+            "development",
+            "multihop",
+        )
+    ]
 
 
 def test_failure_labels_are_deterministic_and_composable() -> None:
@@ -292,12 +537,73 @@ def test_document_and_answer_metrics() -> None:
         answer="Sam Bankman Fried",
     )
     metrics = aggregate_metrics([benchmark], [measured])
-    assert metrics["chunk_recall_at_5"] == 0.5
-    assert metrics["document_recall_at_5"] == 0.5
-    assert metrics["normalized_answer_exact_match"] == 1.0
-    assert metrics["answer_token_f1"] == 1.0
+    assert "chunk_recall_at_5" not in metrics
+    assert_observation(metrics, "recall_at_5", value=0.5, status="measured", sample_count=1)
+    assert_observation(
+        metrics, "document_recall_at_5", value=0.5, status="measured", sample_count=1
+    )
+    assert_observation(
+        metrics,
+        "normalized_answer_exact_match",
+        value=1.0,
+        status="measured",
+        sample_count=1,
+    )
+    assert_observation(metrics, "answer_token_f1", value=1.0, status="measured", sample_count=1)
     assert normalized_exact_match("The Answer!", "the answer") == 1.0
     assert token_f1("alpha beta", "alpha gamma") == 0.5
+
+
+def test_retrieval_only_response_metrics_are_not_applicable() -> None:
+    metrics = aggregate_metrics([case()], [result(system="dense", route=None, strategy=None)])
+
+    assert_observation(metrics, "recall_at_5", value=0.5, status="measured", sample_count=1)
+    for name in (
+        "citation_precision",
+        "gold_evidence_citation_coverage",
+        "abstention_accuracy",
+        "unanswerable_abstention_recall",
+        "answerable_response_rate",
+        "conflict_recall",
+        "conflict_false_positive_rate",
+        "normalized_answer_exact_match",
+        "answer_token_f1",
+    ):
+        assert_observation(metrics, name, value=None, status="not_applicable", sample_count=0)
+
+
+def test_conditioned_metrics_distinguish_empty_denominators_from_measured_zero() -> None:
+    metrics = aggregate_metrics(
+        [case(expected_answer="expected", expected_conflict=False)],
+        [result(cited_chunk_ids=["unknown"], answer="different")],
+    )
+
+    assert_observation(metrics, "citation_precision", value=0.0, status="measured", sample_count=1)
+    assert_observation(
+        metrics,
+        "gold_evidence_citation_coverage",
+        value=0.0,
+        status="measured",
+        sample_count=1,
+    )
+    assert_observation(metrics, "answer_token_f1", value=0.0, status="measured", sample_count=1)
+    assert_observation(
+        metrics, "conflict_recall", value=None, status="no_eligible_cases", sample_count=0
+    )
+    assert_observation(
+        metrics,
+        "unanswerable_abstention_recall",
+        value=None,
+        status="no_eligible_cases",
+        sample_count=0,
+    )
+
+
+def test_no_emitted_citations_are_no_eligible_cases() -> None:
+    metrics = aggregate_metrics([case()], [result(cited_chunk_ids=[])])
+    assert_observation(
+        metrics, "citation_precision", value=None, status="no_eligible_cases", sample_count=0
+    )
 
 
 def test_benchmark_evidence_schema_preserves_stable_source() -> None:

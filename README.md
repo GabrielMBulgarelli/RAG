@@ -17,7 +17,7 @@ A local-first Retrieval-Augmented Generation application for asking questions ab
 ## How it works
 
 ```mermaid
-flowchart LR
+flowchart TB
     A[PDF or TXT] --> B[Parse and chunk]
     B --> C[Chroma embeddings]
     B --> D[BM25 index]

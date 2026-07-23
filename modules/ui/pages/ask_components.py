@@ -171,7 +171,7 @@ def _build_inspector(content: InspectorContent) -> InspectorComponents:
     return InspectorComponents(documents, sources, retrieval, trace, raw_trace, query)
 
 
-def build_ask_components() -> AskComponents:
+def build_ask_components(evaluation: EvaluationActionComponents) -> AskComponents:
     """Create the Ask workspace component tree without binding behavior."""
     session_id = gr.State(lambda: str(uuid4()))
     latest_result = gr.State({})
@@ -188,16 +188,6 @@ def build_ask_components() -> AskComponents:
                     elem_id="ask-model-status",
                     padding=False,
                 )
-                run_evaluation = gr.Button(
-                    "Run evaluation",
-                    variant="primary",
-                    elem_id="run-evaluation",
-                )
-        evaluation_status = gr.HTML(
-            "",
-            visible=False,
-            elem_id="ask-evaluation-status",
-        )
         gr.Markdown("Ask grounded questions and inspect the evidence, retrieval, and public trace.")
         with gr.Row(equal_height=False, elem_id="ask-workspace"):
             with gr.Column(scale=3, min_width=0, elem_id="ask-conversation"):
@@ -208,10 +198,7 @@ def build_ask_components() -> AskComponents:
         session_id,
         latest_result,
         model_status,
-        EvaluationActionComponents(
-            run_evaluation,
-            evaluation_status,
-        ),
+        evaluation,
         conversation,
         inspector,
     )

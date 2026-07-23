@@ -12,6 +12,7 @@ import gradio as gr
 from gradio.components.navbar import Navbar
 
 from modules.ui.pages.ask import build_ask_page
+from modules.ui.pages.ask_components import EvaluationActionComponents
 from modules.ui.pages.document_components import (
     SidebarDocumentComponents,
     build_sidebar_document_components,
@@ -48,13 +49,29 @@ def render_navigation() -> NavigationComponents:
             "Loading Models and Corpus…</section>",
             elem_id="sidebar-status",
         )
-    return NavigationComponents(documents, status)
+        with gr.Group(elem_id="sidebar-evaluation-actions"):
+            run_evaluation = gr.Button(
+                "Run evaluation",
+                variant="primary",
+                elem_id="run-evaluation",
+            )
+            evaluation_status = gr.HTML(
+                "",
+                visible=False,
+                elem_id="ask-evaluation-status",
+            )
+    return NavigationComponents(
+        documents,
+        status,
+        EvaluationActionComponents(run_evaluation, evaluation_status),
+    )
 
 
 @dataclass(frozen=True)
 class NavigationComponents:
     documents: SidebarDocumentComponents
     status: gr.HTML
+    evaluation: EvaluationActionComponents
 
 
 def _render_page(*, page_name: str, application: RAGApplication) -> None:
@@ -80,6 +97,7 @@ def _render_page(*, page_name: str, application: RAGApplication) -> None:
     if page_name == "Ask Documents":
         ask = build_ask_page(
             application,
+            evaluation=navigation.evaluation,
             sidebar_status=navigation.status,
             refresh_sidebar=refresh_sidebar,
         )

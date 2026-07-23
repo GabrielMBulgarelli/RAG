@@ -523,6 +523,25 @@ button.primary:hover,
   width: 100%;
 }
 
+#sidebar-evaluation-actions {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  background: transparent !important;
+}
+
+#sidebar-evaluation-actions > .styler {
+  background: transparent !important;
+}
+
+#run-evaluation,
+#ask-evaluation-status {
+  width: 100%;
+}
+
 #inspector-document-inventory {
   overflow-x: auto;
 }
@@ -573,15 +592,10 @@ button.primary:hover,
   width: auto;
 }
 
-#ask-model-status,
-#run-evaluation {
+#ask-model-status {
   flex: 0 0 auto;
   width: auto;
   min-width: max-content;
-}
-
-#ask-evaluation-status {
-  width: 100%;
 }
 
 .ask-model-status {

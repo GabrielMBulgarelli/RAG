@@ -17,7 +17,11 @@ from modules.ui.pages.ask_callbacks import (
     run_default_evaluation,
     submit_question,
 )
-from modules.ui.pages.ask_components import AskComponents, build_ask_components
+from modules.ui.pages.ask_components import (
+    AskComponents,
+    EvaluationActionComponents,
+    build_ask_components,
+)
 
 if TYPE_CHECKING:
     from modules.ui.application import RAGApplication
@@ -158,11 +162,12 @@ def _bind_evaluation(
 def build_ask_page(
     application: RAGApplication,
     *,
+    evaluation: EvaluationActionComponents,
     sidebar_status: gr.HTML | None = None,
     refresh_sidebar: Callable[[], str] | None = None,
 ) -> AskComponents:
     """Create the primary AI workspace and bind existing controller behavior."""
-    components = build_ask_components()
+    components = build_ask_components(evaluation)
     _bind_readiness(
         application=application,
         components=components,

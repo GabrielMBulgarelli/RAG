@@ -1,8 +1,16 @@
 # Local Document RAG
 
-A local-first Retrieval-Augmented Generation application for asking questions about PDF and TXT documents with inspectable evidence. It combines hybrid retrieval, bounded multi-step reasoning, citation validation, and a built-in evaluation workspace while keeping documents and model inference on the user's machine.
+A local-first Retrieval-Augmented Generation application for asking questions about PDF and TXT documents with inspectable evidence. It combines hybrid retrieval, bounded multi-step reasoning, citation validation, and standard benchmark execution while keeping documents and model inference on the user's machine.
 
-![Local Document RAG workspace](docs/assets/workspace-no-models.jpg)
+## Interface
+
+![Grounded conversation and evidence inspector](docs/assets/dashboard/ask-documents.png)
+
+The interface opens directly to **Ask Documents** at `/`:
+
+- **Ask Documents** (`/`) contains the grounded conversation, Indexed Documents management, cited sources, retrieval scores, public trace, diagnostics, and privacy-safe export.
+
+The sidebar includes a multi-file PDF/TXT uploader. Selecting files starts indexing automatically and reports successful or partial results without a separate action button. Chat and embedding model names and corpus totals remain visible in the persistent desktop sidebar; on mobile, the sidebar remains collapsible.
 
 ## Highlights
 
@@ -61,7 +69,7 @@ Start the interface:
 uv run python -m modules.run
 ```
 
-Open [http://127.0.0.1:7860](http://127.0.0.1:7860), add documents in **Workspace**, select **Index files**, and load the AI models when prompted. The UI remains available in limited-readiness mode if Ollama is not running.
+Open [http://127.0.0.1:7860](http://127.0.0.1:7860). **Ask Documents** is the landing page. Select PDF or TXT files in the sidebar to index them automatically, then inspect or delete indexed files from **Inspector → Indexed Documents**. Load the AI models when you are ready to query the corpus. The UI remains available in limited-readiness mode if Ollama is not running.
 
 ## Evaluation
 
@@ -71,10 +79,18 @@ Run the standard schema v2 benchmark on the MultiHopRAG development split:
 uv run python -m modules.evaluation \
   --systems all \
   --split development \
-  --dataset multihop
+  --dataset multihop \
+  --model qwen3.5:9b \
+  --case-timeout-seconds 30
 ```
 
-The **Evaluation** view automatically loads the latest compatible standard result. Partial system comparisons remain identifiable as custom evaluations and cannot replace the standard benchmark.
+`--model` selects one installed Ollama chat model for that evaluation run and defaults to `RAG_LLM_MODEL`. It does not change the model used by the normal document-question runtime.
+`--case-timeout-seconds` is a hard wall-clock limit for each agentic case; timeouts
+are recorded as case-level runtime failures so one stalled model response cannot
+prevent the benchmark from producing an artifact. The 30-second default bounds
+the 20-case development split's agentic portion to 10 minutes.
+
+The **Run evaluation** action in the Ask Documents header runs the standard development benchmark and reports whether the result was saved. Partial system comparisons started from the CLI remain identifiable as custom evaluations and cannot replace the standard benchmark.
 
 ## Quality checks
 
@@ -102,11 +118,12 @@ Configuration is validated before Ollama or Chroma clients are constructed. Retr
 
 ```text
 modules/
-├── app.py          # Gradio workspace, callbacks, and presentation adapters
+├── app.py          # Application ownership and Gradio launch entrypoint
 ├── citations.py    # Deterministic answer and citation validation
 ├── evaluation.py   # Schema v2 benchmark runner and metrics
 ├── rag_graph.py    # Bounded retrieval and answer workflow
 ├── retrieval.py    # Semantic, BM25, fusion, and final selection
+├── ui/             # Routed dashboard shell, pages, presenters, and assets
 ├── vector_db.py    # Ingestion, manifest, and Chroma lifecycle
 └── run.py          # Package-safe local entrypoint
 

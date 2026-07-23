@@ -22,6 +22,7 @@ data/*
 # IDE
 .vscode/
 .idea/
+.codex/
 
 # Logs
 logs/
@@ -42,6 +43,8 @@ logs/
 
 # Documentation outputs
 /docs/
+/output/
+/.playwright-cli/
 
 # Environment variables
 .env

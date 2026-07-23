@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "chromadb>=0.6.3,<0.7.0",
-    "gradio>=5.16.0,<6.0.0",
+    "gradio>=5.46.0,<6.0.0",
     "langchain-chroma>=0.2.1,<0.3.0",
     "langchain-community>=0.3.16,<0.4.0",
     "langchain-core>=0.3.32,<0.4.0",
@@ -37,6 +37,28 @@ exclude = ["references"]
 [tool.ruff.lint]
 select = ["E", "F", "I"]
 ignore = ["E501"]
+
+[tool.lanorme]
+extends = ["strict"]
+baseline = "lanorme-baseline.json"
+exclude = [
+    ".cache/**",
+    ".codex/**",
+    ".coverage",
+    ".git/**",
+    ".mypy_cache/**",
+    ".pytest_cache/**",
+    ".ruff_cache/**",
+    ".venv/**",
+    "**/__pycache__/**",
+    "data/chroma/**",
+    "evals/results/**",
+    "evals/runtime/**",
+    "references/**",
+]
+
+[tool.lanorme.stray_artifacts]
+exclude = ["output"]
 
 [tool.pyright]
 pythonVersion = "3.12"

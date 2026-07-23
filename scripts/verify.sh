@@ -17,6 +17,9 @@ uv run ruff format --check .
 echo "==> Pyright"
 uv run pyright
 
+echo "==> Lanorme"
+uvx --python 3.13 --from lanorme==0.14.2 lanorme check .
+
 echo "==> Tests without live Ollama"
 uv run pytest -m "not ollama"
 

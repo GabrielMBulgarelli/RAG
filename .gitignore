@@ -28,8 +28,9 @@ data/*
 logs/
 *.log
 
-# Evaluation artifacts
-/evals/
+# Evaluation datasets and generated artifacts
+/evals/*
+!/evals/mvp_cases.jsonl
 /evals/results/
 
 # Agent project notes

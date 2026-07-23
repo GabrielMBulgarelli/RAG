@@ -1064,6 +1064,11 @@ def test_evaluation_adapters_reveal_results_and_status(tmp_path: Path, monkeypat
             "loaded",
         ),
     )
+    monkeypatch.setattr(
+        app,
+        "evaluation_readiness",
+        lambda _split, _systems: EvaluationReadiness(state="ready"),
+    )
 
     (
         results_panel,

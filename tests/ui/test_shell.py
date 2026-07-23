@@ -106,6 +106,45 @@ def test_every_sidebar_has_an_automatic_multi_file_uploader() -> None:
     }.isdisjoint(values)
 
 
+def test_sidebar_owns_evaluation_controls_after_runtime_cards() -> None:
+    # Arrange
+    config = build_application(cast(Any, StubApplication())).get_config_file()
+    elem_ids = {
+        component["id"]: component["props"].get("elem_id") for component in config["components"]
+    }
+    raw_layout = config.get("layout")
+    assert raw_layout is not None
+    layout = cast(dict[str, Any], raw_layout)
+
+    def layout_node(node: dict[str, Any], elem_id: str) -> dict[str, Any]:
+        if elem_ids.get(node["id"]) == elem_id:
+            return node
+        for child in node.get("children", []):
+            try:
+                return layout_node(child, elem_id)
+            except AssertionError:
+                continue
+        raise AssertionError(f"Missing layout node: {elem_id}")
+
+    # Act
+    sidebar = layout_node(layout, "application-sidebar")
+    evaluation = layout_node(layout, "sidebar-evaluation-actions")
+    header_actions = layout_node(layout, "ask-header-actions")
+
+    # Assert the real controls are the final sidebar section, not header children.
+    assert [elem_ids.get(child["id"]) for child in sidebar["children"]][-2:] == [
+        "sidebar-status",
+        "sidebar-evaluation-actions",
+    ]
+    assert [elem_ids.get(child["id"]) for child in evaluation["children"]] == [
+        "run-evaluation",
+        "ask-evaluation-status",
+    ]
+    assert [elem_ids.get(child["id"]) for child in header_actions["children"]] == [
+        "ask-model-status"
+    ]
+
+
 def test_stylesheet_suppresses_gradio_generated_navbar_fallback() -> None:
     # Act
     stylesheet = (Path(__file__).parents[2] / "modules" / "ui" / "app.css").read_text(

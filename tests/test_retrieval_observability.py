@@ -225,7 +225,10 @@ def test_validate_exposes_subqueries_and_public_termination_event() -> None:
         "route": Route.SIMPLE_SEARCH,
         "strategy": RetrievalStrategy.SEMANTIC,
         "retry_count": 1,
-        "grade": EvidenceGrade(status=EvidenceStatus.INSUFFICIENT),
+        "grade": EvidenceGrade(
+            status=EvidenceStatus.INSUFFICIENT,
+            answer_supported=False,
+        ),
         "queries": ["refined query"],
         "trace": [],
     }

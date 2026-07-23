@@ -44,8 +44,34 @@ class QueryDecomposition(BaseModel):
     queries: list[str] = Field(min_length=1, max_length=4)
 
 
+class SubquerySpec(BaseModel):
+    id: str
+    text: str = Field(min_length=1)
+
+
+class QueryRefinement(BaseModel):
+    rewrites: dict[str, str] = Field(default_factory=dict)
+
+
+class SubqueryEvidence(BaseModel):
+    subquery_id: str
+    relevant_labels: list[str] = Field(default_factory=list)
+
+
+class EvidenceDecision(BaseModel):
+    answer_supported: bool
+    drafted_answer: str = ""
+    assessments: list[SubqueryEvidence] = Field(default_factory=list)
+    conflict: bool = False
+    conflicting_labels: list[str] = Field(default_factory=list)
+    reason: str = ""
+
+
 class EvidenceGrade(BaseModel):
     status: EvidenceStatus
+    answer_supported: bool
+    drafted_answer: str = ""
+    assessments: list[SubqueryEvidence] = Field(default_factory=list)
     relevant_labels: list[str] = Field(default_factory=list)
     supported_subqueries: list[str] = Field(default_factory=list)
     unsupported_subqueries: list[str] = Field(default_factory=list)
@@ -125,6 +151,10 @@ class RAGResult(BaseModel):
     evidence_status: EvidenceStatus
     sources: list[CitationSource] = Field(default_factory=list)
     subqueries: list[str] = Field(default_factory=list, max_length=4)
+    subquery_specs: list[SubquerySpec] = Field(default_factory=list, max_length=4)
+    rewritten_subqueries: list[SubquerySpec] = Field(default_factory=list, max_length=4)
+    supported_subquery_ids: list[str] = Field(default_factory=list)
+    relevant_labels: list[str] = Field(default_factory=list)
     retrieval_hits: list[RetrievalHit] = Field(default_factory=list)
     trace: list[TraceEvent] = Field(default_factory=list)
     validation: AnswerValidation = Field(

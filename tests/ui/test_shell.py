@@ -89,8 +89,15 @@ def test_every_sidebar_has_an_automatic_multi_file_uploader() -> None:
 
     # Assert the remaining root route exposes only automatic ingestion controls.
     assert len(uploaders) == 1
-    assert all(uploader["file_count"] == "multiple" for uploader in uploaders)
-    assert all(uploader["file_types"] == [".pdf", ".txt"] for uploader in uploaders)
+    uploader = uploaders[0]
+    assert uploader["label"] == "Drop files here or click to upload"
+    assert uploader["show_label"] is False
+    assert uploader["file_count"] == "multiple"
+    assert uploader["file_types"] == [".pdf", ".txt"]
+    assert all("Add documents" not in value for value in values)
+    assert all(
+        "PDF or TXT files are indexed as soon as you select them." not in value for value in values
+    )
     assert {
         "Add Documents",
         "Reindex Changed Documents",

@@ -61,10 +61,9 @@ def _build_deletion_components() -> tuple[gr.Button, gr.HTML, gr.Group, gr.Butto
 def build_sidebar_document_components() -> SidebarDocumentComponents:
     """Create the automatic ingestion surface shared by every route."""
     with gr.Group(elem_id="sidebar-document-ingestion"):
-        gr.Markdown("### Add documents")
-        gr.Markdown("PDF or TXT files are indexed as soon as you select them.")
         upload = gr.File(
             label="Drop files here or click to upload",
+            show_label=False,
             file_count="multiple",
             file_types=[".pdf", ".txt"],
             type="filepath",

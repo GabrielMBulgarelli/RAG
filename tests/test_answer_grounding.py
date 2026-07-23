@@ -9,6 +9,7 @@ from modules.models import (
     RetrievalHit,
     RetrievalStrategy,
     Route,
+    SubqueryEvidence,
 )
 from modules.rag_graph import RAGGraph
 
@@ -36,6 +37,7 @@ def hit(chunk_id: str, content: str) -> RetrievalHit:
 def test_evidence_grade_exposes_subquery_coverage_and_conflict() -> None:
     grade = EvidenceGrade(
         status=EvidenceStatus.LIMITED,
+        answer_supported=True,
         relevant_labels=["C1"],
         supported_subqueries=["policy"],
         unsupported_subqueries=["exception"],
@@ -98,10 +100,11 @@ def test_grade_requires_every_subquery_for_sufficient_evidence() -> None:
     graph = RAGGraph.__new__(RAGGraph)
     cast(Any, graph)._structured = lambda _schema, _prompt: EvidenceGrade(
         status=EvidenceStatus.SUFFICIENT,
-        supported_subqueries=["policy"],
-        unsupported_subqueries=["exception"],
-        relevant_labels=["C1"],
-        relevant_labels_by_subquery={"policy": ["C1"]},
+        answer_supported=True,
+        assessments=[
+            SubqueryEvidence(subquery_id="SQ1", relevant_labels=["C1"]),
+            SubqueryEvidence(subquery_id="SQ2", relevant_labels=[]),
+        ],
     )
     state = {
         "hits": [hit("policy", "The policy applies."), hit("exception", "No exception here.")],
@@ -115,17 +118,16 @@ def test_grade_requires_every_subquery_for_sufficient_evidence() -> None:
 
     assert grade.status == EvidenceStatus.LIMITED
     assert grade.coverage_fraction == 0.5
-    assert grade.supported_subqueries == ["policy"]
-    assert grade.unsupported_subqueries == ["exception"]
+    assert grade.supported_subqueries == ["SQ1"]
+    assert grade.unsupported_subqueries == ["SQ2"]
 
 
 def test_grade_keeps_conflicting_full_coverage_limited() -> None:
     graph = RAGGraph.__new__(RAGGraph)
     cast(Any, graph)._structured = lambda _schema, _prompt: EvidenceGrade(
         status=EvidenceStatus.SUFFICIENT,
-        supported_subqueries=["deadline"],
-        relevant_labels=["C1", "C2"],
-        relevant_labels_by_subquery={"deadline": ["C1", "C2"]},
+        answer_supported=True,
+        assessments=[SubqueryEvidence(subquery_id="SQ1", relevant_labels=["C1", "C2"])],
         conflict=True,
         conflicting_labels=["C1", "C2"],
     )
@@ -169,6 +171,7 @@ def answer_state(answer: str, *, status: EvidenceStatus = EvidenceStatus.SUFFICI
         "retry_count": 0,
         "grade": EvidenceGrade(
             status=status,
+            answer_supported=True,
             relevant_labels=["C2"],
             supported_subqueries=["answer"],
             relevant_labels_by_subquery={"answer": ["C2"]},
@@ -191,7 +194,23 @@ def test_generator_receives_only_relevant_evidence_with_stable_labels() -> None:
     assert "[C2] guide.txt" in llm.prompts[0]
     assert "[C1] guide.txt" not in llm.prompts[0]
     assert [item.label for item in update["sources"]] == ["C2"]
-    assert "Begin with a direct, concise answer" in llm.prompts[0]
+    assert "Begin with the answer entity or yes/no" in llm.prompts[0]
+    assert "Use exactly one sentence" in llm.prompts[0]
+
+
+def test_generator_reuses_grounded_draft_without_another_llm_call() -> None:
+    graph = RAGGraph.__new__(RAGGraph)
+    llm = AnswerLLM([])
+    cast(Any, graph).llm = llm
+    state = answer_state("")
+    state["grade"] = state["grade"].model_copy(update={"drafted_answer": "The answer is 42 [C2]."})
+
+    update = graph._answer(cast(Any, state))
+
+    assert update["answer"] == "The answer is 42 [C2]."
+    assert [item.label for item in update["sources"]] == ["C2"]
+    assert update["trace"][-1].llm_calls == 0
+    assert llm.prompts == []
 
 
 def test_invalid_answer_is_repaired_once_and_exposes_validation() -> None:
@@ -227,3 +246,22 @@ def test_failed_repair_returns_safe_fallback_without_sources() -> None:
     assert result.validation.repair_violations == [models.AnswerViolation.UNCITED_CLAIM]
     assert len(llm.prompts) == 1
     assert result.trace[-1].termination == "validation_failed"
+
+
+def test_failed_repair_keeps_only_the_grounded_part_of_the_original_answer() -> None:
+    graph = RAGGraph.__new__(RAGGraph)
+    llm = AnswerLLM(["Still unsupported."])
+    cast(Any, graph).llm = llm
+
+    result = graph._validate(
+        cast(
+            Any,
+            answer_state("The answer is 42 [C2]. This extra claim has no citation."),
+        )
+    )["result"]
+
+    assert result.answer == "The answer is 42 [C2]."
+    assert [item.label for item in result.sources] == ["C2"]
+    assert result.validation.is_valid
+    assert result.validation.repair_attempted
+    assert result.trace[-1].termination == "supported"

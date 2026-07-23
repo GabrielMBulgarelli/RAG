@@ -13,23 +13,31 @@ from langchain_ollama import ChatOllama
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
-from modules.citations import build_cited_context, build_relevant_context, validate_answer
+from modules.citations import (
+    build_cited_context,
+    build_relevant_context,
+    retain_cited_claims,
+    validate_answer,
+)
 from modules.config import config
+from modules.contracts import GraphVectorStore
 from modules.models import (
     AnswerValidation,
     CitationSource,
+    EvidenceDecision,
     EvidenceGrade,
     EvidenceStatus,
-    QueryDecomposition,
+    QueryRefinement,
     RAGResult,
     RetrievalHit,
     RetrievalStrategy,
     Route,
     RouteDecision,
+    SubqueryEvidence,
+    SubquerySpec,
     TraceEvent,
 )
 from modules.retrieval import Retriever, select_candidates
-from modules.vector_db import VectorDBManager
 
 
 class RAGState(TypedDict):
@@ -38,8 +46,9 @@ class RAGState(TypedDict):
     rewritten_query: str
     route: Route
     strategy: RetrievalStrategy
-    queries: list[str]
-    required_queries: list[str]
+    queries: list[SubquerySpec]
+    required_queries: list[SubquerySpec]
+    rewritten_subqueries: list[SubquerySpec]
     preserved_hits: list[RetrievalHit]
     hits: list[RetrievalHit]
     grade: EvidenceGrade
@@ -50,11 +59,16 @@ class RAGState(TypedDict):
     trace: list[TraceEvent]
     result: RAGResult
     validation: AnswerValidation
+    termination_hint: str
 
 
-def decide_after_grading(status: EvidenceStatus, retry_count: int) -> str:
+def decide_after_grading(
+    status: EvidenceStatus, retry_count: int, *, has_evidence: bool = False
+) -> str:
     if status in {EvidenceStatus.SUFFICIENT, EvidenceStatus.LIMITED}:
         return "answer"
+    if has_evidence:
+        return "abstain"
     return "retry" if retry_count < config.max_retries else "abstain"
 
 
@@ -108,14 +122,28 @@ def _trace(state: RAGState, event: TraceEvent) -> list[TraceEvent]:
     return [*state.get("trace", []), event]
 
 
+def _subquery_specs(values: list[SubquerySpec] | list[str]) -> list[SubquerySpec]:
+    return [
+        value if isinstance(value, SubquerySpec) else SubquerySpec(id=f"SQ{index}", text=value)
+        for index, value in enumerate(values, 1)
+    ]
+
+
+def make_chat_model(model: str | None = None) -> ChatOllama:
+    """Build an Ollama client that cannot monopolize a benchmark run."""
+    return ChatOllama(
+        model=model or config.llm_model,
+        base_url=config.ollama_base_url,
+        temperature=config.temperature,
+        num_predict=512,
+        client_kwargs={"timeout": 60.0},
+    )
+
+
 class RAGGraph:
-    def __init__(self, vector_db: VectorDBManager, llm: ChatOllama | None = None):
+    def __init__(self, vector_db: GraphVectorStore, llm: ChatOllama | None = None):
         self.vector_db = vector_db
-        self.llm = llm or ChatOllama(
-            model=config.llm_model,
-            base_url=config.ollama_base_url,
-            temperature=config.temperature,
-        )
+        self.llm = llm or make_chat_model()
         self.retriever = Retriever(vector_db.setup())
         self.memory: dict[str, list[dict[str, str]]] = {}
         self.graph = self._compile()
@@ -223,6 +251,7 @@ Request: {state["rewritten_query"]}"""
             "answer": answer,
             "grade": EvidenceGrade(
                 status=EvidenceStatus.INSUFFICIENT,
+                answer_supported=False,
                 reason="No retrieval was appropriate for this route.",
             ),
             "trace": _trace(
@@ -247,7 +276,11 @@ Request: {state["rewritten_query"]}"""
         status = EvidenceStatus.SUFFICIENT if names else EvidenceStatus.INSUFFICIENT
         return {
             "answer": answer,
-            "grade": EvidenceGrade(status=status, reason="Catalog inspected."),
+            "grade": EvidenceGrade(
+                status=status,
+                answer_supported=bool(names),
+                reason="Catalog inspected.",
+            ),
             "trace": _trace(
                 state,
                 TraceEvent(
@@ -261,15 +294,7 @@ Request: {state["rewritten_query"]}"""
 
     def _decompose(self, state: RAGState) -> dict:
         started = perf_counter()
-        result = cast(
-            QueryDecomposition,
-            self._structured(
-                QueryDecomposition,
-                "Break this complex document question into one to four independent retrieval "
-                "queries. Do not answer it.\nQuestion: " + state["rewritten_query"],
-            ),
-        )
-        queries = result.queries[: config.max_subqueries]
+        queries = [SubquerySpec(id="SQ1", text=state["rewritten_query"])]
         return {
             "queries": queries,
             "required_queries": queries,
@@ -277,8 +302,9 @@ Request: {state["rewritten_query"]}"""
                 state,
                 TraceEvent(
                     stage="decompose",
+                    decision="preserve_full_question",
                     selected_count=len(queries),
-                    llm_calls=1,
+                    llm_calls=0,
                     duration_ms=(perf_counter() - started) * 1000,
                 ),
             ),
@@ -286,14 +312,15 @@ Request: {state["rewritten_query"]}"""
 
     def _retrieve(self, state: RAGState) -> dict:
         started = perf_counter()
-        queries = state.get("queries") or [state["rewritten_query"]]
+        queries = _subquery_specs(state.get("queries") or [state["rewritten_query"]])
         preserved_hits = state.get("preserved_hits", [])
         by_id: dict[str, RetrievalHit] = {hit.chunk_id: hit for hit in preserved_hits}
+        coverage_chunk_ids: set[str] = set()
         retrieved_count = 0
 
-        def search(query: str):
+        def search(query: SubquerySpec):
             return self.retriever.search(
-                query,
+                query.text,
                 strategy=state["strategy"].value,
                 semantic_k=config.semantic_candidates,
                 sparse_k=config.sparse_candidates,
@@ -310,8 +337,10 @@ Request: {state["rewritten_query"]}"""
 
         for query, batch in zip(queries, batches, strict=True):
             retrieved_count += batch.retrieved_count
+            if batch.hits:
+                coverage_chunk_ids.add(batch.hits[0].chunk_id)
             for hit in batch.hits:
-                hit = hit.model_copy(update={"subqueries": sorted({*hit.subqueries, query})})
+                hit = hit.model_copy(update={"subqueries": sorted({*hit.subqueries, query.text})})
                 old = by_id.get(hit.chunk_id)
                 if old is None:
                     by_id[hit.chunk_id] = hit
@@ -349,9 +378,14 @@ Request: {state["rewritten_query"]}"""
         selected = select_candidates(
             list(by_id.values()),
             limit=config.max_context_chunks,
-            preserve_chunk_ids={hit.chunk_id for hit in preserved_hits},
+            preserve_chunk_ids={
+                *(hit.chunk_id for hit in preserved_hits),
+                *coverage_chunk_ids,
+            },
         )
         return {
+            "queries": queries,
+            "required_queries": state.get("required_queries") or queries,
             "hits": selected,
             "trace": _trace(
                 state,
@@ -372,14 +406,15 @@ Request: {state["rewritten_query"]}"""
     def _grade(self, state: RAGState) -> dict:
         started = perf_counter()
         hits = state.get("hits", [])
-        queries = (
+        queries = _subquery_specs(
             state.get("required_queries") or state.get("queries") or [state["rewritten_query"]]
         )
         if not hits:
             return {
                 "grade": EvidenceGrade(
                     status=EvidenceStatus.INSUFFICIENT,
-                    unsupported_subqueries=queries,
+                    answer_supported=False,
+                    unsupported_subqueries=[query.id for query in queries],
                     reason="No evidence.",
                 ),
                 "trace": _trace(
@@ -395,63 +430,76 @@ Request: {state["rewritten_query"]}"""
                 ),
             }
         context, _ = build_cited_context(hits)
+        subquery_contract = [{"id": query.id, "text": query.text} for query in queries]
         proposed = cast(
-            EvidenceGrade,
+            EvidenceDecision,
             self._structured(
-                EvidenceGrade,
-                f"""Grade the evidence separately for every required subquery. Reproduce each
-subquery exactly in supported_subqueries or unsupported_subqueries and map its relevant
-[C#] labels in relevant_labels_by_subquery. Evidence is sufficient only when every
-subquery is supported. Use limited for partial coverage or conflicting evidence, and
-insufficient when none is useful. Identify conflicting labels when present.
+                EvidenceDecision,
+                f"""Grade the evidence separately for every required subquery. For each supplied
+subquery ID, return one assessment containing that exact ID and its useful [C#] labels.
+Do not reproduce or edit subquery text. When the evidence directly resolves the final
+question, set answer_supported true and draft the final answer in drafted_answer. The draft
+must begin with the answer entity or yes/no, use exactly one sentence, and cite every factual
+claim with the supplied [C#] labels. Otherwise set answer_supported false and drafted_answer
+to an empty string. A shared entity explicitly named across independent evidence items
+directly supports an entity-linking answer; unrelated topical overlap or partial clues do not.
+Evidence is sufficient only when every subquery has at least one useful label. Use limited
+for partial coverage or conflicting evidence, and insufficient when the final answer is not
+directly supported. Identify conflicting labels when present.
 Question: {state["rewritten_query"]}
-Subqueries: {queries}\nEvidence:\n{context}""",
+Subqueries: {subquery_contract}\nEvidence:\n{context}""",
             ),
         )
         valid_labels = {f"C{index}" for index in range(1, len(hits) + 1)}
-        labels_by_query = {
-            query: [
-                label
-                for label in proposed.relevant_labels_by_subquery.get(query, [])
-                if label in valid_labels
-            ]
-            for query in queries
-        }
-        if len(queries) == 1 and not labels_by_query[queries[0]]:
-            labels_by_query[queries[0]] = [
-                label for label in proposed.relevant_labels if label in valid_labels
-            ]
-        supported = [
-            query
-            for query in queries
-            if query in proposed.supported_subqueries and labels_by_query[query]
-        ]
-        unsupported = [query for query in queries if query not in supported]
+        query_ids = [query.id for query in queries]
+        labels_by_query = {query_id: [] for query_id in query_ids}
+        for assessment in proposed.assessments:
+            if assessment.subquery_id not in labels_by_query:
+                continue
+            labels_by_query[assessment.subquery_id] = list(
+                dict.fromkeys(
+                    label for label in assessment.relevant_labels if label in valid_labels
+                )
+            )
+        supported = [query_id for query_id in query_ids if labels_by_query[query_id]]
+        unsupported = [query_id for query_id in query_ids if query_id not in supported]
         relevant_labels = list(
-            dict.fromkeys(label for query in queries for label in labels_by_query[query])
+            dict.fromkeys(label for query_id in query_ids for label in labels_by_query[query_id])
         )
         coverage = len(supported) / len(queries) if queries else 0.0
         conflict_labels = [label for label in proposed.conflicting_labels if label in valid_labels]
         conflict = proposed.conflict and bool(conflict_labels)
-        if not supported:
+        if not supported or not proposed.answer_supported:
             status = EvidenceStatus.INSUFFICIENT
         elif coverage < 1.0 or conflict:
             status = EvidenceStatus.LIMITED
         else:
             status = EvidenceStatus.SUFFICIENT
-        grade = proposed.model_copy(
-            update={
-                "status": status,
-                "relevant_labels": relevant_labels,
-                "supported_subqueries": supported,
-                "unsupported_subqueries": unsupported,
-                "relevant_labels_by_subquery": labels_by_query,
-                "coverage_fraction": coverage,
-                "fully_supported": coverage == 1.0 and not conflict,
-                "partially_supported": 0.0 < coverage < 1.0,
-                "conflict": conflict,
-                "conflicting_labels": conflict_labels,
-            }
+        grade = EvidenceGrade(
+            status=status,
+            answer_supported=proposed.answer_supported,
+            drafted_answer=(
+                proposed.drafted_answer.strip()
+                if status in {EvidenceStatus.SUFFICIENT, EvidenceStatus.LIMITED}
+                else ""
+            ),
+            assessments=[
+                SubqueryEvidence(
+                    subquery_id=query_id,
+                    relevant_labels=labels_by_query[query_id],
+                )
+                for query_id in query_ids
+            ],
+            relevant_labels=relevant_labels,
+            supported_subqueries=supported,
+            unsupported_subqueries=unsupported,
+            relevant_labels_by_subquery=labels_by_query,
+            coverage_fraction=coverage,
+            fully_supported=coverage == 1.0 and not conflict,
+            partially_supported=0.0 < coverage < 1.0,
+            conflict=conflict,
+            conflicting_labels=conflict_labels,
+            reason=proposed.reason,
         )
         return {
             "grade": grade,
@@ -470,14 +518,18 @@ Subqueries: {queries}\nEvidence:\n{context}""",
         }
 
     def _after_grade(self, state: RAGState) -> str:
-        return decide_after_grading(state["grade"].status, state["retry_count"])
+        return decide_after_grading(
+            state["grade"].status,
+            state["retry_count"],
+            has_evidence=bool(state.get("hits")),
+        )
 
     def _refine(self, state: RAGState) -> dict:
         started = perf_counter()
         grade = state["grade"]
-        pending = grade.unsupported_subqueries or (
-            state.get("required_queries") or state.get("queries") or []
-        )
+        required = _subquery_specs(state.get("required_queries") or state.get("queries") or [])
+        pending_ids = set(grade.unsupported_subqueries) or {query.id for query in required}
+        pending = [query for query in required if query.id in pending_ids]
         relevant_labels = set(grade.relevant_labels)
         preserved_hits = [
             hit
@@ -485,18 +537,41 @@ Subqueries: {queries}\nEvidence:\n{context}""",
             if f"C{index}" in relevant_labels
         ]
         retry_count = state["retry_count"] + 1
+        proposed = cast(
+            QueryRefinement,
+            self._structured(
+                QueryRefinement,
+                f"""Rewrite only the unsupported retrieval queries so they are materially
+different and more likely to retrieve the missing evidence. Keep the supplied IDs as
+the keys in rewrites. Return no other IDs and do not answer the question.
+Question: {state.get("rewritten_query", state.get("query", ""))}
+Unsupported subqueries: {[query.model_dump() for query in pending]}""",
+            ),
+        )
+        rewritten = [
+            SubquerySpec(id=query.id, text=text.strip())
+            for query in pending
+            if (text := proposed.rewrites.get(query.id, "")).strip()
+            and " ".join(text.lower().split()) != " ".join(query.text.lower().split())
+        ][: config.max_subqueries]
+        decision = "rewrite_unsupported" if rewritten else "retry_noop"
         return {
-            "queries": pending[: config.max_subqueries],
+            "queries": rewritten,
+            "rewritten_subqueries": [
+                *state.get("rewritten_subqueries", []),
+                *rewritten,
+            ],
             "preserved_hits": preserved_hits,
             "retry_count": retry_count,
+            "termination_hint": None if rewritten else "retry_noop",
             "trace": _trace(
                 state,
                 TraceEvent(
                     stage="retry",
-                    decision="target_unsupported",
+                    decision=decision,
                     selected_count=len(preserved_hits),
                     retry_count=retry_count,
-                    llm_calls=0,
+                    llm_calls=1,
                     duration_ms=(perf_counter() - started) * 1000,
                 ),
             ),
@@ -507,12 +582,27 @@ Subqueries: {queries}\nEvidence:\n{context}""",
         context, sources = build_relevant_context(
             state["hits"], set(state["grade"].relevant_labels)
         )
+        drafted_answer = state["grade"].drafted_answer.strip()
+        if drafted_answer:
+            return {
+                "answer": drafted_answer,
+                "sources": sources,
+                "trace": _trace(
+                    state,
+                    TraceEvent(
+                        stage="generate",
+                        decision="reuse_grounded_draft",
+                        llm_calls=0,
+                        duration_ms=(perf_counter() - started) * 1000,
+                    ),
+                ),
+            }
         qualifier = (
             "Clearly say the answer is limited. "
             if state["grade"].status == EvidenceStatus.LIMITED
             else ""
         )
-        prompt = f"""Begin with a direct, concise answer, followed only by the synthesis needed.
+        prompt = f"""Begin with the answer entity or yes/no. Use exactly one sentence.
 Answer only from the evidence. {qualifier}Cite every factual claim with
 its exact [C#] label. Do not invent labels, filenames, confidence, or a sources list.
 Question: {state["rewritten_query"]}\nEvidence:\n{context}"""
@@ -597,20 +687,38 @@ Evidence:\n{context}"""
                 )
                 validation_decision = "repaired"
             else:
-                answer = "I could not produce a fully cited answer from the available evidence."
-                cited = []
-                validation = validate_answer(
-                    answer, [], known_labels=set(), require_citations=False
-                ).model_copy(
-                    update={
-                        "repair_attempted": True,
-                        "repair_succeeded": False,
-                        "initial_violations": initial.violations,
-                        "repair_violations": repaired.violations,
-                    }
+                salvaged = retain_cited_claims(
+                    state["answer"],
+                    relevant_sources,
+                    known_labels=known_labels,
                 )
-                validation_failed = True
-                validation_decision = "fallback"
+                if salvaged.is_valid and salvaged.used_sources:
+                    answer = salvaged.sanitized_text
+                    cited = salvaged.used_sources
+                    validation = salvaged.model_copy(
+                        update={
+                            "repair_attempted": True,
+                            "repair_succeeded": False,
+                            "initial_violations": initial.violations,
+                            "repair_violations": repaired.violations,
+                        }
+                    )
+                    validation_decision = "salvaged"
+                else:
+                    answer = "I could not produce a fully cited answer from the available evidence."
+                    cited = []
+                    validation = validate_answer(
+                        answer, [], known_labels=set(), require_citations=False
+                    ).model_copy(
+                        update={
+                            "repair_attempted": True,
+                            "repair_succeeded": False,
+                            "initial_violations": initial.violations,
+                            "repair_violations": repaired.violations,
+                        }
+                    )
+                    validation_failed = True
+                    validation_decision = "fallback"
         if state["route"] == Route.CLARIFICATION:
             termination = "clarification"
         elif state["route"] == Route.CATALOG:
@@ -619,6 +727,8 @@ Evidence:\n{context}"""
             termination = "out_of_scope"
         elif validation_failed:
             termination = "validation_failed"
+        elif state.get("termination_hint"):
+            termination = state["termination_hint"]
         elif state["grade"].status == EvidenceStatus.INSUFFICIENT:
             termination = "unsupported"
         elif state["grade"].status == EvidenceStatus.LIMITED:
@@ -645,6 +755,9 @@ Evidence:\n{context}"""
                 termination=termination,
             )
         )
+        required_queries = _subquery_specs(
+            state.get("required_queries") or state.get("queries") or []
+        )
         result = RAGResult(
             answer=answer,
             standalone_query=state.get("rewritten_query", state.get("query", "")),
@@ -653,7 +766,11 @@ Evidence:\n{context}"""
             retry_count=state.get("retry_count", 0),
             evidence_status=state["grade"].status,
             sources=cited,
-            subqueries=state.get("required_queries") or state.get("queries", []),
+            subqueries=[query.text for query in required_queries],
+            subquery_specs=required_queries,
+            rewritten_subqueries=state.get("rewritten_subqueries", []),
+            supported_subquery_ids=state["grade"].supported_subqueries,
+            relevant_labels=state["grade"].relevant_labels,
             retrieval_hits=state.get("hits", []),
             trace=trace,
             validation=validation,
@@ -707,7 +824,11 @@ Evidence:\n{context}"""
                 "abstain": "abstain",
             },
         )
-        graph.add_edge("refine", "retrieve")
+        graph.add_conditional_edges(
+            "refine",
+            lambda state: "retrieve" if state.get("queries") else "abstain",
+            {"retrieve": "retrieve", "abstain": "abstain"},
+        )
         for node in ("catalog", "direct", "generate_answer", "abstain"):
             graph.add_edge(node, "validate")
         graph.add_edge("validate", END)

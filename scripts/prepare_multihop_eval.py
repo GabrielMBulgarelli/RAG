@@ -10,8 +10,9 @@ import random
 import shutil
 import sys
 from collections import defaultdict
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Required, TypedDict, cast
 
 from datasets import load_dataset
 from huggingface_hub import HfApi
@@ -42,7 +43,64 @@ TEST_QUOTA = {
 }
 
 
-def stable_document_id(record: dict[str, Any]) -> str:
+class CorpusRow(TypedDict, total=False):
+    url: str
+    source: str
+    title: str
+    author: str
+    published_at: str
+    category: str
+    body: str
+
+
+class EvidenceRow(TypedDict, total=False):
+    url: str
+    source: str
+    title: str
+    fact: str
+    author: str
+    category: str
+    published_at: str
+
+
+class QuestionRow(TypedDict, total=False):
+    question_type: Required[str]
+    query: Required[str]
+    evidence_list: list[EvidenceRow]
+    answer: str
+
+
+class SelectedQuestionRow(QuestionRow):
+    original_index: Required[int]
+
+
+class SelectedQuestionRows(TypedDict):
+    development: list[SelectedQuestionRow]
+    test: list[SelectedQuestionRow]
+
+
+class SourceMapEntry(TypedDict):
+    benchmark_document_id: str
+    original_row: int
+    relative_path: str
+    document_id: str
+    source: str
+    title: str
+    author: str
+    published_at: str
+    url: str
+    category: str
+
+
+def _corpus_row(record: Mapping[str, object]) -> CorpusRow:
+    return cast(CorpusRow, dict(record))
+
+
+def _question_row(record: Mapping[str, object]) -> QuestionRow:
+    return cast(QuestionRow, dict(record))
+
+
+def stable_document_id(record: CorpusRow | Mapping[str, object]) -> str:
     identity = str(record.get("url") or "").strip()
     if not identity:
         identity = json.dumps(
@@ -54,15 +112,16 @@ def stable_document_id(record: dict[str, Any]) -> str:
 
 
 def select_question_rows(
-    rows: list[dict[str, Any]], seed: int = SEED
-) -> dict[str, list[dict[str, Any]]]:
-    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for index, row in enumerate(rows):
+    rows: Sequence[QuestionRow | Mapping[str, object]], *, seed: int = SEED
+) -> SelectedQuestionRows:
+    grouped: dict[str, list[SelectedQuestionRow]] = defaultdict(list)
+    for index, raw_row in enumerate(rows):
+        row = _question_row(raw_row)
         query_type = str(row["question_type"])
         if query_type in TYPE_ORDER:
-            grouped[query_type].append({**row, "original_index": index})
+            grouped[query_type].append(cast(SelectedQuestionRow, {**row, "original_index": index}))
     rng = random.Random(seed)
-    selected: dict[str, list[dict[str, Any]]] = {"development": [], "test": []}
+    selected = SelectedQuestionRows(development=[], test=[])
     for query_type in TYPE_ORDER:
         candidates = grouped[query_type]
         rng.shuffle(candidates)
@@ -74,14 +133,14 @@ def select_question_rows(
     return selected
 
 
-def _write_corpus(records: list[dict[str, Any]], *, reset: bool) -> dict[str, dict[str, Any]]:
+def _write_corpus(records: list[CorpusRow], *, reset: bool) -> dict[str, SourceMapEntry]:
     corpus_dir = MULTIHOP_ROOT / "corpus"
     if reset and corpus_dir.exists():
         shutil.rmtree(corpus_dir)
     corpus_dir.mkdir(parents=True, exist_ok=True)
     settings = multihop_settings()
     manager = VectorDBManager(settings)
-    source_map: dict[str, dict[str, Any]] = {}
+    source_map: dict[str, SourceMapEntry] = {}
     for index, record in enumerate(records):
         benchmark_id = stable_document_id(record)
         relative_path = f"{index:04d}-{benchmark_id[:12]}.txt"
@@ -109,7 +168,7 @@ def _write_corpus(records: list[dict[str, Any]], *, reset: bool) -> dict[str, di
 
 
 def _resolve_evidence_document(
-    evidence: dict[str, Any], records_by_url: dict[str, dict[str, Any]]
+    evidence: EvidenceRow, *, records_by_url: dict[str, CorpusRow]
 ) -> str:
     url = str(evidence.get("url", ""))
     record = records_by_url.get(url)
@@ -118,47 +177,69 @@ def _resolve_evidence_document(
     return stable_document_id(record)
 
 
-def prepare(*, index: bool = False, reset: bool = False) -> tuple[Path, int]:
-    corpus_rows = [dict(row) for row in load_dataset(DATASET_ID, "corpus", split="train")]
-    question_rows = [dict(row) for row in load_dataset(DATASET_ID, "MultiHopRAG", split="train")]
-    if len(corpus_rows) != 609:
-        raise RuntimeError(f"Expected 609 corpus documents, received {len(corpus_rows)}")
-    source_map = _write_corpus(corpus_rows, reset=reset)
-    records_by_url = {str(row.get("url", "")): row for row in corpus_rows}
-    selected = select_question_rows(question_rows)
-    cases: list[EvaluationCase] = []
-    for split in ("development", "test"):
-        for row in selected[split]:
-            evidence_items: list[BenchmarkEvidence] = []
-            for evidence in row.get("evidence_list", []):
-                evidence_items.append(
-                    BenchmarkEvidence(
-                        benchmark_document_id=_resolve_evidence_document(evidence, records_by_url),
-                        source=str(evidence.get("source", "")),
-                        title=str(evidence.get("title", "")),
-                        url=str(evidence.get("url", "")),
-                        evidence_text=str(evidence.get("fact", "")),
-                        author=str(evidence.get("author", "")),
-                        category=str(evidence.get("category", "")),
-                        published_at=str(evidence.get("published_at", "")),
-                    )
-                )
-            query_type = str(row["question_type"])
-            cases.append(
-                EvaluationCase(
-                    id=f"multihop-{int(row['original_index']):04d}",
-                    split=split,
-                    category=query_type,
-                    question=str(row["query"]),
-                    answerable=query_type != "null_query",
-                    gold_evidence=evidence_items,
-                    expected_answer=str(row.get("answer", "")),
-                    expected_route="complex_search",
-                    expected_strategy="hybrid",
-                    expected_retry=query_type == "null_query",
-                    expected_conflict=False,
-                )
-            )
+def _load_rows() -> tuple[list[CorpusRow], list[QuestionRow]]:
+    corpus_rows = [_corpus_row(row) for row in load_dataset(DATASET_ID, "corpus", split="train")]
+    question_rows = [
+        _question_row(row) for row in load_dataset(DATASET_ID, "MultiHopRAG", split="train")
+    ]
+    return corpus_rows, question_rows
+
+
+def _evidence_items(
+    row: SelectedQuestionRow, *, records_by_url: dict[str, CorpusRow]
+) -> list[BenchmarkEvidence]:
+    return [
+        BenchmarkEvidence(
+            benchmark_document_id=_resolve_evidence_document(
+                evidence, records_by_url=records_by_url
+            ),
+            source=str(evidence.get("source", "")),
+            title=str(evidence.get("title", "")),
+            url=str(evidence.get("url", "")),
+            evidence_text=str(evidence.get("fact", "")),
+            author=str(evidence.get("author", "")),
+            category=str(evidence.get("category", "")),
+            published_at=str(evidence.get("published_at", "")),
+        )
+        for evidence in row.get("evidence_list", [])
+    ]
+
+
+def _evaluation_case(
+    row: SelectedQuestionRow,
+    *,
+    split: str,
+    records_by_url: dict[str, CorpusRow],
+) -> EvaluationCase:
+    query_type = str(row["question_type"])
+    return EvaluationCase(
+        id=f"multihop-{row['original_index']:04d}",
+        split=split,
+        category=query_type,
+        question=str(row["query"]),
+        answerable=query_type != "null_query",
+        gold_evidence=_evidence_items(row, records_by_url=records_by_url),
+        expected_answer=str(row.get("answer", "")),
+        expected_route="complex_search",
+        expected_strategy="hybrid",
+        expected_retry=query_type == "null_query",
+        expected_conflict=False,
+    )
+
+
+def _build_cases(
+    selected: SelectedQuestionRows, *, records_by_url: dict[str, CorpusRow]
+) -> list[EvaluationCase]:
+    return [
+        _evaluation_case(row, split=split, records_by_url=records_by_url)
+        for split in ("development", "test")
+        for row in selected[split]
+    ]
+
+
+def _write_outputs(
+    *, cases: list[EvaluationCase], source_map: dict[str, SourceMapEntry], corpus_count: int
+) -> Path:
     MULTIHOP_ROOT.mkdir(parents=True, exist_ok=True)
     info = HfApi().dataset_info(DATASET_ID)
     map_payload = {
@@ -167,7 +248,7 @@ def prepare(*, index: bool = False, reset: bool = False) -> tuple[Path, int]:
             "revision": info.sha,
             "license": "ODC-By-1.0",
             "seed": SEED,
-            "corpus_documents": len(corpus_rows),
+            "corpus_documents": corpus_count,
         },
         "documents": source_map,
     }
@@ -178,15 +259,29 @@ def prepare(*, index: bool = False, reset: bool = False) -> tuple[Path, int]:
     cases_path.write_text(
         "".join(case.model_dump_json() + "\n" for case in cases), encoding="utf-8"
     )
-    resolved = 0
-    if index:
-        manager = VectorDBManager(multihop_settings())
-        if reset:
-            shutil.rmtree(manager.settings.chroma_dir, ignore_errors=True)
-            manager.settings.manifest_path.unlink(missing_ok=True)
-        manager.index_documents()
-        checked = preflight_multihop(load_cases(cases_path), manager=manager, check_models=False)
-        resolved = sum(len(case.gold_evidence) for case in checked)
+    return cases_path
+
+
+def _index_corpus(*, cases_path: Path, reset: bool) -> int:
+    manager = VectorDBManager(multihop_settings())
+    if reset:
+        shutil.rmtree(manager.settings.chroma_dir, ignore_errors=True)
+        manager.settings.manifest_path.unlink(missing_ok=True)
+    manager.index_documents()
+    checked = preflight_multihop(load_cases(cases_path), manager=manager, check_models=False)
+    return sum(len(case.gold_evidence) for case in checked)
+
+
+def prepare(*, index: bool = False, reset: bool = False) -> tuple[Path, int]:
+    corpus_rows, question_rows = _load_rows()
+    if len(corpus_rows) != 609:
+        raise RuntimeError(f"Expected 609 corpus documents, received {len(corpus_rows)}")
+    source_map = _write_corpus(corpus_rows, reset=reset)
+    records_by_url = {str(row.get("url", "")): row for row in corpus_rows}
+    selected = select_question_rows(question_rows)
+    cases = _build_cases(selected, records_by_url=records_by_url)
+    cases_path = _write_outputs(cases=cases, source_map=source_map, corpus_count=len(corpus_rows))
+    resolved = _index_corpus(cases_path=cases_path, reset=reset) if index else 0
     return cases_path, resolved
 
 

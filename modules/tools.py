@@ -1,8 +1,50 @@
+from collections.abc import Iterable, Iterator
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Protocol, TypedDict, runtime_checkable
 
+from langchain_core.documents import Document
+from langchain_core.runnables import Runnable
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
+
+from .contracts import Metadata
+
+
+class ToolGetResult(TypedDict, total=False):
+    metadatas: list[Metadata | None] | None
+
+
+class RetrieverSearchKwargs(TypedDict):
+    k: int
+
+
+class AvailableDocument(TypedDict):
+    filename: str
+    source_type: str
+    chunks: int
+
+
+class ToolVectorStore(Protocol):
+    def get(self) -> ToolGetResult: ...
+
+
+class BoundRetriever(Protocol):
+    def get_relevant_documents(self, query: str) -> list[Document]: ...
+
+
+@runtime_checkable
+class ToolVectorManager(Protocol):
+    vectorstore: ToolVectorStore | None
+
+    def get_retriever(self, search_kwargs: RetrieverSearchKwargs) -> BoundRetriever: ...
+
+
+class ConversationMessage(TypedDict, total=False):
+    timestamp: str
+
+
+def _present_metadata(items: Iterable[Metadata | None]) -> Iterator[Metadata]:
+    return (item for item in items if item is not None)
 
 
 class DocumentInfo(BaseModel):
@@ -11,19 +53,19 @@ class DocumentInfo(BaseModel):
     filename: str = Field(description="Name of the document")
     source_type: str = Field(description="Type of source (text, pdf)")
     content_preview: str = Field(description="First 200 characters of content")
-    metadata: Dict[str, Any] = Field(description="Additional metadata")
+    metadata: Metadata = Field(description="Additional metadata")
 
 
 class SearchResult(BaseModel):
     """Schema for search results"""
 
     query: str = Field(description="The search query")
-    results: List[Dict[str, Any]] = Field(description="List of search results")
+    results: list[Metadata] = Field(description="List of search results")
     total_results: int = Field(description="Total number of results found")
 
 
 @tool
-def list_available_documents(vector_db_manager) -> str:
+def list_available_documents(vector_db_manager: ToolVectorManager) -> str:
     """List all available documents in the knowledge base"""
     if not vector_db_manager.vectorstore:
         return "No documents available. Vector database not initialized."
@@ -36,13 +78,13 @@ def list_available_documents(vector_db_manager) -> str:
             return "No documents found in the knowledge base."
 
         # Extract unique documents by filename
-        unique_docs = {}
-        for metadata in docs["metadatas"]:
-            filename = metadata.get("filename", "Unknown")
+        unique_docs: dict[str, AvailableDocument] = {}
+        for metadata in _present_metadata(docs.get("metadatas") or []):
+            filename = str(metadata.get("filename", "Unknown"))
             if filename not in unique_docs:
                 unique_docs[filename] = {
                     "filename": filename,
-                    "source_type": metadata.get("source_type", "unknown"),
+                    "source_type": str(metadata.get("source_type", "unknown")),
                     "chunks": 1,
                 }
             else:
@@ -59,7 +101,7 @@ def list_available_documents(vector_db_manager) -> str:
 
 
 @tool
-def search_documents(query: str, vector_db_manager, k: int = 3) -> str:
+def search_documents(query: str, *, vector_db_manager: ToolVectorManager, k: int = 3) -> str:
     """Search for specific information in the documents"""
     if not vector_db_manager.vectorstore:
         return "Vector database not available for search."
@@ -92,7 +134,7 @@ def get_current_time() -> str:
 
 
 @tool
-def get_conversation_summary(messages: List[Dict]) -> str:
+def get_conversation_summary(messages: list[ConversationMessage]) -> str:
     """Summarize the current conversation"""
     if not messages:
         return "No conversation history available."
@@ -107,7 +149,7 @@ def get_conversation_summary(messages: List[Dict]) -> str:
     return summary
 
 
-def get_available_tools(vector_db_manager):
+def get_available_tools(vector_db_manager: ToolVectorManager) -> list[Runnable]:
     """Get list of available tools with vector_db_manager bound"""
     return [
         list_available_documents.bind(vector_db_manager=vector_db_manager),

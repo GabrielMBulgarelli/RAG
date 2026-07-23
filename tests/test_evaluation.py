@@ -1,6 +1,7 @@
 import io
 import json
 import sys
+import time
 import urllib.error
 from pathlib import Path
 from typing import cast
@@ -29,6 +30,15 @@ from modules.evaluation import (
     token_f1,
     write_experiment,
 )
+from modules.evaluation_metrics import aggregate_metrics as decomposed_aggregate_metrics
+from modules.evaluation_models import EvaluationCase as DecomposedEvaluationCase
+from modules.evaluation_reporting import write_experiment as decomposed_write_experiment
+
+
+def test_evaluation_facade_preserves_decomposed_public_api() -> None:
+    assert EvaluationCase is DecomposedEvaluationCase
+    assert aggregate_metrics is decomposed_aggregate_metrics
+    assert write_experiment is decomposed_write_experiment
 
 
 def case(**updates: object) -> EvaluationCase:
@@ -157,6 +167,7 @@ def test_citation_metrics() -> None:
     assert citation_precision([], ["a"]) is None
     assert gold_citation_coverage(["a"], ["a", "b"]) == 0.5
     assert gold_citation_coverage([], []) is None
+    assert token_f1("Sam Altman [C1]", "Sam Altman") == 1.0
 
 
 def test_abstention_conflict_and_termination_metrics() -> None:
@@ -206,6 +217,7 @@ def test_abstention_conflict_and_termination_metrics() -> None:
 def test_split_filtering() -> None:
     cases = [case(id="dev"), case(id="held", split="test")]
     assert [item.id for item in filter_cases(cases, "test")] == ["held"]
+    assert [item.id for item in filter_cases(cases, "development", {"dev"})] == ["dev"]
 
 
 def test_checked_in_dataset_has_seventy_thirty_split() -> None:
@@ -225,14 +237,23 @@ def test_missing_ollama_has_actionable_error(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_required_models_depend_on_selected_systems() -> None:
-    assert evaluation.required_models_for_systems(["bm25"]) == ()
-    assert evaluation.required_models_for_systems(["dense", "hybrid"]) == (
-        evaluation.normalize_model_name(evaluation.config.embedding_model),
-    )
-    assert set(evaluation.required_models_for_systems(["agentic"])) == {
+    # Act
+    bm25 = evaluation.required_models_for_systems(["bm25"])
+    dense_hybrid = evaluation.required_models_for_systems(["dense", "hybrid"])
+    agentic = evaluation.required_models_for_systems(["agentic"])
+    alternate = evaluation.required_models_for_systems(["agentic"], "qwen3:4b")
+
+    # Then dependency checks include only the resources each selected system needs.
+    assert bm25 == ()
+    assert dense_hybrid == (evaluation.normalize_model_name(evaluation.config.embedding_model),)
+    assert set(agentic) == {
         evaluation.normalize_model_name(evaluation.config.embedding_model),
         evaluation.normalize_model_name(evaluation.config.llm_model),
     }
+    assert alternate == (
+        evaluation.normalize_model_name(evaluation.config.embedding_model),
+        "qwen3:4b",
+    )
 
 
 def test_ollama_model_matching_uses_exact_normalized_tags(
@@ -294,6 +315,80 @@ def test_bm25_evaluation_does_not_construct_ollama_or_agentic_graph(
     assert evaluation.run_evaluation(dataset, ["bm25"], "development") == tmp_path
 
 
+def test_run_evaluation_uses_normalized_run_scoped_chat_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Arrange
+    dataset = tmp_path / "cases.jsonl"
+    dataset.write_text(case().model_dump_json() + "\n", encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    class Manager:
+        def setup(self):
+            return object()
+
+    class ChatModel:
+        def __init__(self, **kwargs: object) -> None:
+            captured["chat_kwargs"] = kwargs
+
+    monkeypatch.setattr(evaluation, "VectorDBManager", Manager)
+    monkeypatch.setattr(evaluation, "Retriever", lambda _collection: object())
+    monkeypatch.setattr(evaluation, "ChatOllama", ChatModel)
+    monkeypatch.setattr(
+        evaluation,
+        "RAGGraph",
+        lambda manager, *, llm: {"manager": manager, "llm": llm},
+    )
+    monkeypatch.setattr(
+        evaluation,
+        "_require_ollama",
+        lambda models: captured.update(required_models=models),
+    )
+    monkeypatch.setattr(
+        evaluation,
+        "run_agentic_case",
+        lambda item, _graph, _model, *, timeout_seconds: result(
+            case_id=item.id, system="agentic", latency_seconds=timeout_seconds
+        ),
+    )
+
+    def fake_write(
+        _root: Path,
+        experiment: ExperimentConfig,
+        _results: list[CaseResult],
+        _metrics: object,
+    ) -> Path:
+        captured["experiment"] = experiment
+        return tmp_path / "result"
+
+    monkeypatch.setattr(evaluation, "write_experiment", fake_write)
+
+    # Act
+    output = evaluation.run_evaluation(
+        dataset,
+        ["agentic"],
+        "development",
+        chat_model=" qwen3 ",
+    )
+
+    # Then the normalized tag crosses preflight, construction, and metadata unchanged.
+    assert output == tmp_path / "result"
+    assert captured["required_models"] == (
+        evaluation.normalize_model_name(evaluation.config.embedding_model),
+        "qwen3:latest",
+    )
+    assert captured["chat_kwargs"] == {
+        "model": "qwen3:latest",
+        "base_url": evaluation.config.ollama_base_url,
+        "temperature": evaluation.config.temperature,
+        "num_predict": 512,
+        "client_kwargs": {"timeout": 60.0},
+    }
+    experiment = cast(ExperimentConfig, captured["experiment"])
+    assert experiment.chat_model == "qwen3:latest"
+    assert experiment.case_timeout_seconds == 30.0
+
+
 class FakeModel:
     structured_kwargs: dict[str, object] = {}
 
@@ -353,6 +448,7 @@ def test_experiment_configuration_serializes(tmp_path: Path) -> None:
     summary = json.loads((output / "summary.json").read_text())
     assert summary["schema_version"] == 2
     assert summary["configuration"]["systems"] == ["dense", "agentic"]
+    assert summary["configuration"]["case_timeout_seconds"] == 30.0
     assert summary["metrics"]["agentic"]["recall_at_5"] == {
         "value": 1.0,
         "status": "measured",
@@ -360,7 +456,7 @@ def test_experiment_configuration_serializes(tmp_path: Path) -> None:
         "note": "Cases with expected chunk evidence.",
     }
     assert (output / "cases.jsonl").read_text().strip()
-    markdown = (output / "summary.md").read_text()
+    markdown = (output / "summary.md").read_text(encoding="utf-8")
     assert "agentic" in markdown
     assert "1.000000 · n=1" in markdown
     assert "Cases with expected chunk evidence." in markdown
@@ -441,7 +537,7 @@ def test_experiment_summary_records_standard_or_custom_kind(tmp_path: Path) -> N
 
 
 def test_cli_defaults_to_multihop_benchmark(tmp_path: Path, monkeypatch) -> None:
-    calls: list[tuple[Path, list[str], str, str]] = []
+    calls: list[tuple[Path, list[str], str, str, str | None, float]] = []
 
     def fake_run(
         dataset: Path,
@@ -449,8 +545,10 @@ def test_cli_defaults_to_multihop_benchmark(tmp_path: Path, monkeypatch) -> None
         split: str,
         *,
         dataset_name: str,
+        chat_model: str | None = None,
+        case_timeout_seconds: float,
     ) -> Path:
-        calls.append((dataset, systems, split, dataset_name))
+        calls.append((dataset, systems, split, dataset_name, chat_model, case_timeout_seconds))
         return tmp_path / "result"
 
     monkeypatch.setattr(evaluation, "run_evaluation", fake_run)
@@ -464,8 +562,15 @@ def test_cli_defaults_to_multihop_benchmark(tmp_path: Path, monkeypatch) -> None
             list(evaluation.SYSTEMS),
             "development",
             "multihop",
+            evaluation.config.llm_model,
+            30.0,
         )
     ]
+
+    monkeypatch.setattr(sys, "argv", ["evaluation", "--model", "qwen3:4b"])
+    evaluation.main()
+
+    assert calls[-1][-2] == "qwen3:4b"
 
 
 def test_failure_labels_are_deterministic_and_composable() -> None:
@@ -493,6 +598,71 @@ def test_failure_labels_are_deterministic_and_composable() -> None:
         "conflict_miss",
         "non_termination",
     ]
+
+
+def test_retrieval_baselines_do_not_receive_agent_only_failure_labels() -> None:
+    labels = failure_labels(
+        case(expected_retry=True, expected_conflict=True),
+        result(
+            system="dense",
+            retrieved_chunk_ids=["x"],
+            cited_chunk_ids=[],
+            retry_count=0,
+            conflict_detected=False,
+        ),
+    )
+
+    assert labels == ["retrieval_miss"]
+
+
+def test_agentic_case_records_decision_diagnostics() -> None:
+    class DiagnosticGraph:
+        def process_query(self, question: str, session_id: str) -> dict[str, object]:
+            return {
+                "answer": "Answer [C1]",
+                "route": "complex_search",
+                "strategy": "hybrid",
+                "retry_count": 1,
+                "conflict": True,
+                "evidence_status": "limited",
+                "subquery_specs": [
+                    {"id": "SQ1", "text": "original"},
+                    {"id": "SQ2", "text": "second"},
+                ],
+                "rewritten_subqueries": [{"id": "SQ1", "text": "refined"}],
+                "supported_subquery_ids": ["SQ1"],
+                "relevant_labels": ["C1"],
+                "validation": {
+                    "violations": [],
+                    "initial_violations": ["uncited_claim"],
+                    "repair_violations": [],
+                },
+                "retrieval_hits": [{"chunk_id": "a", "document_id": "doc"}],
+                "sources": [{"chunk_id": "a"}],
+                "trace": [
+                    {"stage": "retrieve"},
+                    {"stage": "retrieve"},
+                    {"stage": "terminate", "termination": "limited"},
+                ],
+            }
+
+    class FakeModel:
+        calls = 4
+
+    measured = run_agentic_case(
+        case(expected_retry=True, expected_conflict=True),
+        cast(evaluation.RAGGraph, DiagnosticGraph()),
+        cast(CountingModel, FakeModel()),
+    )
+
+    assert measured.conflict_detected is True
+    assert measured.evidence_status == "limited"
+    assert measured.subquery_specs[0].id == "SQ1"
+    assert measured.rewritten_subqueries[0].text == "refined"
+    assert measured.supported_subquery_ids == ["SQ1"]
+    assert measured.relevant_labels == ["C1"]
+    assert measured.termination_reason == "limited"
+    assert measured.initial_validation_violations == ["uncited_claim"]
 
 
 def test_runtime_and_failed_abstention_labels() -> None:
@@ -523,6 +693,37 @@ def test_agentic_runtime_error_is_recorded_without_aborting() -> None:
     assert measured.terminated is False
     assert "runtime_error" in measured.failure_labels
     assert "non_termination" in measured.failure_labels
+
+
+def test_agentic_case_enforces_end_to_end_deadline() -> None:
+    class SlowGraph:
+        def process_query(self, question: str, session_id: str) -> dict[str, object]:
+            time.sleep(0.1)
+            return {}
+
+    class FakeModel:
+        calls = 0
+
+    measured = run_agentic_case(
+        case(),
+        cast(evaluation.RAGGraph, SlowGraph()),
+        cast(CountingModel, FakeModel()),
+        timeout_seconds=0.01,
+    )
+
+    assert measured.runtime_error == "EvaluationTimeout: case exceeded 0.01 seconds"
+    assert measured.latency_seconds < 0.08
+    assert "runtime_error" in measured.failure_labels
+    assert "non_termination" in measured.failure_labels
+
+
+def test_validation_failure_is_counted_as_an_abstention() -> None:
+    measured = result(
+        answer="I could not produce a fully cited answer from the available evidence.",
+        termination_reason="validation_failed",
+    )
+
+    assert evaluation.is_abstention_termination(measured.termination_reason)
 
 
 def test_document_and_answer_metrics() -> None:

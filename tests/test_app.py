@@ -2,13 +2,14 @@ import json
 import os
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Mapping, cast
+from typing import Any, cast
 
 import pytest
 
 import modules.app as app_module
+import modules.ui.application as application_module
 from modules.app import (
-    EVALUATION_HEADERS,
+    APP_STYLESHEET,
     EvaluationReadiness,
     RAGApplication,
     format_duration_ms,
@@ -22,11 +23,17 @@ from modules.models import (
     ManifestDocument,
     ReconciliationResult,
 )
+from modules.ui.application import RAGApplication as ExtractedRAGApplication
+
+
+class FakeSettings:
+    def __init__(self, sources_dir: Path) -> None:
+        self.sources_dir = sources_dir
 
 
 class FakeManager:
     def __init__(self, root: Path):
-        self.settings = type("Settings", (), {"sources_dir": root})()
+        self.settings = FakeSettings(root)
         self.deleted: list[str] = []
         self.indexed: list[Path] = []
         self.rebuilt = False
@@ -47,15 +54,20 @@ class FakeManager:
     def setup(self):
         return None
 
+    def save_uploads(self, paths: list[str] | None) -> list[Path]:
+        return [Path(path) for path in paths or []]
+
     def manifest(self):
         return IngestionManifest(documents={} if self.deleted else self.records)
 
-    def delete_document(self, document_id: str):
+    def has_deleted_document(self, document_id: str) -> bool:
         self.deleted.append(document_id)
         return True
 
-    def index_document(self, path: Path):
-        self.indexed.append(path)
+    delete_document = has_deleted_document
+
+    def index_document(self, path: str | Path):
+        self.indexed.append(Path(path))
         return IngestionResult(document_id="doc-1", success=True, chunk_count=1)
 
     def rebuild(self):
@@ -69,10 +81,39 @@ class FakeManager:
         return 1
 
 
+def test_application_is_reexported_from_controller_module(tmp_path: Path, monkeypatch) -> None:
+    # Arrange
+    assert RAGApplication is ExtractedRAGApplication
+    application = RAGApplication(vector_db=FakeManager(tmp_path))
+    monkeypatch.setattr(
+        application,
+        "_ollama_info",
+        lambda: {
+            "reachable": True,
+            "models": ["qwen3.5:9b", "nomic-embed-text:latest"],
+        },
+    )
+    monkeypatch.setattr(application, "latest_evaluation", lambda: None)
+
+    # Act
+    runtime = application.runtime_snapshot()
+    corpus = application.corpus_snapshot()
+    index = application.index_snapshot()
+    dashboard = application.dashboard_snapshot()
+
+    # Assert the compatibility import exposes the extracted controller contract.
+    assert runtime.state == "not_loaded"
+    assert runtime.chat_enabled is False
+    assert corpus.document_count == 1
+    assert corpus.page_count == 1
+    assert index.status == "review"
+    assert dashboard.corpus == corpus
+
+
 def test_document_callbacks_delete_reindex_and_rebuild(tmp_path: Path) -> None:
     manager = FakeManager(tmp_path)
     (tmp_path / "manual.txt").write_text("changed", encoding="utf-8")
-    app = RAGApplication(vector_db=manager)  # type: ignore[arg-type]
+    app = RAGApplication(vector_db=manager)
 
     rows, status, _, confirmation, confirmation_update = app.delete_selected("doc-1")
     assert rows == []
@@ -104,7 +145,7 @@ def test_document_inventory_and_selection_use_relative_path_without_exposing_id(
             update={"document_id": "doc-2", "relative_path": "archive/manual.txt"}
         ),
     }
-    app = RAGApplication(vector_db=manager)  # type: ignore[arg-type]
+    app = RAGApplication(vector_db=manager)
 
     rows = app.document_rows()
     assert rows == [
@@ -128,7 +169,7 @@ def test_document_inventory_and_selection_use_relative_path_without_exposing_id(
 def test_document_selection_reset_disables_delete_and_closes_confirmation(
     tmp_path: Path,
 ) -> None:
-    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+    app = RAGApplication(vector_db=FakeManager(tmp_path))
 
     selected_id, summary, delete_button, confirmation_text, confirmation = (
         app.reset_document_selection(app.document_rows())
@@ -143,7 +184,7 @@ def test_document_selection_reset_disables_delete_and_closes_confirmation(
 
 
 def test_preflight_controls_chat_and_reports_actionable_state(tmp_path: Path) -> None:
-    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+    app = RAGApplication(vector_db=FakeManager(tmp_path))
 
     summary, diagnostics, message_update, send_update = app.preflight(
         ollama={"reachable": False, "models": []}
@@ -157,7 +198,7 @@ def test_preflight_controls_chat_and_reports_actionable_state(tmp_path: Path) ->
 
 
 def test_preflight_keeps_chat_disabled_until_ai_is_loaded(tmp_path: Path) -> None:
-    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+    app = RAGApplication(vector_db=FakeManager(tmp_path))
 
     summary, _, message_update, send_update = app.preflight(
         ollama={
@@ -173,9 +214,9 @@ def test_preflight_keeps_chat_disabled_until_ai_is_loaded(tmp_path: Path) -> Non
 
 
 def test_manual_ai_load_initializes_graph_and_enables_chat(tmp_path: Path, monkeypatch) -> None:
-    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+    app = RAGApplication(vector_db=FakeManager(tmp_path))
     graph = object()
-    monkeypatch.setattr(app_module, "RAGGraph", lambda _vector_db: graph)
+    monkeypatch.setattr(application_module, "RAGGraph", lambda _vector_db: graph)
 
     summary, diagnostics, message_update, send_update = app.load_ai_models(
         ollama={
@@ -194,7 +235,7 @@ def test_manual_ai_load_initializes_graph_and_enables_chat(tmp_path: Path, monke
 def test_manual_ai_load_reports_missing_models_without_initializing(
     tmp_path: Path, monkeypatch
 ) -> None:
-    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+    app = RAGApplication(vector_db=FakeManager(tmp_path))
     initialized = False
 
     def initialize() -> None:
@@ -214,7 +255,7 @@ def test_manual_ai_load_reports_missing_models_without_initializing(
 
 
 def test_manual_ai_load_surfaces_initialization_failure(tmp_path: Path, monkeypatch) -> None:
-    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+    app = RAGApplication(vector_db=FakeManager(tmp_path))
 
     def fail_initialization() -> None:
         raise RuntimeError("index unavailable")
@@ -235,7 +276,7 @@ def test_manual_ai_load_surfaces_initialization_failure(tmp_path: Path, monkeypa
 
 
 def test_preflight_requires_the_exact_configured_model_tag(tmp_path: Path) -> None:
-    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+    app = RAGApplication(vector_db=FakeManager(tmp_path))
 
     summary, diagnostics, message_update, send_update = app.preflight(
         ollama={
@@ -252,7 +293,7 @@ def test_preflight_requires_the_exact_configured_model_tag(tmp_path: Path) -> No
 
 
 def test_export_is_public_and_trace_and_scores_preserve_observability(tmp_path: Path) -> None:
-    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+    app = RAGApplication(vector_db=FakeManager(tmp_path))
     result = {
         "standalone_query": "standalone",
         "route": "complex_search",
@@ -314,7 +355,7 @@ def test_export_is_public_and_trace_and_scores_preserve_observability(tmp_path: 
 
 
 def test_answer_status_distinguishes_supported_abstention_and_errors(tmp_path: Path) -> None:
-    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+    app = RAGApplication(vector_db=FakeManager(tmp_path))
 
     assert "Supported" in app.answer_status({"evidence_status": "sufficient"})
     assert "Abstention" in app.answer_status({"evidence_status": "insufficient", "trace": []})
@@ -322,7 +363,7 @@ def test_answer_status_distinguishes_supported_abstention_and_errors(tmp_path: P
 
 
 def test_clear_ui_rotates_the_session_checkpoint(tmp_path: Path) -> None:
-    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+    app = RAGApplication(vector_db=FakeManager(tmp_path))
     cleared: list[str] = []
     app.rag_graph = cast(Any, SimpleNamespace(clear=lambda session_id: cleared.append(session_id)))
 
@@ -334,7 +375,7 @@ def test_clear_ui_rotates_the_session_checkpoint(tmp_path: Path) -> None:
 
 
 def test_reconciliation_action_refreshes_document_controls(tmp_path: Path) -> None:
-    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+    app = RAGApplication(vector_db=FakeManager(tmp_path))
 
     rows, status, errors = app.reconcile_manifest_index()
     selected_id, summary, delete_button, confirmation_text, confirmation = (
@@ -354,7 +395,7 @@ def test_reconciliation_action_refreshes_document_controls(tmp_path: Path) -> No
 
 def test_document_deletion_requires_review_and_confirmation(tmp_path: Path) -> None:
     manager = FakeManager(tmp_path)
-    app = RAGApplication(vector_db=manager)  # type: ignore[arg-type]
+    app = RAGApplication(vector_db=manager)
 
     confirmation, confirmation_update = app.prepare_deletion("doc-1")
     assert "manual.txt" in confirmation
@@ -371,17 +412,22 @@ def test_document_deletion_requires_review_and_confirmation(tmp_path: Path) -> N
 
 
 def test_evaluation_selection_handles_empty_and_scalar_values(tmp_path: Path, monkeypatch) -> None:
-    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
-    calls: list[tuple[Path, list[str], str]] = []
+    app = RAGApplication(vector_db=FakeManager(tmp_path))
+    calls: list[tuple[Path, list[str], str, str | None]] = []
 
     def fake_run_evaluation(
-        dataset: Path, systems: list[str], split: str, *, dataset_name: str
+        dataset: Path,
+        systems: list[str],
+        split: str,
+        *,
+        dataset_name: str,
+        chat_model: str | None = None,
     ) -> Path:
-        calls.append((dataset, systems, split))
+        calls.append((dataset, systems, split, chat_model))
         assert dataset_name == "multihop"
         return tmp_path / "result"
 
-    monkeypatch.setattr(app_module, "run_evaluation", fake_run_evaluation)
+    monkeypatch.setattr(application_module, "run_evaluation", fake_run_evaluation)
     monkeypatch.setattr(
         app,
         "load_evaluation_result",
@@ -389,22 +435,81 @@ def test_evaluation_selection_handles_empty_and_scalar_values(tmp_path: Path, mo
     )
 
     for selection in (None, [], ""):
-        metrics, failures, context, status = app.run_evaluation_ui("development", selection)
+        metrics, failures, context, status = app.run_evaluation_ui(
+            "development", selection, "qwen3:4b"
+        )
         assert metrics == []
         assert failures == []
         assert context == ""
         assert "select at least one" in status.lower()
     assert calls == []
 
-    monkeypatch.setattr(app_module, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(application_module, "PROJECT_ROOT", tmp_path)
     dataset = tmp_path / "evals" / "multihop" / "cases.jsonl"
     dataset.parent.mkdir(parents=True)
     dataset.write_text("{}\n", encoding="utf-8")
 
-    metrics, _, _, status = app.run_evaluation_ui("development", "dense")
+    metrics, _, _, status = app.run_evaluation_ui("development", "dense", "qwen3:4b")
     assert metrics == [["dense"]]
     assert "Loaded" in status
-    assert calls == [(dataset, ["dense"], "development")]
+    assert calls == [(dataset, ["dense"], "development", "qwen3:4b")]
+
+
+def test_evaluation_model_choices_and_readiness_are_run_scoped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Arrange
+    app = RAGApplication(vector_db=FakeManager(tmp_path))
+    configured = application_module.config.llm_model
+
+    # Act
+    choices = app.evaluation_model_choices(
+        ollama={
+            "reachable": True,
+            "models": [
+                "llama3",
+                application_module.config.embedding_model,
+                "llama3:latest",
+            ],
+        }
+    )
+
+    # Then the configured default leads a de-duplicated chat-only choice list.
+    assert choices == (
+        application_module.normalize_model_name(configured),
+        "llama3:latest",
+    )
+    assert application_module.config.llm_model == configured
+
+    monkeypatch.setattr(application_module, "PROJECT_ROOT", tmp_path)
+    dataset = tmp_path / "evals" / "multihop" / "cases.jsonl"
+    dataset.parent.mkdir(parents=True)
+    dataset.write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(application_module, "load_cases", lambda _path: [])
+    monkeypatch.setattr(application_module, "preflight_multihop", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(app, "latest_evaluation", lambda: None)
+
+    readiness = app.evaluation_readiness(
+        "development",
+        ["agentic"],
+        "missing-model",
+        ollama={
+            "reachable": True,
+            "models": [application_module.config.embedding_model],
+        },
+    )
+    assert readiness.chat_model == "missing-model:latest"
+    assert readiness.state == "blocked"
+    assert "ollama pull missing-model:latest" in readiness.problems[0]
+
+    bm25 = app.evaluation_readiness(
+        "development",
+        ["bm25"],
+        "missing-model",
+        ollama={"reachable": False, "models": []},
+    )
+    assert bm25.state == "ready"
+    assert bm25.requires_chat is False
 
 
 def test_evaluation_readiness_represents_all_workflow_states() -> None:
@@ -415,7 +520,7 @@ def test_evaluation_readiness_represents_all_workflow_states() -> None:
 
 def test_legacy_evaluation_summary_is_rejected(tmp_path: Path) -> None:
     manager = FakeManager(tmp_path)
-    app = RAGApplication(vector_db=manager)  # type: ignore[arg-type]
+    app = RAGApplication(vector_db=manager)
     result = tmp_path / "run"
     result.mkdir()
     (result / "summary.json").write_text(
@@ -452,7 +557,7 @@ def test_legacy_evaluation_summary_is_rejected(tmp_path: Path) -> None:
 
 
 def test_evaluation_loader_formats_v2_support_and_empty_statuses(tmp_path: Path) -> None:
-    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+    app = RAGApplication(vector_db=FakeManager(tmp_path))
     result = tmp_path / "run-v2"
     result.mkdir()
     (result / "summary.json").write_text(
@@ -523,7 +628,7 @@ def test_result_formatters_use_consistent_precision_and_missing_values() -> None
 
 
 def test_display_rows_format_sources_traces_scores_and_diagnostics(tmp_path: Path) -> None:
-    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+    app = RAGApplication(vector_db=FakeManager(tmp_path))
     result = {
         "sources": [{"label": "C1", "chunk_id": "c1", "filename": "a.pdf", "page": None}],
         "retrieval_hits": [
@@ -569,7 +674,7 @@ def test_display_rows_format_sources_traces_scores_and_diagnostics(tmp_path: Pat
 
 
 def test_evidence_cards_are_accessible_and_escape_dynamic_content(tmp_path: Path) -> None:
-    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+    app = RAGApplication(vector_db=FakeManager(tmp_path))
     result = {
         "sources": [
             {
@@ -597,7 +702,7 @@ def test_evidence_cards_are_accessible_and_escape_dynamic_content(tmp_path: Path
 
 
 def test_latest_evaluation_finds_the_newest_valid_nested_run(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(app_module, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(application_module, "PROJECT_ROOT", tmp_path)
     results = tmp_path / "evals" / "results"
 
     older = results / "multihop" / "older"
@@ -666,7 +771,7 @@ def test_latest_evaluation_finds_the_newest_valid_nested_run(tmp_path: Path, mon
 
 
 def test_latest_evaluation_ignores_newer_partial_schema_v2_run(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(app_module, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(application_module, "PROJECT_ROOT", tmp_path)
     root = tmp_path / "evals" / "results" / "multihop"
     standard = root / "standard"
     partial = root / "partial"
@@ -700,6 +805,7 @@ def test_evaluation_context_labels_standard_and_custom_runs(tmp_path: Path) -> N
         "dataset_name": "multihop",
         "evaluated_split": "development",
         "timestamp": "2026-07-17T12:00:00+00:00",
+        "chat_model": "<qwen:latest>",
     }
     standard = {
         "schema_version": 2,
@@ -716,16 +822,19 @@ def test_evaluation_context_labels_standard_and_custom_runs(tmp_path: Path) -> N
     assert "Standard benchmark" in RAGApplication.evaluation_context_html(tmp_path, standard, 1)
     assert "Custom evaluation" in RAGApplication.evaluation_context_html(tmp_path, custom, 1)
     assert "legacy" not in RAGApplication.evaluation_context_html(tmp_path, custom, 1).lower()
+    context = RAGApplication.evaluation_context_html(tmp_path, standard, 1)
+    assert "&lt;qwen:latest&gt;" in context
+    assert "<qwen:latest>" not in context
 
 
 def test_latest_evaluation_rejects_historical_only_results(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(app_module, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(application_module, "PROJECT_ROOT", tmp_path)
     result = tmp_path / "evals" / "results" / "multihop" / "historical"
     result.mkdir(parents=True)
     (result / "summary.json").write_text("{}", encoding="utf-8")
     (result / "cases.jsonl").write_text("{}\n", encoding="utf-8")
 
-    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+    app = RAGApplication(vector_db=FakeManager(tmp_path))
     metrics, failures, context, status = app.load_latest_evaluation()
 
     assert metrics == []
@@ -736,160 +845,87 @@ def test_latest_evaluation_rejects_historical_only_results(tmp_path: Path, monke
 
 
 def test_interface_construction_does_not_require_live_ollama(tmp_path: Path) -> None:
-    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
-    interface = app.create_interface()
+    app = RAGApplication(vector_db=FakeManager(tmp_path))
+    interface = app_module.build_application(app)
     assert interface is not None
 
 
 def test_interface_exposes_manual_ai_loading_with_automatic_workspace_refresh(
     tmp_path: Path,
 ) -> None:
-    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
-    config = app.create_interface().get_config_file()
+    app = RAGApplication(vector_db=FakeManager(tmp_path))
+    config = app_module.build_application(app).get_config_file()
     labels = [component["props"].get("value") for component in config["components"]]
 
-    assert "Load AI models" in labels
-    assert "refresh_workspace_state" in json.dumps(config, default=str)
+    assert "Load AI Models" in labels
+    assert labels.count("Load AI Models") == 1
 
 
-def test_interface_exposes_responsive_hierarchy_and_hides_mean_latency(tmp_path: Path) -> None:
-    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
-    interface = app.create_interface()
-    config = interface.get_config_file()
+def test_interface_exposes_routed_responsive_hierarchy(tmp_path: Path) -> None:
+    # Arrange
+    app = RAGApplication(vector_db=FakeManager(tmp_path))
+
+    # Act
+    config = app_module.build_application(app).get_config_file()
     serialized = json.dumps(config, default=str)
 
-    assert '"elem_id": "app-shell"' in serialized
+    # Assert that the single-route shell exposes the Ask workspace without legacy wrappers.
     assert '"elem_id": "skip-navigation"' in serialized
-    assert '"elem_id": "primary-tabs"' in serialized
-    assert '"elem_id": "workspace-grid"' in serialized
-    assert '"elem_id": "corpus-rail"' in serialized
-    assert '"elem_id": "chat-workspace"' in serialized
-    assert '"elem_id": "conversation-region"' in serialized
-    assert '"elem_id": "evidence-list"' in serialized
-    assert '"label": "Maintenance"' in serialized
-    assert '"label": "Technical details"' in serialized
+    assert '"elem_id": "page-content"' in serialized
+    assert '"elem_id": "ask-workspace"' in serialized
+    assert '"elem_id": "sidebar-document-upload"' in serialized
+    assert '"elem_id": "inspector-document-inventory"' in serialized
+    assert '"elem_id": "evaluation-metrics-table"' not in serialized
+    assert '"elem_id": "system-diagnostics"' not in serialized
+    assert '"elem_id": "app-shell"' not in serialized
+    assert '"elem_id": "primary-tabs"' not in serialized
     assert "mean_latency_seconds" not in serialized
-    assert EVALUATION_HEADERS == [
-        "Category",
-        "Metric",
-        "Dense",
-        "BM25",
-        "Hybrid",
-        "Agentic",
-    ]
-
-    components = [component["props"] for component in config["components"]]
-    top_level_tabs = {
-        props.get("elem_id"): props.get("label")
-        for props in components
-        if props.get("elem_id") in {"workspace-tab", "evaluation-tab", "diagnostics-tab"}
-    }
-    assert top_level_tabs == {
-        "workspace-tab": "Workspace",
-        "evaluation-tab": "Evaluation",
-    }
-    assert "Manage documents" not in serialized
-    assert "Document ID to delete" not in serialized
-    assert "Diagnostics" not in top_level_tabs.values()
-    assert not any(props.get("label") in {"Documents", "Chat"} for props in components)
-
-    action_labels = [props.get("value") for props in components]
-    for label in (
-        "Load AI models",
-        "Index files",
-        "Delete selected",
-        "Cancel",
-        "Confirm deletion",
-        "Ask",
-        "Clear",
-        "Export",
-        "Run standard benchmark",
-    ):
-        assert action_labels.count(label) == 1
-    assert "Refresh document status" not in action_labels
-    assert "Refresh system status" not in action_labels
-    assert "Reconcile manifest/index" not in action_labels
-
-    document_table = next(
-        props for props in components if props.get("label") == "Indexed documents"
-    )
-    assert document_table["headers"] == ["Document", "Pages", "Chunks", "Status"]
-    assert document_table["layout"] == "table"
-    component_by_id = {
-        component["props"].get("elem_id"): component
-        for component in config["components"]
-        if component["props"].get("elem_id")
-    }
-    dataframe_ids = {
-        component["props"].get("elem_id")
-        for component in config["components"]
-        if component["type"] == "dataframe"
-    }
-    assert dataframe_ids == set()
-    assert component_by_id["documents-table"]["type"] == "dataset"
-    for result_id in (
-        "indexing-errors-table",
-        "retrieval-scores-table",
-        "retrieval-trace-table",
-        "evaluation-metrics-table",
-        "evaluation-failures-table",
-        "system-status-details",
-    ):
-        assert component_by_id[result_id]["type"] == "html"
-
-    export_component = component_by_id["conversation-export"]
-    assert export_component["type"] == "downloadbutton"
-    assert export_component["props"]["visible"] is False
 
 
 def test_local_stylesheet_covers_mobile_tables_and_keyboard_focus() -> None:
-    stylesheet = Path(app_module.__file__).with_name("app.css")
+    stylesheet = APP_STYLESHEET
 
     assert stylesheet.is_file()
     css = stylesheet.read_text(encoding="utf-8")
-    assert "@media (max-width: 1050px)" in css
+    assert "@media (max-width: 900px)" in css
     assert "@media (max-width: 640px)" in css
     assert "color-scheme: dark" in css
     assert "overflow-x: auto" in css
     assert ":focus-visible" in css
     assert "min-height: 44px" in css
-    assert "--rag-status-text:" in css
-    assert "--rag-status-surface:" in css
+    assert "--canvas:" in css
+    assert "--surface:" in css
+    assert "--text:" in css
+    assert "--primary:" in css
+    assert "--focus:" in css
+    assert "--danger:" in css
+    assert "--rag-" not in css
+    assert "--overview-" not in css
+    assert "--body-text-color: var(--text)" in css
+    assert "--body-text-color-subdued: var(--text-muted)" in css
+    assert "--block-label-text-color: var(--text-muted)" in css
     assert "min-width: 0" in css
     assert "overflow-x: clip" in css
     assert ".result-scroll" in css
     assert ".result-table" in css
     assert "#skip-navigation" in css
-    assert "height: clamp(200px, 30vh, 320px)" in css
     assert ".stack-on-mobile" in css
-    assert "--rag-info-surface:" in css
-    assert "--rag-error-surface:" in css
     assert "font-family: var(--font)" in css
-    assert ".evaluation-metrics-table table" in css
-    assert "#workspace-grid" in css
-    assert "#corpus-rail" in css
-    assert ".evidence-item" in css
+    assert ".evaluation-matrix" in css
+    assert "#ask-workspace" in css
+    assert "#ask-chatbot" in css
+    assert "#ask-inspector" in css
+    assert "#ask-composer" in css
+    assert "#inspector-document-inventory" in css
     assert "scrollbar-width: thin" in css
     assert "::-webkit-scrollbar" in css
     assert "8px" in css
     assert "#eef2ff" not in css
     assert "#fff1f2" not in css
-    assert ".status-host > div:not(.rag-status)" in css
-    assert ".status-host > div," not in css
-    assert "#document-upload" in css
-    assert "#evaluation-split" in css
-    assert "#evaluation-systems" in css
-    assert "#evaluation-setup" in css
-    assert ".evaluation-config-row" in css
-    assert ".evaluation-actions-row" in css
     assert ".evaluation-context" in css
-    assert ".metric-value--neutral" in css
-    assert ".metric-support" in css
+    assert ".metric-support" not in css
     assert ".evaluation-toolbar" not in css
-    assert "  .view-heading {\n    flex-direction: column;" in css
-    config_row_rule = css.split(".evaluation-config-row {", 1)[1].split("}", 1)[0]
-    assert "display: grid" not in config_row_rule
-    assert "flex-wrap: wrap" in config_row_rule
+    assert "@media (prefers-reduced-motion: reduce)" in css
 
 
 def test_statuses_have_typed_aria_semantics_and_escape_content() -> None:
@@ -941,8 +977,8 @@ def test_result_row_normalizer_accepts_only_tabular_sequences() -> None:
 
 
 def test_dynamic_statuses_are_accessible_live_regions(tmp_path: Path) -> None:
-    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
-    config = app.create_interface().get_config_file()
+    app = RAGApplication(vector_db=FakeManager(tmp_path))
+    config = app_module.build_application(app).get_config_file()
     components = [component["props"] for component in config["components"]]
 
     live_regions = {
@@ -951,13 +987,12 @@ def test_dynamic_statuses_are_accessible_live_regions(tmp_path: Path) -> None:
         if props.get("elem_id", "").endswith("-status")
     }
     assert {
-        "readiness-status",
-        "ingestion-status",
-        "answer-status",
-        "evaluation-status",
+        "sidebar-document-status",
+        "ask-evaluation-status",
     } <= live_regions.keys()
-    assert live_regions["readiness-status"].get("value", "").count('role="status"') == 1
-    for idle_id in ("ingestion-status", "answer-status", "evaluation-status"):
+    assert "system-status" not in live_regions
+    assert live_regions["sidebar-document-status"].get("value", "").count('role="status"') == 1
+    for idle_id in ("ask-evaluation-status",):
         assert live_regions[idle_id].get("value", "") == ""
         assert live_regions[idle_id].get("visible") is False
     assert "requestAnimationFrame" in app_module.ACCESSIBILITY_BOOTSTRAP
@@ -976,7 +1011,7 @@ def test_dynamic_statuses_are_accessible_live_regions(tmp_path: Path) -> None:
     assert "resizeObserver.observe(target)" in app_module.ACCESSIBILITY_BOOTSTRAP
     assert 'querySelector("button.label-wrap")' in app_module.ACCESSIBILITY_BOOTSTRAP
     assert 'classList.contains("open")' in app_module.ACCESSIBILITY_BOOTSTRAP
-    assert 'setAttribute("aria-expanded"' in app_module.ACCESSIBILITY_BOOTSTRAP
+    assert '"aria-expanded"' in app_module.ACCESSIBILITY_BOOTSTRAP
     assert '"corpus-rail":' not in app_module.ACCESSIBILITY_BOOTSTRAP
     assert 'type="range"' not in app_module.ACCESSIBILITY_BOOTSTRAP
 
@@ -984,7 +1019,7 @@ def test_dynamic_statuses_are_accessible_live_regions(tmp_path: Path) -> None:
 def test_system_status_groups_problems_and_preserves_technical_values(
     tmp_path: Path,
 ) -> None:
-    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+    app = RAGApplication(vector_db=FakeManager(tmp_path))
     rows = [
         ["AI runtime", "Ollama connectivity", "Unavailable", "Run ollama serve"],
         ["Document index", "Manifest", "Ready", "Valid; 1 document"],
@@ -1001,7 +1036,7 @@ def test_system_status_groups_problems_and_preserves_technical_values(
 
 
 def test_system_status_never_treats_unchecked_state_as_ready(tmp_path: Path) -> None:
-    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+    app = RAGApplication(vector_db=FakeManager(tmp_path))
 
     rendered = app.system_status_html([])
 
@@ -1011,14 +1046,14 @@ def test_system_status_never_treats_unchecked_state_as_ready(tmp_path: Path) -> 
 
 
 def test_document_samples_are_filtered_without_exposing_ids(tmp_path: Path) -> None:
-    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+    app = RAGApplication(vector_db=FakeManager(tmp_path))
 
     assert app.document_samples("MANUAL") == [["manual.txt", 1, 1, "Indexed"]]
     assert "doc-1" not in json.dumps(app.document_samples(""))
 
 
 def test_evaluation_adapters_reveal_results_and_status(tmp_path: Path, monkeypatch) -> None:
-    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+    app = RAGApplication(vector_db=FakeManager(tmp_path))
     monkeypatch.setattr(
         app,
         "load_latest_evaluation",
@@ -1054,7 +1089,7 @@ def test_evaluation_adapters_reveal_results_and_status(tmp_path: Path, monkeypat
 
 
 def test_evaluation_adapters_hide_results_on_validation_error(tmp_path: Path) -> None:
-    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+    app = RAGApplication(vector_db=FakeManager(tmp_path))
 
     updates = app.run_evaluation_presentation_ui("development", [])
 
@@ -1068,7 +1103,7 @@ def test_evaluation_adapters_hide_results_on_validation_error(tmp_path: Path) ->
 
 
 def test_evaluation_running_state_disables_both_actions(tmp_path: Path) -> None:
-    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+    app = RAGApplication(vector_db=FakeManager(tmp_path))
 
     run_button, load_button, status = app.begin_evaluation_ui()
 
@@ -1079,7 +1114,7 @@ def test_evaluation_running_state_disables_both_actions(tmp_path: Path) -> None:
 
 
 def test_evaluation_context_escapes_metadata(tmp_path: Path) -> None:
-    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
+    app = RAGApplication(vector_db=FakeManager(tmp_path))
     result = tmp_path / "unsafe-run"
     result.mkdir()
     (result / "summary.json").write_text(
@@ -1108,52 +1143,3 @@ def test_evaluation_context_escapes_metadata(tmp_path: Path) -> None:
     assert "Dense, Agentic" in context
     assert "2 cases" in context
     assert "2026-07-17 12:00 UTC" in context
-
-
-def test_evaluation_interface_has_task_order_and_four_systems(tmp_path: Path) -> None:
-    app = RAGApplication(vector_db=FakeManager(tmp_path))  # type: ignore[arg-type]
-    config = app.create_interface().get_config_file()
-    components = [component["props"] for component in config["components"]]
-    by_id = {props.get("elem_id"): props for props in components if props.get("elem_id")}
-
-    assert by_id["evaluation-split"]["label"] == "Split"
-    assert by_id["evaluation-split"]["choices"] == [
-        ("Development", "development"),
-        ("Test — held-out final validation", "test"),
-    ]
-    assert by_id["evaluation-systems"]["label"] == "Systems"
-    assert by_id["evaluation-systems"]["choices"] == [
-        ("dense", "dense"),
-        ("bm25", "bm25"),
-        ("hybrid", "hybrid"),
-        ("agentic", "agentic"),
-    ]
-    assert by_id["evaluation-systems"]["value"] == list(app_module.SYSTEMS)
-    assert by_id["evaluation-advanced-options"]["open"] is False
-    assert by_id["evaluation-results"]["visible"] is False
-    assert by_id["evaluation-result-context"]["visible"] is False
-    action_values = [props.get("value") for props in components]
-    assert action_values.count("Run standard benchmark") == 1
-    assert action_values.count("Refresh latest result") == 1
-    assert "all" not in by_id["evaluation-systems"]["value"]
-
-    component_ids = {
-        component["props"].get("elem_id"): component["id"]
-        for component in config["components"]
-        if component["props"].get("elem_id")
-    }
-    parents: dict[int, int] = {}
-
-    def record_parents(node: Mapping[str, Any], parent_id: int | None = None) -> None:
-        node_id = node.get("id")
-        if node_id is not None and parent_id is not None:
-            parents[node_id] = parent_id
-        for child in node.get("children", []):
-            record_parents(child, node_id)
-
-    layout = config.get("layout")
-    assert layout is not None
-    record_parents(cast(Mapping[str, Any], layout))
-    run_parent = parents[component_ids["run-evaluation"]]
-    assert parents[component_ids["load-evaluation"]] == run_parent
-    assert parents[component_ids["evaluation-status"]] != run_parent

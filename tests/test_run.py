@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.error import URLError
 
 from modules import run
@@ -95,3 +96,18 @@ def test_main_launches_ui_when_ollama_is_unavailable(tmp_path: Path, monkeypatch
     assert exit_code == 0
     assert calls == ["launched"]
     assert "started with limited readiness" in capsys.readouterr().err
+
+
+def test_load_application_runner_resolves_facade(monkeypatch) -> None:
+    def expected_runner() -> int:
+        return 0
+
+    monkeypatch.setattr(
+        run.importlib,
+        "import_module",
+        lambda module_name: (
+            SimpleNamespace(main=expected_runner) if module_name == "modules.app" else None
+        ),
+    )
+
+    assert run.load_application_runner() is expected_runner

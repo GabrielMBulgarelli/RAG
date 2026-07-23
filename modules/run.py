@@ -2,12 +2,25 @@
 
 from __future__ import annotations
 
+import importlib
 import sys
 from collections.abc import Callable, Sequence
+from typing import cast
 from urllib.error import URLError
 from urllib.request import urlopen
 
 from .config import Settings, config
+
+type ApplicationRunner = Callable[[], int]
+
+
+def load_application_runner() -> ApplicationRunner:
+    """Resolve the UI entry point without importing application dependencies eagerly."""
+    application = importlib.import_module("modules.app")
+    runner = application.main
+    if not callable(runner):
+        raise TypeError("modules.app.main must be callable")
+    return cast(ApplicationRunner, runner)
 
 
 def collect_runtime_diagnostics(
@@ -39,7 +52,7 @@ def main(
     *,
     settings: Settings = config,
     check_ollama: bool = True,
-    app_runner: Callable[[], int] | None = None,
+    app_runner: ApplicationRunner | None = None,
 ) -> int:
     """Report unavailable services, then lazily import and launch the application."""
     diagnostics = collect_runtime_diagnostics(settings, check_ollama=check_ollama)
@@ -48,7 +61,7 @@ def main(
 
     if app_runner is None:
         try:
-            from .app import main as app_runner
+            app_runner = load_application_runner()
         except ImportError as error:
             print(
                 "RAG application dependencies are unavailable. Run `uv sync` and retry. "

@@ -73,6 +73,7 @@ def test_operation_models_have_exact_values_and_json_serialization() -> None:
 
 
 def test_runtime_document_and_request_contracts_serialize_as_json() -> None:
+    document_id = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
     operation = ActiveOperation(
         operation_id=UUID("0b5e8a4b-a5df-4a93-a796-4d8cce1f4367"),
         kind=OperationKind.INDEX_DOCUMENTS,
@@ -118,7 +119,7 @@ def test_runtime_document_and_request_contracts_serialize_as_json() -> None:
         stale=False,
     )
     document = DocumentRecord(
-        id=UUID("fbfabdb1-d47d-40d5-a9bd-76e20f383742"),
+        id=document_id,
         filename="guide.pdf",
         state="indexed",
         size_bytes=4096,
@@ -140,10 +141,23 @@ def test_runtime_document_and_request_contracts_serialize_as_json() -> None:
 
     assert runtime.model_dump(mode="json")["active_operation"]["kind"] == "index_documents"
     assert diagnostics.model_dump(mode="json")["runtime_checks"][0]["state"] == "not_loaded"
-    assert documents.model_dump(mode="json")["documents"][0]["id"] == str(document.id)
+    assert documents.model_dump(mode="json")["documents"][0]["id"] == document_id
     assert upload.model_dump(mode="json")["accepted"] == [
-        {"filename": "guide.pdf", "document_id": str(document.id)}
+        {"filename": "guide.pdf", "document_id": document_id}
     ]
+    spaced_identifier = f"  {document_id}  "
+    assert (
+        DocumentRecord.model_validate({**document.model_dump(), "id": spaced_identifier}).id
+        == spaced_identifier
+    )
+    assert (
+        UploadAccepted(filename="guide.pdf", document_id=spaced_identifier).document_id
+        == spaced_identifier
+    )
+    with pytest.raises(ValidationError, match="id"):
+        DocumentRecord.model_validate({**document.model_dump(), "id": " \t "})
+    with pytest.raises(ValidationError, match="document_id"):
+        UploadAccepted(filename="guide.pdf", document_id="\n ")
     assert (
         ConversationMessage(
             id=UUID("b3c19351-5ae1-48e3-938f-c9306359478f"),
@@ -219,12 +233,14 @@ def test_query_contract_serializes_public_observability() -> None:
         ),
     )
 
-    assert QueryRequest(session_id=session_id, question="What is the limit?").model_dump(
+    assert QueryRequest(session_id=session_id, question="  What is the limit? \n").model_dump(
         mode="json"
     ) == {
         "session_id": str(session_id),
         "question": "What is the limit?",
     }
+    with pytest.raises(ValidationError, match="question"):
+        QueryRequest(session_id=session_id, question=" \t ")
     assert response.model_dump(mode="json")["retrieval_hits"][0] == {
         "chunk_id": "chunk-1",
         "filename": "guide.pdf",
@@ -325,7 +341,7 @@ def test_benchmark_contract_has_exact_states_and_json_serialization() -> None:
         error=None,
     )
     event = BenchmarkEvent(
-        event_id=UUID("ce81a5d9-5b28-4589-b5ec-792493538590"),
+        event_id=1,
         run_id=run_id,
         type=BenchmarkEventType.CASE_COMPLETED,
         timestamp=datetime(2026, 7, 29, 15, 31, tzinfo=timezone.utc),
@@ -357,8 +373,11 @@ def test_benchmark_contract_has_exact_states_and_json_serialization() -> None:
         benchmark.model_dump(mode="json")["sections"][0]["metrics"][0]["observations"][0]["value"]
         == 0.75
     )
+    assert event.model_dump(mode="json")["event_id"] == 1
     assert event.model_dump(mode="json")["type"] == "case.completed"
     assert case.model_dump(mode="json")["sanitized_raw_result"] == {"route": "simple_search"}
+    with pytest.raises(ValidationError, match="event_id"):
+        BenchmarkEvent.model_validate({**event.model_dump(), "event_id": 0})
 
 
 def test_metric_status_keeps_missing_values_distinct_from_measured_zero() -> None:

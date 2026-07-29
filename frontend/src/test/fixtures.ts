@@ -143,9 +143,10 @@ export function createMockApi(
     deleteDocument: vi.fn().mockResolvedValue(documentList),
     query: vi.fn().mockResolvedValue(queryResponse),
     clearConversation: vi.fn().mockResolvedValue(undefined),
-    exportConversation: vi.fn().mockResolvedValue(
-      new Blob(["# Conversation"], { type: "text/markdown" }),
-    ),
+    exportConversation: vi.fn().mockResolvedValue({
+      blob: new Blob(['{"messages":[]}'], { type: "application/json" }),
+      filename: "conversation-session.json",
+    }),
     ...overrides,
   } as WorkspaceApi & Record<keyof WorkspaceApi, ReturnType<typeof vi.fn>>;
 }

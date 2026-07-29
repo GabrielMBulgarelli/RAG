@@ -16,7 +16,12 @@ export interface WorkspaceApi {
   deleteDocument(documentId: string): Promise<DocumentList>;
   query(sessionId: string, question: string): Promise<QueryResponse>;
   clearConversation(sessionId: string): Promise<void>;
-  exportConversation(sessionId: string): Promise<Blob>;
+  exportConversation(sessionId: string): Promise<DownloadFile>;
+}
+
+export interface DownloadFile {
+  blob: Blob;
+  filename: string;
 }
 
 export class ApiClientError extends Error {
@@ -79,6 +84,22 @@ function jsonInit(method: "POST", body: unknown): RequestInit {
   };
 }
 
+function exportFilename(disposition: string | null): string {
+  const encoded = disposition?.match(/filename\*\s*=\s*(?:UTF-8'')?([^;]+)/i)?.[1];
+  const regular = disposition?.match(/filename\s*=\s*(?:"([^"]+)"|([^;]+))/i);
+  let candidate = encoded ?? regular?.[1] ?? regular?.[2] ?? "";
+  candidate = candidate.trim().replace(/^["']|["']$/g, "");
+  if (encoded) {
+    try {
+      candidate = decodeURIComponent(candidate);
+    } catch {
+      candidate = "";
+    }
+  }
+  const leaf = candidate.split(/[\\/]/).at(-1)?.replace(/[\u0000-\u001f\u007f]/g, "").trim();
+  return leaf && leaf !== "." && leaf !== ".." ? leaf : "conversation.json";
+}
+
 export function createApiClient(baseUrl = ""): WorkspaceApi {
   const endpoint = (path: string) => `${baseUrl.replace(/\/$/, "")}${path}`;
   const json = async <T>(path: string, init: RequestInit = {}): Promise<T> => {
@@ -124,7 +145,10 @@ export function createApiClient(baseUrl = ""): WorkspaceApi {
         endpoint("/api/conversations/export"),
         jsonInit("POST", { session_id: sessionId }),
       ));
-      return response.blob();
+      return {
+        blob: await response.blob(),
+        filename: exportFilename(response.headers.get("Content-Disposition")),
+      };
     },
   };
 }

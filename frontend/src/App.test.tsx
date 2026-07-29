@@ -1,9 +1,10 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
 import { ApiClientError } from "./api/client";
+import type { QueryResponse } from "./api/types";
 import {
   createMockApi,
   diagnostics,
@@ -11,6 +12,14 @@ import {
   queryResponse,
   runtimeReady,
 } from "./test/fixtures";
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
 
 describe("single workspace", () => {
   beforeEach(() => {
@@ -72,6 +81,46 @@ describe("single workspace", () => {
     expect(screen.getByText("The revised policy takes effect in July.")).toBeVisible();
   });
 
+  it("selects an older source-less answer through an explicit keyboard control", async () => {
+    const olderResponse = {
+      ...queryResponse,
+      message: {
+        ...queryResponse.message,
+        id: "40a69776-90a7-4a1e-a674-0202462e9d24",
+        content: "An older answer without sources.",
+      },
+      sources: [],
+      diagnostics: {
+        ...queryResponse.diagnostics,
+        route: "older-answer",
+      },
+    };
+    const api = createMockApi({
+      getDocuments: vi.fn().mockResolvedValue(documentList),
+      query: vi.fn()
+        .mockResolvedValueOnce(olderResponse)
+        .mockResolvedValueOnce(queryResponse),
+    });
+    const user = userEvent.setup();
+    render(<App api={api} />);
+    await screen.findByText("alpha.pdf");
+
+    const composer = screen.getByLabelText("Ask about your documents");
+    await user.type(composer, "First");
+    await user.click(screen.getByRole("button", { name: "Send question" }));
+    await screen.findByText("An older answer without sources.");
+    await user.type(composer, "Second");
+    await user.click(screen.getByRole("button", { name: "Send question" }));
+    await screen.findByText("The policy changed in July.");
+
+    const inspectOlder = screen.getAllByRole("button", { name: /inspect answer/i })[0];
+    inspectOlder.focus();
+    await user.keyboard("{Enter}");
+
+    expect(inspectOlder).toHaveFocus();
+    expect(screen.getByText("No sources accompanied this answer.")).toBeVisible();
+  });
+
   it("keeps the user message and offers retry without inventing an answer", async () => {
     const api = createMockApi({
       getDocuments: vi.fn().mockResolvedValue(documentList),
@@ -111,10 +160,27 @@ describe("single workspace", () => {
     await screen.findByText("The policy changed in July.");
 
     await user.click(screen.getByRole("tab", { name: "Details" }));
+    const detailsTab = screen.getByRole("tab", { name: "Details" });
+    const sourcesTab = screen.getByRole("tab", { name: "Sources" });
+    expect(detailsTab).toHaveAttribute("id", "inspector-tab-details");
+    expect(detailsTab).toHaveAttribute("aria-controls", "inspector-panel-details");
+    expect(screen.getByRole("tabpanel", { name: "Details" })).toHaveAttribute(
+      "aria-labelledby",
+      "inspector-tab-details",
+    );
     expect(screen.getByText("Retrieval")).toBeVisible();
     expect(screen.getByText("Execution trace")).toBeVisible();
     expect(screen.getByText("Query diagnostics")).toBeVisible();
     expect(screen.getByText("Raw trace")).toBeVisible();
+
+    detailsTab.focus();
+    await user.keyboard("{ArrowLeft}");
+    expect(sourcesTab).toHaveFocus();
+    expect(sourcesTab).toHaveAttribute("aria-selected", "true");
+    await user.keyboard("{End}");
+    expect(detailsTab).toHaveFocus();
+    await user.keyboard("{Home}");
+    expect(sourcesTab).toHaveFocus();
 
     await user.click(screen.getByRole("button", { name: "Collapse inspector" }));
     expect(screen.queryByRole("tab", { name: "Sources" })).not.toBeInTheDocument();
@@ -177,9 +243,15 @@ describe("single workspace", () => {
       },
     };
     const api = createMockApi({
-      getRuntime: vi.fn().mockResolvedValue(notLoaded),
+      getRuntime: vi.fn()
+        .mockResolvedValueOnce(notLoaded)
+        .mockResolvedValue(runtimeReady),
       getDiagnostics: vi.fn()
         .mockResolvedValueOnce(diagnostics)
+        .mockResolvedValueOnce({
+          ...diagnostics,
+          title: "Models loaded",
+        })
         .mockRejectedValueOnce(new Error("Diagnostics unavailable.")),
       loadModel: vi.fn().mockResolvedValue(runtimeReady),
     });
@@ -196,6 +268,8 @@ describe("single workspace", () => {
     await waitFor(() => expect(api.loadModel).toHaveBeenCalledWith("qwen3:8b"));
     expect(api.getRuntime).toHaveBeenCalledTimes(2);
     expect(api.getDocuments).toHaveBeenCalledTimes(2);
+    expect(api.getDiagnostics).toHaveBeenCalledTimes(2);
+    expect(within(dialog).getByText("Models loaded")).toBeVisible();
 
     await user.click(within(dialog).getByRole("button", { name: "Refresh diagnostics" }));
     expect(await within(dialog).findByRole("alert")).toHaveTextContent("Diagnostics unavailable.");
@@ -208,7 +282,12 @@ describe("single workspace", () => {
       getDocuments: vi.fn().mockResolvedValue(documentList),
     });
     const user = userEvent.setup();
-    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    let downloadName = "";
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      downloadName = this.download;
+    });
     render(<App api={api} />);
     await screen.findByText("alpha.pdf");
     await user.type(screen.getByLabelText("Ask about your documents"), "What changed?");
@@ -219,6 +298,7 @@ describe("single workspace", () => {
     await waitFor(() => expect(api.exportConversation).toHaveBeenCalledTimes(1));
     expect(URL.createObjectURL).toHaveBeenCalled();
     expect(click).toHaveBeenCalled();
+    expect(downloadName).toBe("conversation-session.json");
 
     await user.click(screen.getByRole("button", { name: "Clear conversation" }));
     await waitFor(() => expect(api.clearConversation).toHaveBeenCalledTimes(1));
@@ -250,6 +330,30 @@ describe("single workspace", () => {
     const benchmark = screen.getByRole("button", { name: "Run benchmark" });
     expect(benchmark).toBeDisabled();
     expect(screen.getByText(/benchmark workflow is not connected/i)).toBeVisible();
+  });
+
+  it("disables conflicting controls immediately while a local query is in flight", async () => {
+    const pendingQuery = deferred<QueryResponse>();
+    const api = createMockApi({
+      getDocuments: vi.fn().mockResolvedValue(documentList),
+      query: vi.fn().mockReturnValue(pendingQuery.promise),
+    });
+    const user = userEvent.setup();
+    render(<App api={api} />);
+    await screen.findByText("alpha.pdf");
+
+    await user.type(screen.getByLabelText("Ask about your documents"), "Hold this query");
+    await user.click(screen.getByRole("button", { name: "Send question" }));
+
+    expect(screen.getByRole("button", { name: "Send question" })).toBeDisabled();
+    expect(screen.getByLabelText("Upload documents")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Clear conversation" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Export conversation" })).toBeDisabled();
+
+    await act(async () => {
+      pendingQuery.resolve(queryResponse);
+      await pendingQuery.promise;
+    });
   });
 
   it("invokes the optional benchmark boundary only when capability allows it", async () => {
@@ -291,5 +395,28 @@ describe("single workspace", () => {
     const reopened = await screen.findByRole("dialog", { name: "System diagnostics" });
     fireEvent.click(reopened);
     expect(screen.queryByRole("dialog", { name: "System diagnostics" })).not.toBeInTheDocument();
+  });
+
+  it("gives the mobile drawer focus, Escape, and covered-content semantics", async () => {
+    const user = userEvent.setup();
+    render(<App api={createMockApi()} />);
+    const opener = await screen.findByRole("button", { name: "Open workspace controls" });
+    opener.focus();
+
+    await user.click(opener);
+
+    const close = screen.getByRole("button", { name: "Close workspace controls" });
+    expect(close).toHaveFocus();
+    expect(screen.getByRole("main", { hidden: true })).toHaveAttribute("inert");
+    expect(screen.getByRole("main", { hidden: true })).toHaveAttribute("aria-hidden", "true");
+
+    await user.keyboard("{Escape}");
+
+    expect(screen.getByRole("complementary", { name: "Workspace controls" })).not.toHaveClass(
+      "sidebar--open",
+    );
+    expect(screen.getByRole("main")).not.toHaveAttribute("inert");
+    expect(screen.getByRole("main")).not.toHaveAttribute("aria-hidden");
+    expect(opener).toHaveFocus();
   });
 });

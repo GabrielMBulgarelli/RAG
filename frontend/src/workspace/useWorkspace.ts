@@ -1,9 +1,17 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
-import type { WorkspaceApi } from "../api/client";
+import type { DownloadFile, WorkspaceApi } from "../api/client";
 import type {
+  ActiveOperation,
   DiagnosticsSnapshot,
   DocumentList,
+  OperationKind,
   QueryResponse,
   RuntimeSnapshot,
 } from "../api/types";
@@ -18,16 +26,37 @@ export interface Exchange {
   pending: boolean;
 }
 
+export type WorkspaceOperationKind =
+  | OperationKind
+  | "clear_conversation"
+  | "export_conversation";
+
+interface OperationToken {
+  id: symbol;
+  kind: WorkspaceOperationKind;
+  generation: number;
+  api: WorkspaceApi;
+}
+
+interface DiagnosticsToken {
+  id: symbol;
+  generation: number;
+  api: WorkspaceApi;
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "The workspace request failed.";
 }
 
-function downloadBlob(blob: Blob): void {
+function downloadFile({ blob, filename }: DownloadFile): void {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download = "rag-conversation.md";
+  anchor.download = filename;
+  anchor.hidden = true;
+  document.body.append(anchor);
   anchor.click();
+  anchor.remove();
   URL.revokeObjectURL(url);
 }
 
@@ -42,51 +71,171 @@ export function useWorkspace(api: WorkspaceApi) {
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [localOperation, setLocalOperation] = useState<WorkspaceOperationKind | null>(null);
   const sessionId = useMemo(() => getSessionId(), []);
 
-  const refreshWorkspace = useCallback(async () => {
-    const [nextRuntime, nextDocuments] = await Promise.all([
-      api.getRuntime(),
-      api.getDocuments(),
-    ]);
-    setRuntime(nextRuntime);
-    setDocumentList(nextDocuments);
-  }, [api]);
+  const mountedRef = useRef(false);
+  const apiRef = useRef(api);
+  const generationRef = useRef(0);
+  const operationRef = useRef<OperationToken | null>(null);
+  const diagnosticsRef = useRef<DiagnosticsToken | null>(null);
+  const serverOperationRef = useRef<ActiveOperation | null>(null);
+
+  if (apiRef.current !== api) {
+    apiRef.current = api;
+    generationRef.current += 1;
+    operationRef.current = null;
+    diagnosticsRef.current = null;
+  }
+
+  const serverOperation = runtime?.active_operation ?? documentList?.active_operation ?? null;
+  serverOperationRef.current = serverOperation;
+
+  const isCurrent = useCallback((generation: number, requestApi: WorkspaceApi) => (
+    mountedRef.current
+    && generationRef.current === generation
+    && apiRef.current === requestApi
+  ), []);
 
   useEffect(() => {
-    let active = true;
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      operationRef.current = null;
+      diagnosticsRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    setLocalOperation(null);
+    setDiagnosticsLoading(false);
+  }, [api]);
+
+  const refreshWorkspace = useCallback(async (
+    generation: number,
+    requestApi: WorkspaceApi,
+  ): Promise<boolean> => {
+    const [nextRuntime, nextDocuments] = await Promise.all([
+      requestApi.getRuntime(),
+      requestApi.getDocuments(),
+    ]);
+    if (!isCurrent(generation, requestApi)) {
+      return false;
+    }
+    setRuntime(nextRuntime);
+    setDocumentList(nextDocuments);
+    return true;
+  }, [isCurrent]);
+
+  useEffect(() => {
+    const generation = generationRef.current;
+    const requestApi = api;
     setLoadingWorkspace(true);
     setWorkspaceError(null);
-    Promise.all([api.getRuntime(), api.getDocuments()])
+    Promise.all([requestApi.getRuntime(), requestApi.getDocuments()])
       .then(([nextRuntime, nextDocuments]) => {
-        if (active) {
+        if (isCurrent(generation, requestApi)) {
           setRuntime(nextRuntime);
           setDocumentList(nextDocuments);
         }
       })
       .catch((error: unknown) => {
-        if (active) {
+        if (isCurrent(generation, requestApi)) {
           setWorkspaceError(errorMessage(error));
         }
       })
       .finally(() => {
-        if (active) {
+        if (isCurrent(generation, requestApi)) {
           setLoadingWorkspace(false);
         }
       });
-    return () => {
-      active = false;
+  }, [api, isCurrent]);
+
+  const beginOperation = useCallback((kind: WorkspaceOperationKind): OperationToken | null => {
+    if (!mountedRef.current || operationRef.current || serverOperationRef.current) {
+      return null;
+    }
+    const token = {
+      id: Symbol(kind),
+      kind,
+      generation: generationRef.current,
+      api,
     };
+    operationRef.current = token;
+    setLocalOperation(kind);
+    setActionError(null);
+    return token;
   }, [api]);
 
-  const runQuery = useCallback(async (exchangeId: string, question: string) => {
-    setExchanges((current) => current.map((exchange) => (
-      exchange.id === exchangeId
-        ? { ...exchange, pending: true, error: null }
-        : exchange
-    )));
+  const finishOperation = useCallback((token: OperationToken) => {
+    if (operationRef.current?.id !== token.id) {
+      return;
+    }
+    operationRef.current = null;
+    if (isCurrent(token.generation, token.api)) {
+      setLocalOperation(null);
+    }
+  }, [isCurrent]);
+
+  const readDiagnostics = useCallback(async (
+    force: boolean,
+    clearStaleOnError: boolean,
+  ): Promise<boolean> => {
+    if (!mountedRef.current) {
+      return false;
+    }
+    if (diagnosticsRef.current && !force) {
+      return false;
+    }
+    const token = {
+      id: Symbol("diagnostics"),
+      generation: generationRef.current,
+      api,
+    };
+    diagnosticsRef.current = token;
+    setDiagnosticsLoading(true);
+    setActionError(null);
     try {
-      const response = await api.query(sessionId, question);
+      const nextDiagnostics = await api.getDiagnostics();
+      if (
+        diagnosticsRef.current?.id !== token.id
+        || !isCurrent(token.generation, token.api)
+      ) {
+        return false;
+      }
+      setDiagnostics(nextDiagnostics);
+      return true;
+    } catch (error) {
+      if (
+        diagnosticsRef.current?.id === token.id
+        && isCurrent(token.generation, token.api)
+      ) {
+        if (clearStaleOnError) {
+          setDiagnostics(null);
+        }
+        setActionError(errorMessage(error));
+      }
+      return false;
+    } finally {
+      if (diagnosticsRef.current?.id === token.id) {
+        diagnosticsRef.current = null;
+        if (isCurrent(token.generation, token.api)) {
+          setDiagnosticsLoading(false);
+        }
+      }
+    }
+  }, [api, isCurrent]);
+
+  const runQuery = useCallback(async (
+    token: OperationToken,
+    exchangeId: string,
+    question: string,
+  ) => {
+    try {
+      const response = await token.api.query(sessionId, question);
+      if (!isCurrent(token.generation, token.api)) {
+        return;
+      }
       setExchanges((current) => current.map((exchange) => (
         exchange.id === exchangeId
           ? { ...exchange, pending: false, response, error: null }
@@ -95,17 +244,25 @@ export function useWorkspace(api: WorkspaceApi) {
       setSelectedExchangeId(exchangeId);
       setSelectedSourceLabel(response.sources[0]?.label ?? null);
     } catch (error) {
-      setExchanges((current) => current.map((exchange) => (
-        exchange.id === exchangeId
-          ? { ...exchange, pending: false, error: errorMessage(error) }
-          : exchange
-      )));
+      if (isCurrent(token.generation, token.api)) {
+        setExchanges((current) => current.map((exchange) => (
+          exchange.id === exchangeId
+            ? { ...exchange, pending: false, error: errorMessage(error) }
+            : exchange
+        )));
+      }
+    } finally {
+      finishOperation(token);
     }
-  }, [api, sessionId]);
+  }, [finishOperation, isCurrent, sessionId]);
 
   const submitQuestion = useCallback(async (question: string) => {
     const trimmed = question.trim();
     if (!trimmed) {
+      return;
+    }
+    const token = beginOperation("query");
+    if (!token) {
       return;
     }
     const exchangeId = crypto.randomUUID();
@@ -117,92 +274,155 @@ export function useWorkspace(api: WorkspaceApi) {
       error: null,
       pending: true,
     }]);
-    await runQuery(exchangeId, trimmed);
-  }, [runQuery]);
+    await runQuery(token, exchangeId, trimmed);
+  }, [beginOperation, runQuery]);
 
   const retryQuestion = useCallback(async (exchangeId: string) => {
     const exchange = exchanges.find((candidate) => candidate.id === exchangeId);
-    if (exchange) {
-      await runQuery(exchange.id, exchange.question);
+    if (!exchange) {
+      return;
     }
-  }, [exchanges, runQuery]);
+    const token = beginOperation("query");
+    if (!token) {
+      return;
+    }
+    if (isCurrent(token.generation, token.api)) {
+      setExchanges((current) => current.map((candidate) => (
+        candidate.id === exchangeId
+          ? { ...candidate, pending: true, error: null }
+          : candidate
+      )));
+    }
+    await runQuery(token, exchange.id, exchange.question);
+  }, [beginOperation, exchanges, isCurrent, runQuery]);
+
+  const runWorkspaceMutation = useCallback(async (
+    kind: "index_documents" | "delete_document",
+    mutate: (requestApi: WorkspaceApi) => Promise<unknown>,
+  ) => {
+    const token = beginOperation(kind);
+    if (!token) {
+      return false;
+    }
+    try {
+      await mutate(token.api);
+      if (!isCurrent(token.generation, token.api)) {
+        return false;
+      }
+      return await refreshWorkspace(token.generation, token.api);
+    } catch (error) {
+      if (isCurrent(token.generation, token.api)) {
+        setActionError(errorMessage(error));
+      }
+      return false;
+    } finally {
+      finishOperation(token);
+    }
+  }, [beginOperation, finishOperation, isCurrent, refreshWorkspace]);
 
   const uploadDocuments = useCallback(async (files: File[]) => {
     if (files.length === 0) {
-      return;
+      return false;
     }
-    setActionError(null);
-    try {
-      await api.uploadDocuments(files);
-      await refreshWorkspace();
-    } catch (error) {
-      setActionError(errorMessage(error));
-    }
-  }, [api, refreshWorkspace]);
+    return runWorkspaceMutation(
+      "index_documents",
+      (requestApi) => requestApi.uploadDocuments(files),
+    );
+  }, [runWorkspaceMutation]);
 
   const deleteDocument = useCallback(async (documentId: string) => {
-    setActionError(null);
-    try {
-      await api.deleteDocument(documentId);
-      await refreshWorkspace();
-      return true;
-    } catch (error) {
-      setActionError(errorMessage(error));
-      return false;
-    }
-  }, [api, refreshWorkspace]);
+    return runWorkspaceMutation(
+      "delete_document",
+      (requestApi) => requestApi.deleteDocument(documentId),
+    );
+  }, [runWorkspaceMutation]);
 
   const loadModel = useCallback(async (chatModel: string) => {
-    setActionError(null);
-    try {
-      await api.loadModel(chatModel);
-      await refreshWorkspace();
-      return true;
-    } catch (error) {
-      setActionError(errorMessage(error));
+    const token = beginOperation("load_model");
+    if (!token) {
       return false;
     }
-  }, [api, refreshWorkspace]);
-
-  const refreshDiagnostics = useCallback(async () => {
-    setDiagnosticsLoading(true);
-    setActionError(null);
     try {
-      setDiagnostics(await api.getDiagnostics());
-      return true;
+      await token.api.loadModel(chatModel);
+      if (!isCurrent(token.generation, token.api)) {
+        return false;
+      }
+      if (!await refreshWorkspace(token.generation, token.api)) {
+        return false;
+      }
+      return await readDiagnostics(true, true);
     } catch (error) {
-      setActionError(errorMessage(error));
+      if (isCurrent(token.generation, token.api)) {
+        setDiagnostics(null);
+        setActionError(errorMessage(error));
+      }
       return false;
     } finally {
-      setDiagnosticsLoading(false);
+      finishOperation(token);
     }
-  }, [api]);
+  }, [
+    beginOperation,
+    finishOperation,
+    isCurrent,
+    readDiagnostics,
+    refreshWorkspace,
+  ]);
+
+  const refreshDiagnostics = useCallback(
+    () => readDiagnostics(false, false),
+    [readDiagnostics],
+  );
 
   const clearConversation = useCallback(async () => {
-    setActionError(null);
+    const token = beginOperation("clear_conversation");
+    if (!token) {
+      return false;
+    }
     try {
-      await api.clearConversation(sessionId);
+      await token.api.clearConversation(sessionId);
+      if (!isCurrent(token.generation, token.api)) {
+        return false;
+      }
       setExchanges([]);
       setSelectedExchangeId(null);
       setSelectedSourceLabel(null);
+      return true;
     } catch (error) {
-      setActionError(errorMessage(error));
+      if (isCurrent(token.generation, token.api)) {
+        setActionError(errorMessage(error));
+      }
+      return false;
+    } finally {
+      finishOperation(token);
     }
-  }, [api, sessionId]);
+  }, [beginOperation, finishOperation, isCurrent, sessionId]);
 
   const exportConversation = useCallback(async () => {
-    setActionError(null);
-    try {
-      downloadBlob(await api.exportConversation(sessionId));
-    } catch (error) {
-      setActionError(errorMessage(error));
+    const token = beginOperation("export_conversation");
+    if (!token) {
+      return false;
     }
-  }, [api, sessionId]);
+    try {
+      const exported = await token.api.exportConversation(sessionId);
+      if (!isCurrent(token.generation, token.api)) {
+        return false;
+      }
+      downloadFile(exported);
+      return true;
+    } catch (error) {
+      if (isCurrent(token.generation, token.api)) {
+        setActionError(errorMessage(error));
+      }
+      return false;
+    } finally {
+      finishOperation(token);
+    }
+  }, [beginOperation, finishOperation, isCurrent, sessionId]);
 
   const selectedExchange = exchanges.find(
     (exchange) => exchange.id === selectedExchangeId,
   ) ?? [...exchanges].reverse().find((exchange) => exchange.response) ?? null;
-  const activeOperation = runtime?.active_operation ?? documentList?.active_operation ?? null;
+  const busyKind = localOperation ?? serverOperation?.kind ?? null;
 
   return {
     runtime,
@@ -215,7 +435,9 @@ export function useWorkspace(api: WorkspaceApi) {
     diagnosticsLoading,
     workspaceError,
     actionError,
-    activeOperation,
+    activeOperation: serverOperation,
+    busy: busyKind !== null,
+    busyKind,
     setSelectedExchangeId,
     setSelectedSourceLabel,
     submitQuestion,

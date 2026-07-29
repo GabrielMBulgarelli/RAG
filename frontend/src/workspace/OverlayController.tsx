@@ -142,7 +142,7 @@ export function OverlayController({
             <button
               className="button button--secondary"
               type="button"
-              disabled={workspace.activeOperation !== null}
+              disabled={workspace.busy}
               onClick={() => void workspace.loadModel(runtime.configured_chat_model)}
             >
               Load models
@@ -151,7 +151,7 @@ export function OverlayController({
           <button
             className="button button--quiet"
             type="button"
-            disabled={workspace.diagnosticsLoading}
+            disabled={workspace.diagnosticsLoading || workspace.busy}
             onClick={() => void workspace.refreshDiagnostics()}
           >
             Refresh diagnostics
@@ -189,7 +189,7 @@ export function OverlayController({
           <button
             className="button button--danger"
             type="button"
-            disabled={workspace.activeOperation !== null}
+            disabled={workspace.busy}
             onClick={() => onRequestDelete(document)}
           >
             Delete document
@@ -222,7 +222,7 @@ export function OverlayController({
         <button
           className="button button--danger"
           type="button"
-          disabled={workspace.activeOperation !== null}
+          disabled={workspace.busy}
           onClick={async () => {
             if (await workspace.deleteDocument(document.id)) {
               onClose();

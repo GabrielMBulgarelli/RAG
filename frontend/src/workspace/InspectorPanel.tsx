@@ -1,4 +1,9 @@
-import { useEffect, useState } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react";
 
 import type { WorkspaceController } from "./useWorkspace";
 
@@ -14,6 +19,8 @@ export function InspectorPanel({
   onCollapse,
 }: InspectorPanelProps) {
   const [tab, setTab] = useState<"sources" | "details">("sources");
+  const sourcesTabRef = useRef<HTMLButtonElement>(null);
+  const detailsTabRef = useRef<HTMLButtonElement>(null);
   const response = workspace.selectedExchange?.response ?? null;
 
   useEffect(() => {
@@ -21,6 +28,26 @@ export function InspectorPanel({
       setTab("sources");
     }
   }, [workspace.selectedSourceLabel]);
+
+  const handleTabKeyDown = (
+    event: KeyboardEvent<HTMLButtonElement>,
+    currentTab: "sources" | "details",
+  ) => {
+    let nextTab: "sources" | "details" | null = null;
+    if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+      nextTab = currentTab === "sources" ? "details" : "sources";
+    } else if (event.key === "Home") {
+      nextTab = "sources";
+    } else if (event.key === "End") {
+      nextTab = "details";
+    }
+    if (!nextTab) {
+      return;
+    }
+    event.preventDefault();
+    setTab(nextTab);
+    (nextTab === "sources" ? sourcesTabRef : detailsTabRef).current?.focus();
+  };
 
   if (collapsed) {
     return (
@@ -56,24 +83,39 @@ export function InspectorPanel({
 
       <div className="tabs" role="tablist" aria-label="Inspector views">
         <button
+          ref={sourcesTabRef}
+          id="inspector-tab-sources"
           type="button"
           role="tab"
           aria-selected={tab === "sources"}
+          aria-controls="inspector-panel-sources"
+          tabIndex={tab === "sources" ? 0 : -1}
           onClick={() => setTab("sources")}
+          onKeyDown={(event) => handleTabKeyDown(event, "sources")}
         >
           Sources
         </button>
         <button
+          ref={detailsTabRef}
+          id="inspector-tab-details"
           type="button"
           role="tab"
           aria-selected={tab === "details"}
+          aria-controls="inspector-panel-details"
+          tabIndex={tab === "details" ? 0 : -1}
           onClick={() => setTab("details")}
+          onKeyDown={(event) => handleTabKeyDown(event, "details")}
         >
           Details
         </button>
       </div>
 
-      <div className="inspector__content">
+      <div
+        id={`inspector-panel-${tab}`}
+        className="inspector__content"
+        role="tabpanel"
+        aria-labelledby={`inspector-tab-${tab}`}
+      >
         {!response ? (
           <div className="inspector-empty">
             <span aria-hidden="true">01</span>

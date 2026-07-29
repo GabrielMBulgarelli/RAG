@@ -112,18 +112,44 @@ describe("workspace API client", () => {
     }));
   });
 
-  it("returns the conversation export as a blob", async () => {
-    fetchMock.mockResolvedValueOnce(new Response("# Conversation", {
-      headers: { "Content-Type": "text/markdown" },
+  it("returns the backend JSON export with its server filename", async () => {
+    fetchMock.mockResolvedValueOnce(new Response('{"messages":[]}', {
+      headers: {
+        "Content-Type": "application/json",
+        "Content-Disposition": (
+          'attachment; filename="conversation-9a1c4aaa-432c-4bf9-84a2-93afaf2e2c10.json"'
+        ),
+      },
     }));
 
     const result = await createApiClient().exportConversation("session-id");
 
-    expect(await result.text()).toBe("# Conversation");
+    expect(result.filename).toBe(
+      "conversation-9a1c4aaa-432c-4bf9-84a2-93afaf2e2c10.json",
+    );
+    expect(result.blob.type).toBe("application/json");
+    expect(await result.blob.text()).toBe('{"messages":[]}');
     expect(fetchMock).toHaveBeenCalledWith("/api/conversations/export", expect.objectContaining({
       body: JSON.stringify({ session_id: "session-id" }),
       method: "POST",
     }));
+  });
+
+  it("uses a safe JSON filename when export disposition is absent or unsafe", async () => {
+    fetchMock
+      .mockResolvedValueOnce(new Response("{}", {
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Disposition": 'attachment; filename="../../unsafe.json"',
+        },
+      }))
+      .mockResolvedValueOnce(new Response("{}", {
+        headers: { "Content-Type": "application/json" },
+      }));
+    const api = createApiClient();
+
+    expect((await api.exportConversation("session-id")).filename).toBe("unsafe.json");
+    expect((await api.exportConversation("session-id")).filename).toBe("conversation.json");
   });
 
   it("throws a normalized ApiProblem for non-success responses", async () => {

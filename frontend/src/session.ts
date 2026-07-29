@@ -3,6 +3,9 @@ const SESSION_STORAGE_KEY = "rag.workspace.session-id";
 type SessionStorage = Pick<Storage, "getItem" | "setItem">;
 
 let fallbackSessionId: string | undefined;
+const UUID_PATTERN = (
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+);
 
 function createUuid(): string {
   if (typeof crypto.randomUUID === "function") {
@@ -22,15 +25,16 @@ function createUuid(): string {
 }
 
 export function getSessionId(
-  storage: SessionStorage = window.sessionStorage,
+  storage?: SessionStorage,
 ): string {
   try {
-    const existing = storage.getItem(SESSION_STORAGE_KEY);
-    if (existing) {
+    const availableStorage = storage ?? window.sessionStorage;
+    const existing = availableStorage.getItem(SESSION_STORAGE_KEY);
+    if (existing && UUID_PATTERN.test(existing)) {
       return existing;
     }
     const created = createUuid();
-    storage.setItem(SESSION_STORAGE_KEY, created);
+    availableStorage.setItem(SESSION_STORAGE_KEY, created);
     return created;
   } catch {
     fallbackSessionId ??= createUuid();

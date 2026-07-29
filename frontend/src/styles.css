@@ -603,6 +603,23 @@ h3 {
   font-size: 0.68rem;
 }
 
+.answer-select {
+  min-height: 40px;
+  margin-left: auto;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--teal);
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+.answer-select:hover,
+.answer-select[aria-pressed="true"] {
+  border-color: #9fcfc8;
+  background: var(--teal-soft);
+}
+
 .answer-state {
   padding: 3px 6px;
   border: 1px solid var(--hairline);
@@ -636,8 +653,8 @@ h3 {
 }
 
 .citation {
-  min-width: 32px;
-  min-height: 32px;
+  min-width: 40px;
+  min-height: 40px;
   border-color: #9fcfc8;
   background: var(--teal-soft);
   color: #087064;
@@ -688,6 +705,12 @@ h3 {
   margin: 0 auto;
   border: 1px solid #b7c2ce;
   background: var(--panel);
+}
+
+.composer__input:focus-within {
+  border-color: var(--blue);
+  outline: 3px solid color-mix(in srgb, var(--blue) 35%, transparent);
+  outline-offset: 2px;
 }
 
 .composer textarea {

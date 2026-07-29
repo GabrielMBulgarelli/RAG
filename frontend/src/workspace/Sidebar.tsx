@@ -1,4 +1,9 @@
-import { useEffect, useState, type DragEvent } from "react";
+import {
+  useEffect,
+  useState,
+  type DragEvent,
+  type RefObject,
+} from "react";
 
 import type { DocumentRecord } from "../api/types";
 import type { WorkspaceController } from "./useWorkspace";
@@ -6,6 +11,7 @@ import type { WorkspaceController } from "./useWorkspace";
 interface SidebarProps {
   workspace: WorkspaceController;
   open: boolean;
+  closeButtonRef: RefObject<HTMLButtonElement | null>;
   onClose: () => void;
   onDocumentDetails: (document: DocumentRecord) => void;
   onDiagnostics: () => void;
@@ -15,6 +21,7 @@ interface SidebarProps {
 export function Sidebar({
   workspace,
   open,
+  closeButtonRef,
   onClose,
   onDocumentDetails,
   onDiagnostics,
@@ -22,7 +29,7 @@ export function Sidebar({
 }: SidebarProps) {
   const runtime = workspace.runtime;
   const documents = workspace.documentList?.documents ?? [];
-  const busy = workspace.activeOperation !== null;
+  const busy = workspace.busy;
   const uploadDisabled = busy || !runtime?.capabilities.can_upload;
   const [model, setModel] = useState("");
 
@@ -64,7 +71,13 @@ export function Sidebar({
     >
       <div className="sidebar__mobile-heading">
         <strong>Workspace controls</strong>
-        <button className="icon-button" type="button" onClick={onClose} aria-label="Close workspace controls">
+            <button
+              ref={closeButtonRef}
+              className="icon-button"
+              type="button"
+              onClick={onClose}
+              aria-label="Close workspace controls"
+            >
           ×
         </button>
       </div>

@@ -9,7 +9,7 @@ interface ConversationPanelProps {
 export function ConversationPanel({ workspace }: ConversationPanelProps) {
   const [draft, setDraft] = useState("");
   const documents = workspace.documentList?.documents ?? [];
-  const busy = workspace.activeOperation !== null;
+  const busy = workspace.busy;
   const canQuery = Boolean(
     workspace.runtime?.capabilities.can_query && !busy && documents.length > 0,
   );
@@ -82,7 +82,7 @@ export function ConversationPanel({ workspace }: ConversationPanelProps) {
           </div>
         ) : (
           <div className="exchange-list">
-            {workspace.exchanges.map((exchange) => (
+            {workspace.exchanges.map((exchange, index) => (
               <div className="exchange" key={exchange.id}>
                 <article className="message message--user" aria-label="User question">
                   <p>{exchange.question}</p>
@@ -113,13 +113,26 @@ export function ConversationPanel({ workspace }: ConversationPanelProps) {
                   <article
                     className="message message--assistant"
                     aria-label="Assistant response"
-                    onClick={() => workspace.setSelectedExchangeId(exchange.id)}
                   >
                     <div className="answer-heading">
                       <span className={`answer-state answer-state--${exchange.response.answer_state}`}>
                         {exchange.response.answer_state}
                       </span>
                       <span>{exchange.response.diagnostics.retrieval_strategy} retrieval</span>
+                      <button
+                        className="answer-select"
+                        type="button"
+                        aria-label={`Inspect answer ${index + 1}`}
+                        aria-pressed={workspace.selectedExchange?.id === exchange.id}
+                        onClick={() => {
+                          workspace.setSelectedExchangeId(exchange.id);
+                          workspace.setSelectedSourceLabel(
+                            exchange.response?.sources[0]?.label ?? null,
+                          );
+                        }}
+                      >
+                        Inspect
+                      </button>
                     </div>
                     <p>{exchange.response.message.content}</p>
                     {exchange.response.sources.length > 0 ? (
@@ -172,7 +185,7 @@ export function ConversationPanel({ workspace }: ConversationPanelProps) {
         </div>
         <p className="composer__hint">
           {busy
-            ? `Workspace busy: ${workspace.activeOperation?.kind.replaceAll("_", " ")}`
+            ? `Workspace busy: ${workspace.busyKind?.replaceAll("_", " ")}`
             : "Ctrl or ⌘ + Enter to send"}
         </p>
       </form>

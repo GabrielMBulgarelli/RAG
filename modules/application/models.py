@@ -78,7 +78,7 @@ class DiagnosticsSnapshot(BaseModel):
 
 
 class DocumentRecord(BaseModel):
-    id: UUID
+    id: str
     filename: str
     state: str
     size_bytes: int = Field(ge=0)
@@ -86,6 +86,13 @@ class DocumentRecord(BaseModel):
     chunk_count: int = Field(ge=0)
     indexed_at: datetime | None
     updated_at: datetime
+
+    @field_validator("id")
+    @classmethod
+    def validate_id(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("id must not be empty")
+        return value
 
 
 class DocumentList(BaseModel):
@@ -96,7 +103,14 @@ class DocumentList(BaseModel):
 
 class UploadAccepted(BaseModel):
     filename: str
-    document_id: UUID
+    document_id: str
+
+    @field_validator("document_id")
+    @classmethod
+    def validate_document_id(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("document_id must not be empty")
+        return value
 
 
 class UploadBatchResult(BaseModel):
@@ -155,6 +169,14 @@ class QueryDiagnostics(BaseModel):
 class QueryRequest(BaseModel):
     session_id: UUID
     question: str
+
+    @field_validator("question")
+    @classmethod
+    def trim_question(cls, value: str) -> str:
+        trimmed = value.strip()
+        if not trimmed:
+            raise ValueError("question must not be empty")
+        return trimmed
 
 
 class QueryResponse(BaseModel):
@@ -300,7 +322,7 @@ class BenchmarkEventType(str, Enum):
 
 
 class BenchmarkEvent(BaseModel):
-    event_id: UUID
+    event_id: int = Field(ge=1)
     run_id: UUID
     type: BenchmarkEventType
     timestamp: datetime

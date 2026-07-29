@@ -35,6 +35,12 @@ class FailingStartFake(LifecycleFake):
         raise RuntimeError("startup failed")
 
 
+class FailingCloseFake(LifecycleFake):
+    async def close(self) -> None:
+        await super().close()
+        raise RuntimeError("shutdown failed")
+
+
 def test_lifespan_constructs_starts_and_closes_owned_dependencies_once() -> None:
     events: list[str] = []
     workspace = LifecycleFake("workspace", events)
@@ -78,7 +84,7 @@ def test_importing_app_module_does_not_construct_container() -> None:
             sys.modules[module_name] = imported
 
 
-def test_startup_failure_does_not_publish_container_and_closes_started_dependency() -> None:
+def test_benchmark_start_failure_closes_benchmark_then_workspace_without_publishing() -> None:
     events: list[str] = []
     workspace = LifecycleFake("workspace", events)
     benchmarks = FailingStartFake("benchmarks", events)
@@ -95,4 +101,57 @@ def test_startup_failure_does_not_publish_container_and_closes_started_dependenc
 
     assert not hasattr(app.state, "container")
     assert workspace.close_count == 1
-    assert events == ["workspace.start", "benchmarks.start", "workspace.close"]
+    assert benchmarks.close_count == 1
+    assert events == [
+        "workspace.start",
+        "benchmarks.start",
+        "benchmarks.close",
+        "workspace.close",
+    ]
+
+
+def test_workspace_start_failure_closes_workspace_without_publishing() -> None:
+    events: list[str] = []
+    workspace = FailingStartFake("workspace", events)
+    benchmarks = LifecycleFake("benchmarks", events)
+    app = create_app(
+        lambda: ApplicationContainer(
+            workspace=cast(WorkspaceService, workspace),
+            benchmarks=cast(BenchmarkManager, benchmarks),
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="startup failed"):
+        with TestClient(app):
+            pass
+
+    assert not hasattr(app.state, "container")
+    assert workspace.close_count == 1
+    assert benchmarks.start_count == 0
+    assert benchmarks.close_count == 0
+    assert events == ["workspace.start", "workspace.close"]
+
+
+def test_workspace_close_is_attempted_when_benchmark_close_raises() -> None:
+    events: list[str] = []
+    workspace = LifecycleFake("workspace", events)
+    benchmarks = FailingCloseFake("benchmarks", events)
+    app = create_app(
+        lambda: ApplicationContainer(
+            workspace=cast(WorkspaceService, workspace),
+            benchmarks=cast(BenchmarkManager, benchmarks),
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="shutdown failed"):
+        with TestClient(app):
+            pass
+
+    assert not hasattr(app.state, "container")
+    assert workspace.close_count == 1
+    assert events == [
+        "workspace.start",
+        "benchmarks.start",
+        "benchmarks.close",
+        "workspace.close",
+    ]

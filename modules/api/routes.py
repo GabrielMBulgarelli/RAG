@@ -3,7 +3,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Header, Response, UploadFile, status
 
 from modules.api.dependencies import (
     BenchmarkManager,
@@ -135,8 +135,12 @@ async def get_benchmark_case(
 
 
 @router.get("/benchmarks/{run_id}/events", response_class=Response)
-async def stream_benchmark_events(run_id: UUID, benchmarks: BenchmarkDependency) -> Response:
-    return await benchmarks.stream_events(run_id)
+async def stream_benchmark_events(
+    run_id: UUID,
+    benchmarks: BenchmarkDependency,
+    last_event_id: Annotated[int | None, Header(alias="Last-Event-ID", ge=0)] = None,
+) -> Response:
+    return await benchmarks.stream_events(run_id, last_event_id)
 
 
 @router.post(

@@ -16,19 +16,28 @@ def create_app(container_factory: ContainerFactory) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         container = container_factory()
-        await container.workspace.start()
+        try:
+            await container.workspace.start()
+        except BaseException:
+            await container.workspace.close()
+            raise
         try:
             await container.benchmarks.start()
         except BaseException:
-            await container.workspace.close()
+            try:
+                await container.benchmarks.close()
+            finally:
+                await container.workspace.close()
             raise
         app.state.container = container
         try:
             yield
         finally:
             del app.state.container
-            await container.benchmarks.close()
-            await container.workspace.close()
+            try:
+                await container.benchmarks.close()
+            finally:
+                await container.workspace.close()
 
     app = FastAPI(lifespan=lifespan)
     register_exception_handlers(app)

@@ -111,17 +111,18 @@ export function InspectorPanel({
       </div>
 
       <div
-        id={`inspector-panel-${tab}`}
+        id="inspector-panel-sources"
         className="inspector__content"
         role="tabpanel"
-        aria-labelledby={`inspector-tab-${tab}`}
+        aria-labelledby="inspector-tab-sources"
+        hidden={tab !== "sources"}
       >
         {!response ? (
           <div className="inspector-empty">
             <span aria-hidden="true">01</span>
             <p>Select an answer to inspect its sources and execution details.</p>
           </div>
-        ) : tab === "sources" ? (
+        ) : (
           <div className="source-list">
             {response.sources.length === 0 ? (
               <p className="muted-copy">No sources accompanied this answer.</p>
@@ -145,6 +146,21 @@ export function InspectorPanel({
                 </button>
               );
             })}
+          </div>
+        )}
+      </div>
+
+      <div
+        id="inspector-panel-details"
+        className="inspector__content"
+        role="tabpanel"
+        aria-labelledby="inspector-tab-details"
+        hidden={tab !== "details"}
+      >
+        {!response ? (
+          <div className="inspector-empty">
+            <span aria-hidden="true">01</span>
+            <p>Select an answer to inspect its sources and execution details.</p>
           </div>
         ) : (
           <div className="details-list">

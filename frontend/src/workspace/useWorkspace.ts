@@ -107,8 +107,18 @@ export function useWorkspace(api: WorkspaceApi) {
   }, []);
 
   useEffect(() => {
+    setRuntime(null);
+    setDocumentList(null);
+    setDiagnostics(null);
+    setExchanges([]);
+    setSelectedExchangeId(null);
+    setSelectedSourceLabel(null);
+    setLoadingWorkspace(true);
     setLocalOperation(null);
     setDiagnosticsLoading(false);
+    setWorkspaceError(null);
+    setActionError(null);
+    serverOperationRef.current = null;
   }, [api]);
 
   const refreshWorkspace = useCallback(async (
@@ -128,27 +138,31 @@ export function useWorkspace(api: WorkspaceApi) {
   }, [isCurrent]);
 
   useEffect(() => {
+    let cancelled = false;
     const generation = generationRef.current;
     const requestApi = api;
     setLoadingWorkspace(true);
     setWorkspaceError(null);
     Promise.all([requestApi.getRuntime(), requestApi.getDocuments()])
       .then(([nextRuntime, nextDocuments]) => {
-        if (isCurrent(generation, requestApi)) {
+        if (!cancelled && isCurrent(generation, requestApi)) {
           setRuntime(nextRuntime);
           setDocumentList(nextDocuments);
         }
       })
       .catch((error: unknown) => {
-        if (isCurrent(generation, requestApi)) {
+        if (!cancelled && isCurrent(generation, requestApi)) {
           setWorkspaceError(errorMessage(error));
         }
       })
       .finally(() => {
-        if (isCurrent(generation, requestApi)) {
+        if (!cancelled && isCurrent(generation, requestApi)) {
           setLoadingWorkspace(false);
         }
       });
+    return () => {
+      cancelled = true;
+    };
   }, [api, isCurrent]);
 
   const beginOperation = useCallback((kind: WorkspaceOperationKind): OperationToken | null => {

@@ -12,10 +12,27 @@ import { Sidebar } from "./workspace/Sidebar";
 import { useWorkspace } from "./workspace/useWorkspace";
 
 const defaultApi = createApiClient();
+const COMPACT_WORKSPACE_QUERY = "(max-width: 860px)";
 
 interface AppProps {
   api?: WorkspaceApi;
   onRunBenchmark?: () => void;
+}
+
+function useCompactWorkspace(): boolean {
+  const [compact, setCompact] = useState(
+    () => window.matchMedia(COMPACT_WORKSPACE_QUERY).matches,
+  );
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia(COMPACT_WORKSPACE_QUERY);
+    const update = (event: MediaQueryListEvent) => setCompact(event.matches);
+    setCompact(mediaQuery.matches);
+    mediaQuery.addEventListener("change", update);
+    return () => mediaQuery.removeEventListener("change", update);
+  }, []);
+
+  return compact;
 }
 
 export function App({ api = defaultApi, onRunBenchmark }: AppProps) {
@@ -26,6 +43,8 @@ export function App({ api = defaultApi, onRunBenchmark }: AppProps) {
   const sidebarOpenerRef = useRef<HTMLButtonElement>(null);
   const sidebarCloseRef = useRef<HTMLButtonElement>(null);
   const sidebarWasOpenRef = useRef(false);
+  const compactWorkspace = useCompactWorkspace();
+  const drawerOpen = compactWorkspace && sidebarOpen;
   const runtimeState = workspace.runtime?.state ?? "not_loaded";
   const readiness = workspace.runtime?.active_chat_model ?? "Runtime not loaded";
 
@@ -39,10 +58,12 @@ export function App({ api = defaultApi, onRunBenchmark }: AppProps) {
   };
 
   useEffect(() => {
-    if (!sidebarOpen) {
+    if (!drawerOpen) {
       if (sidebarWasOpenRef.current) {
         sidebarWasOpenRef.current = false;
-        sidebarOpenerRef.current?.focus();
+        if (compactWorkspace) {
+          sidebarOpenerRef.current?.focus();
+        }
       }
       return;
     }
@@ -56,22 +77,30 @@ export function App({ api = defaultApi, onRunBenchmark }: AppProps) {
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [sidebarOpen]);
+  }, [compactWorkspace, drawerOpen]);
+
+  useEffect(() => {
+    if (!compactWorkspace) {
+      setSidebarOpen(false);
+    }
+  }, [compactWorkspace]);
 
   return (
     <div className="app-shell">
       <header className="app-header">
-        <button
-          ref={sidebarOpenerRef}
-          className="icon-button mobile-menu"
-          type="button"
-          aria-label="Open workspace controls"
-          aria-controls="workspace-sidebar"
-          aria-expanded={sidebarOpen}
-          onClick={() => setSidebarOpen(true)}
-        >
-          ☰
-        </button>
+        {compactWorkspace ? (
+          <button
+            ref={sidebarOpenerRef}
+            className="icon-button mobile-menu"
+            type="button"
+            aria-label="Open workspace controls"
+            aria-controls="workspace-sidebar"
+            aria-expanded={drawerOpen}
+            onClick={() => setSidebarOpen(true)}
+          >
+            ☰
+          </button>
+        ) : null}
         <div className="brand">
           <span className="brand-mark" aria-hidden="true">R</span>
           <div>
@@ -91,14 +120,15 @@ export function App({ api = defaultApi, onRunBenchmark }: AppProps) {
       <div className="workspace-layout">
         <Sidebar
           workspace={workspace}
-          open={sidebarOpen}
+          compact={compactWorkspace}
+          open={drawerOpen}
           closeButtonRef={sidebarCloseRef}
           onClose={() => setSidebarOpen(false)}
           onDocumentDetails={openDocumentDetails}
           onDiagnostics={openDiagnostics}
           onRunBenchmark={onRunBenchmark}
         />
-        {sidebarOpen ? (
+        {drawerOpen ? (
           <button
             className="sidebar-backdrop"
             type="button"
@@ -108,8 +138,8 @@ export function App({ api = defaultApi, onRunBenchmark }: AppProps) {
         ) : null}
         <main
           className="workbench"
-          inert={sidebarOpen || undefined}
-          aria-hidden={sidebarOpen || undefined}
+          inert={drawerOpen || undefined}
+          aria-hidden={drawerOpen || undefined}
         >
           <ConversationPanel workspace={workspace} />
           <InspectorPanel

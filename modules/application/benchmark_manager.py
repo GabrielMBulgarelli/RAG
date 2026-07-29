@@ -679,7 +679,11 @@ class BenchmarkManager:
                     active.run.run_id,
                 )
             except BenchmarkNotFoundError:
-                pass
+                await asyncio.to_thread(
+                    self._write_events,
+                    active.run.run_id,
+                    list(active.events),
+                )
             else:
                 active.events.clear()
                 active.events.extend(persisted[-512:])

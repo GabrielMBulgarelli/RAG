@@ -167,6 +167,113 @@ describe("workspace operation coordination", () => {
     expect(hook.result.current.runtime?.active_chat_model).toBe("gemma3:4b");
   });
 
+  it("lets only the second StrictMode startup effect publish its snapshot", async () => {
+    const firstRuntime = deferred<typeof runtimeReady>();
+    const firstDocuments = deferred<typeof documentList>();
+    const secondRuntime = { ...runtimeReady, active_chat_model: "gemma3:4b" };
+    const secondDocuments = {
+      ...documentList,
+      documents: [],
+    };
+    const api = createMockApi({
+      getRuntime: vi.fn()
+        .mockReturnValueOnce(firstRuntime.promise)
+        .mockResolvedValueOnce(secondRuntime),
+      getDocuments: vi.fn()
+        .mockReturnValueOnce(firstDocuments.promise)
+        .mockResolvedValueOnce(secondDocuments),
+    });
+    const hook = renderHook(() => useWorkspace(api), { reactStrictMode: true });
+
+    await waitFor(() => {
+      expect(api.getRuntime).toHaveBeenCalledTimes(2);
+      expect(hook.result.current.runtime?.active_chat_model).toBe("gemma3:4b");
+      expect(hook.result.current.documentList?.documents).toEqual([]);
+    });
+
+    await act(async () => {
+      firstRuntime.resolve(runtimeReady);
+      firstDocuments.resolve(documentList);
+      await Promise.all([firstRuntime.promise, firstDocuments.promise]);
+    });
+
+    expect(hook.result.current.runtime?.active_chat_model).toBe("gemma3:4b");
+    expect(hook.result.current.documentList?.documents).toEqual([]);
+  });
+
+  it("clears an old pending query when the API changes", async () => {
+    const query = deferred<QueryResponse>();
+    const firstApi = createMockApi({
+      query: vi.fn().mockReturnValue(query.promise),
+    });
+    const secondApi = createMockApi({
+      getRuntime: vi.fn().mockResolvedValue({
+        ...runtimeReady,
+        active_chat_model: "gemma3:4b",
+      }),
+    });
+    const hook = renderHook(
+      ({ api }: { api: WorkspaceApi }) => useWorkspace(api),
+      { initialProps: { api: firstApi } },
+    );
+    await waitFor(() => expect(hook.result.current.loadingWorkspace).toBe(false));
+
+    act(() => {
+      void hook.result.current.submitQuestion("Pending question");
+    });
+    await waitFor(() => expect(hook.result.current.exchanges[0]?.pending).toBe(true));
+
+    hook.rerender({ api: secondApi });
+
+    await waitFor(() => {
+      expect(hook.result.current.loadingWorkspace).toBe(false);
+      expect(hook.result.current.exchanges).toEqual([]);
+      expect(hook.result.current.busy).toBe(false);
+    });
+
+    await act(async () => {
+      query.resolve(queryResponse);
+      await query.promise;
+    });
+    expect(hook.result.current.exchanges).toEqual([]);
+  });
+
+  it("clears stale errors, diagnostics, and selection when the API changes", async () => {
+    const firstApi = createMockApi({
+      getRuntime: vi.fn().mockRejectedValue(new Error("Old startup failed.")),
+      exportConversation: vi.fn().mockRejectedValue(new Error("Old export failed.")),
+    });
+    const secondApi = createMockApi();
+    const hook = renderHook(
+      ({ api }: { api: WorkspaceApi }) => useWorkspace(api),
+      { initialProps: { api: firstApi } },
+    );
+    await waitFor(() => expect(hook.result.current.loadingWorkspace).toBe(false));
+
+    await act(async () => {
+      await hook.result.current.submitQuestion("Answered question");
+      await hook.result.current.refreshDiagnostics();
+      await hook.result.current.exportConversation();
+    });
+    expect(hook.result.current.workspaceError).toBe("Old startup failed.");
+    expect(hook.result.current.actionError).toBe("Old export failed.");
+    expect(hook.result.current.diagnostics).toEqual(diagnostics);
+    expect(hook.result.current.selectedExchange).not.toBeNull();
+    expect(hook.result.current.selectedSourceLabel).toBe("1");
+
+    hook.rerender({ api: secondApi });
+
+    await waitFor(() => {
+      expect(hook.result.current.loadingWorkspace).toBe(false);
+      expect(hook.result.current.workspaceError).toBeNull();
+      expect(hook.result.current.actionError).toBeNull();
+      expect(hook.result.current.diagnostics).toBeNull();
+      expect(hook.result.current.exchanges).toEqual([]);
+      expect(hook.result.current.selectedExchange).toBeNull();
+      expect(hook.result.current.selectedSourceLabel).toBeNull();
+    });
+  });
+
   it("deduplicates concurrent diagnostics reads", async () => {
     const diagnosticsRequest = deferred<typeof diagnostics>();
     const api = createMockApi({

@@ -10,6 +10,7 @@ import type { WorkspaceController } from "./useWorkspace";
 
 interface SidebarProps {
   workspace: WorkspaceController;
+  compact: boolean;
   open: boolean;
   closeButtonRef: RefObject<HTMLButtonElement | null>;
   onClose: () => void;
@@ -20,6 +21,7 @@ interface SidebarProps {
 
 export function Sidebar({
   workspace,
+  compact,
   open,
   closeButtonRef,
   onClose,
@@ -27,6 +29,7 @@ export function Sidebar({
   onDiagnostics,
   onRunBenchmark,
 }: SidebarProps) {
+  const compactClosed = compact && !open;
   const runtime = workspace.runtime;
   const documents = workspace.documentList?.documents ?? [];
   const busy = workspace.busy;
@@ -68,6 +71,8 @@ export function Sidebar({
       id="workspace-sidebar"
       className={`sidebar${open ? " sidebar--open" : ""}`}
       aria-label="Workspace controls"
+      aria-hidden={compactClosed || undefined}
+      inert={compactClosed || undefined}
     >
       <div className="sidebar__mobile-heading">
         <strong>Workspace controls</strong>

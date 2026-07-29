@@ -21,9 +21,41 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+function setMobileViewport(matches: boolean) {
+  const listeners = new Set<(event: MediaQueryListEvent) => void>();
+  const mediaQuery = {
+    get matches() {
+      return matches;
+    },
+    media: "(max-width: 860px)",
+    onchange: null,
+    addEventListener: vi.fn((
+      _event: string,
+      listener: (event: MediaQueryListEvent) => void,
+    ) => listeners.add(listener)),
+    removeEventListener: vi.fn((
+      _event: string,
+      listener: (event: MediaQueryListEvent) => void,
+    ) => listeners.delete(listener)),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  };
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    value: vi.fn().mockReturnValue(mediaQuery),
+  });
+  return (nextMatches: boolean) => {
+    matches = nextMatches;
+    const event = { matches, media: mediaQuery.media } as MediaQueryListEvent;
+    listeners.forEach((listener) => listener(event));
+  };
+}
+
 describe("single workspace", () => {
   beforeEach(() => {
     sessionStorage.clear();
+    setMobileViewport(false);
   });
 
   it("loads runtime and documents into one permanent workspace", async () => {
@@ -164,6 +196,13 @@ describe("single workspace", () => {
     const sourcesTab = screen.getByRole("tab", { name: "Sources" });
     expect(detailsTab).toHaveAttribute("id", "inspector-tab-details");
     expect(detailsTab).toHaveAttribute("aria-controls", "inspector-panel-details");
+    const sourcesPanel = document.getElementById("inspector-panel-sources");
+    const detailsPanel = document.getElementById("inspector-panel-details");
+    expect(sourcesPanel).toBeInTheDocument();
+    expect(sourcesPanel).toHaveAttribute("aria-labelledby", "inspector-tab-sources");
+    expect(sourcesPanel).toHaveAttribute("hidden");
+    expect(detailsPanel).toBeInTheDocument();
+    expect(detailsPanel).not.toHaveAttribute("hidden");
     expect(screen.getByRole("tabpanel", { name: "Details" })).toHaveAttribute(
       "aria-labelledby",
       "inspector-tab-details",
@@ -177,8 +216,14 @@ describe("single workspace", () => {
     await user.keyboard("{ArrowLeft}");
     expect(sourcesTab).toHaveFocus();
     expect(sourcesTab).toHaveAttribute("aria-selected", "true");
+    expect(sourcesPanel).not.toHaveAttribute("hidden");
+    expect(detailsPanel).toHaveAttribute("hidden");
+    expect(document.getElementById("inspector-panel-sources")).toBe(sourcesPanel);
+    expect(document.getElementById("inspector-panel-details")).toBe(detailsPanel);
     await user.keyboard("{End}");
     expect(detailsTab).toHaveFocus();
+    expect(sourcesPanel).toHaveAttribute("hidden");
+    expect(detailsPanel).not.toHaveAttribute("hidden");
     await user.keyboard("{Home}");
     expect(sourcesTab).toHaveFocus();
 
@@ -205,6 +250,7 @@ describe("single workspace", () => {
       uploadDocuments: vi.fn().mockRejectedValue(new Error("Upload failed safely.")),
     });
     rerender(<App api={failingApi} />);
+    await waitFor(() => expect(screen.getByLabelText("Upload documents")).toBeEnabled());
     await user.upload(screen.getByLabelText("Upload documents"), file);
     expect(await screen.findByRole("alert")).toHaveTextContent("Upload failed safely.");
   });
@@ -398,25 +444,43 @@ describe("single workspace", () => {
   });
 
   it("gives the mobile drawer focus, Escape, and covered-content semantics", async () => {
+    const setCompact = setMobileViewport(true);
     const user = userEvent.setup();
     render(<App api={createMockApi()} />);
     const opener = await screen.findByRole("button", { name: "Open workspace controls" });
+    const closedSidebar = document.getElementById("workspace-sidebar");
+    expect(closedSidebar).toBeInstanceOf(HTMLElement);
+    expect(closedSidebar).toHaveAttribute("aria-hidden", "true");
+    expect(closedSidebar).toHaveAttribute("inert");
+    expect(screen.queryByRole("button", { name: "Close workspace controls" })).not.toBeInTheDocument();
     opener.focus();
 
     await user.click(opener);
 
     const close = screen.getByRole("button", { name: "Close workspace controls" });
+    expect(closedSidebar).not.toHaveAttribute("aria-hidden");
+    expect(closedSidebar).not.toHaveAttribute("inert");
     expect(close).toHaveFocus();
     expect(screen.getByRole("main", { hidden: true })).toHaveAttribute("inert");
     expect(screen.getByRole("main", { hidden: true })).toHaveAttribute("aria-hidden", "true");
 
     await user.keyboard("{Escape}");
 
-    expect(screen.getByRole("complementary", { name: "Workspace controls" })).not.toHaveClass(
-      "sidebar--open",
-    );
+    expect(closedSidebar).not.toHaveClass("sidebar--open");
+    expect(closedSidebar).toHaveAttribute("aria-hidden", "true");
+    expect(closedSidebar).toHaveAttribute("inert");
+    expect(screen.queryByRole("button", { name: "Close workspace controls" })).not.toBeInTheDocument();
     expect(screen.getByRole("main")).not.toHaveAttribute("inert");
     expect(screen.getByRole("main")).not.toHaveAttribute("aria-hidden");
     expect(opener).toHaveFocus();
+
+    await user.click(opener);
+    act(() => setCompact(false));
+
+    expect(screen.getByRole("main")).not.toHaveAttribute("inert");
+    expect(screen.getByRole("main")).not.toHaveAttribute("aria-hidden");
+    expect(closedSidebar).not.toHaveAttribute("aria-hidden");
+    expect(closedSidebar).not.toHaveAttribute("inert");
+    expect(screen.queryByRole("button", { name: "Open workspace controls" })).not.toBeInTheDocument();
   });
 });

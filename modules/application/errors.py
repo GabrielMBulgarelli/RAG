@@ -77,3 +77,12 @@ class BenchmarkNotFoundError(ApplicationError):
             message="The requested benchmark artifact was not found.",
             details={},
         )
+
+
+class BenchmarkManagerClosedError(ApplicationError):
+    def __init__(self) -> None:
+        super().__init__(
+            code="benchmark_manager_closed",
+            message="The benchmark manager has been closed.",
+            details={},
+        )

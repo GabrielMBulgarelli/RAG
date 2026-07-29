@@ -18,7 +18,10 @@ from uuid import UUID, uuid4
 from pydantic import JsonValue
 from starlette.responses import Response, StreamingResponse
 
-from modules.application.errors import BenchmarkNotFoundError
+from modules.application.errors import (
+    BenchmarkManagerClosedError,
+    BenchmarkNotFoundError,
+)
 from modules.application.models import (
     ApiProblem,
     BenchmarkCaseDetail,
@@ -44,6 +47,16 @@ _TERMINAL_STATUSES = {
     BenchmarkRunStatus.CANCELLED,
     BenchmarkRunStatus.COMPLETED,
     BenchmarkRunStatus.FAILED,
+}
+_TERMINAL_EVENT_TYPES = {
+    BenchmarkEventType.BENCHMARK_CANCELLED,
+    BenchmarkEventType.BENCHMARK_COMPLETED,
+    BenchmarkEventType.BENCHMARK_FAILED,
+}
+_TERMINAL_EVENT_BY_STATUS = {
+    BenchmarkRunStatus.CANCELLED: BenchmarkEventType.BENCHMARK_CANCELLED,
+    BenchmarkRunStatus.COMPLETED: BenchmarkEventType.BENCHMARK_COMPLETED,
+    BenchmarkRunStatus.FAILED: BenchmarkEventType.BENCHMARK_FAILED,
 }
 _EXECUTOR_EVENT_TYPES = {
     BenchmarkEventType.SYSTEM_STARTED,
@@ -150,8 +163,15 @@ class BenchmarkManager:
         self._started = False
         self._closed = False
         self._active: _ActiveRun | None = None
+        self._lifecycle_lock = asyncio.Lock()
 
     async def start(self) -> None:
+        async with self._lifecycle_lock:
+            await self._start_locked()
+
+    async def _start_locked(self) -> None:
+        if self._closed:
+            raise BenchmarkManagerClosedError()
         if self._started:
             return
         await asyncio.to_thread(
@@ -159,16 +179,16 @@ class BenchmarkManager:
         )
         await asyncio.to_thread(self._recover_runs)
         self._started = True
-        self._closed = False
 
     async def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        active = self._active
-        if active is not None and active.task is not None:
-            await self.cancel_benchmark(active.run.run_id)
-            await active.task
+        async with self._lifecycle_lock:
+            if self._closed:
+                return
+            self._closed = True
+            active = self._active
+            if active is not None and active.task is not None:
+                await self.cancel_benchmark(active.run.run_id)
+                await active.task
 
     @staticmethod
     def _links(run_id: UUID) -> ResourceLinks:
@@ -229,6 +249,15 @@ class BenchmarkManager:
             stream.write(case.model_dump_json() + "\n")
             stream.flush()
 
+    def _write_events(self, run_id: UUID, events: Sequence[BenchmarkEvent]) -> None:
+        target = self._artifact_path(run_id, "events.jsonl")
+        temporary = self._artifact_path(run_id, "events.tmp")
+        temporary.write_text(
+            "".join(event.model_dump_json() + "\n" for event in events),
+            encoding="utf-8",
+        )
+        os.replace(temporary, target)
+
     def _read_run_snapshot(self, run_id: UUID) -> BenchmarkRun:
         try:
             run = BenchmarkRun.model_validate_json(
@@ -268,6 +297,54 @@ class BenchmarkManager:
             raise BenchmarkNotFoundError()
         return events
 
+    def _read_recovery_events(
+        self,
+        run_id: UUID,
+    ) -> tuple[list[BenchmarkEvent], str]:
+        try:
+            path = self._artifact_path(run_id, "events.jsonl")
+        except BenchmarkNotFoundError:
+            return [], "unsafe"
+        if not path.is_file():
+            return [], "missing"
+        try:
+            events = [
+                BenchmarkEvent.model_validate_json(line)
+                for line in path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+        except Exception:
+            return [], "malformed"
+        if any(event.run_id != run_id for event in events):
+            return [], "malformed"
+        return events, "valid"
+
+    @staticmethod
+    def _canonical_terminal_events(
+        run: BenchmarkRun,
+        events: Sequence[BenchmarkEvent],
+    ) -> list[BenchmarkEvent]:
+        expected_type = _TERMINAL_EVENT_BY_STATUS[run.status]
+        nonterminal = [event for event in events if event.type not in _TERMINAL_EVENT_TYPES]
+        matching = [event for event in events if event.type is expected_type]
+        canonical = [
+            event.model_copy(update={"event_id": index})
+            for index, event in enumerate(nonterminal, start=1)
+        ]
+        terminal = (
+            matching[-1].model_copy(update={"event_id": len(canonical) + 1})
+            if matching
+            else BenchmarkEvent(
+                event_id=len(canonical) + 1,
+                run_id=run.run_id,
+                type=expected_type,
+                timestamp=datetime.now(timezone.utc),
+                data={},
+            )
+        )
+        canonical.append(terminal)
+        return canonical
+
     def _read_cases(self, run_id: UUID) -> list[BenchmarkCaseDetail]:
         try:
             return [
@@ -293,57 +370,79 @@ class BenchmarkManager:
                 run = self._read_run_snapshot(run_id)
             except (ValueError, BenchmarkNotFoundError):
                 continue
-            if run.status not in {
+            stale = run.status in {
                 BenchmarkRunStatus.QUEUED,
                 BenchmarkRunStatus.RUNNING,
                 BenchmarkRunStatus.CANCELLATION_REQUESTED,
-            }:
+            }
+            events, journal_state = self._read_recovery_events(run_id)
+            if journal_state == "unsafe" or (journal_state == "malformed" and not stale):
                 continue
-            try:
-                events = self._read_events(run_id)
-            except BenchmarkNotFoundError:
-                events = []
-                try:
-                    self._artifact_path(run_id, "events.jsonl").write_text(
-                        "",
-                        encoding="utf-8",
-                    )
-                except BenchmarkNotFoundError:
-                    continue
-            run = run.model_copy(
-                deep=True,
-                update={
-                    "status": BenchmarkRunStatus.FAILED,
-                    "metadata": run.metadata.model_copy(
-                        update={"completed_at": datetime.now(timezone.utc)}
-                    ),
-                    "error": ApiProblem(
-                        code="benchmark_interrupted",
-                        message="The benchmark was interrupted by a previous process.",
-                        details={},
-                    ),
-                },
-            )
-            self._write_run(run)
-            event = BenchmarkEvent(
-                event_id=events[-1].event_id + 1 if events else 1,
-                run_id=run_id,
-                type=BenchmarkEventType.BENCHMARK_FAILED,
-                timestamp=datetime.now(timezone.utc),
-                data={},
-            )
-            self._append_event(event)
+            if stale:
+                run = run.model_copy(
+                    deep=True,
+                    update={
+                        "status": BenchmarkRunStatus.FAILED,
+                        "metadata": run.metadata.model_copy(
+                            update={"completed_at": datetime.now(timezone.utc)}
+                        ),
+                        "error": ApiProblem(
+                            code="benchmark_interrupted",
+                            message=("The benchmark was interrupted by a previous process."),
+                            details={},
+                        ),
+                    },
+                )
+                self._write_run(run)
+            canonical = self._canonical_terminal_events(run, events)
+            if canonical != events:
+                self._write_events(run_id, canonical)
+
+    def _mark_start_failure(self, run: BenchmarkRun) -> None:
+        failed = run.model_copy(
+            deep=True,
+            update={
+                "status": BenchmarkRunStatus.FAILED,
+                "metadata": run.metadata.model_copy(
+                    update={"completed_at": datetime.now(timezone.utc)}
+                ),
+                "error": ApiProblem(
+                    code="benchmark_start_failed",
+                    message="The benchmark could not be started.",
+                    details={},
+                ),
+            },
+        )
+        cases = self._artifact_path(run.run_id, "cases.jsonl")
+        if not cases.exists():
+            cases.touch()
+        events, state = self._read_recovery_events(run.run_id)
+        if state != "valid":
+            events = []
+        self._write_run(failed)
+        self._write_events(
+            run.run_id,
+            self._canonical_terminal_events(failed, events),
+        )
 
     async def start_benchmark(self) -> BenchmarkStartResponse:
-        if not self._started:
-            await self.start()
+        async with self._lifecycle_lock:
+            if self._closed:
+                raise BenchmarkManagerClosedError()
+            if not self._started:
+                await self._start_locked()
+            return await self._start_benchmark_locked()
+
+    async def _start_benchmark_locked(self) -> BenchmarkStartResponse:
         run_id = uuid4()
         lease = self.coordinator.acquire(
             OperationKind.BENCHMARK,
             benchmark_run_id=run_id,
         )
-        run_dir = self._run_dir(run_id)
+        run_dir: Path | None = None
+        run: BenchmarkRun | None = None
         try:
+            run_dir = self._run_dir(run_id)
             metadata = self._executor.initial_metadata().model_copy(
                 deep=True,
                 update={"started_at": None, "completed_at": None},
@@ -379,11 +478,17 @@ class BenchmarkManager:
         except Exception:
             self._active = None
             lease.release()
-            try:
-                await asyncio.to_thread(shutil.rmtree, run_dir)
-            except Exception:
-                pass
+            if run_dir is not None:
+                try:
+                    await asyncio.to_thread(shutil.rmtree, run_dir)
+                except Exception:
+                    if run is not None:
+                        try:
+                            await asyncio.to_thread(self._mark_start_failure, run)
+                        except Exception:
+                            pass
             raise
+        assert run is not None
         return BenchmarkStartResponse(
             run_id=run_id,
             status=BenchmarkRunStatus.QUEUED,
@@ -433,7 +538,10 @@ class BenchmarkManager:
                         event_type=BenchmarkEventType.BENCHMARK_COMPLETED,
                     )
         except Exception:
-            await self._stop_heartbeat(active)
+            try:
+                await self._stop_heartbeat(active)
+            except Exception:
+                pass
             async with active.lock:
                 if active.cancellation.is_cancelled:
                     await self._finish_cancelled_locked(active)
@@ -482,9 +590,9 @@ class BenchmarkManager:
         task = active.heartbeat_task
         if task is None:
             return
+        active.heartbeat_task = None
         active.heartbeat_stop.set()
         await task
-        active.heartbeat_task = None
 
     async def _finish_cancelled(self, active: _ActiveRun) -> None:
         async with active.lock:
@@ -562,7 +670,20 @@ class BenchmarkManager:
             timestamp=datetime.now(timezone.utc),
             data=data,
         )
-        await asyncio.to_thread(self._append_event, event)
+        try:
+            await asyncio.to_thread(self._append_event, event)
+        except Exception:
+            try:
+                persisted = await asyncio.to_thread(
+                    self._read_events,
+                    active.run.run_id,
+                )
+            except BenchmarkNotFoundError:
+                pass
+            else:
+                active.events.clear()
+                active.events.extend(persisted[-512:])
+            raise
         active.events.append(event)
         self._broadcast(active, event)
         return event.model_copy(deep=True)

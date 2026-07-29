@@ -9,10 +9,10 @@ import shutil
 import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol, cast
 
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
@@ -53,6 +53,14 @@ class _VectorContext(Protocol):
 
     def index_documents(self, paths: Sequence[str | Path] | None = None) -> int: ...
 
+    def index_upload_batch_with_manifest(
+        self, uploads: Sequence[_UploadedFile]
+    ) -> tuple[list[ManifestDocument], IngestionManifest]: ...
+
+    def delete_document_with_manifest(
+        self, document_id: str, *, delete_source: bool = True
+    ) -> IngestionManifest | None: ...
+
     def rebuild(self) -> int: ...
 
 
@@ -77,18 +85,6 @@ class UploadLimitExceededError(ValueError):
 
 class VectorTransactionError(RuntimeError):
     pass
-
-
-def _stored_chunks(store: Chroma, *, chunk_ids: set[str]) -> list[Document]:
-    if not chunk_ids:
-        return []
-    payload = store.get(ids=sorted(chunk_ids), include=["documents", "metadatas"])
-    return [
-        Document(page_content=content, metadata=metadata or {})
-        for content, metadata in zip(
-            payload.get("documents") or [], payload.get("metadatas") or [], strict=True
-        )
-    ]
 
 
 @dataclass(frozen=True)
@@ -192,6 +188,14 @@ def _prepare_uploads(
         upload_key = hashlib.sha256(f"{filename}\0{content_hash}".encode()).hexdigest()
         relative_path = (Path(upload_key) / filename).as_posix()
         target = context.settings.sources_dir / relative_path
+        sources_root = context.settings.sources_dir.resolve()
+        child = context.settings.sources_dir
+        for part in Path(relative_path).parts:
+            child /= part
+            if child.is_symlink():
+                raise UploadValidationError("The upload target path is invalid.")
+        if not target.resolve().is_relative_to(sources_root):
+            raise UploadValidationError("The upload target path is invalid.")
         document_id = context.document_id(target)
         if document_id in document_ids:
             raise UploadValidationError("The upload batch contains duplicate documents.")
@@ -227,6 +231,12 @@ def _updated_manifest(context: _VectorContext, *, request: _ManifestUpdate) -> I
     updated = request.previous.model_copy(deep=True)
     previous_record = updated.documents.get(document_id)
     now = datetime.now(timezone.utc)
+    if (
+        previous_record is not None
+        and previous_record.updated_at is not None
+        and now <= previous_record.updated_at
+    ):
+        now = previous_record.updated_at + timedelta(microseconds=1)
     updated.documents[document_id] = ManifestDocument(
         document_id=document_id,
         relative_path=context._relative_path(request.source),
@@ -249,41 +259,54 @@ def _updated_manifest(context: _VectorContext, *, request: _ManifestUpdate) -> I
     return updated
 
 
-def _restore_previous(
-    context: _VectorContext,
-    *,
-    inserted_ids: set[str],
-    previous_chunks: list[Document],
-) -> None:
-    if context.vectorstore is None:
-        return
-    if inserted_ids:
-        context.vectorstore.delete(ids=sorted(inserted_ids))
-    if previous_chunks:
-        context.vectorstore.add_documents(
-            previous_chunks,
-            ids=[str(chunk.metadata["chunk_id"]) for chunk in previous_chunks],
-        )
+@dataclass(frozen=True)
+class _StoredVectorSnapshot:
+    ids: list[str]
+    documents: list[str]
+    metadatas: list[dict[str, Any]]
+    embeddings: list[list[float]]
 
 
-def _best_effort_restore_chunks(
+def _stored_vectors(store: Chroma, *, chunk_ids: set[str]) -> _StoredVectorSnapshot:
+    if not chunk_ids:
+        return _StoredVectorSnapshot([], [], [], [])
+    payload = store._collection.get(
+        ids=sorted(chunk_ids),
+        include=cast(Any, ["documents", "metadatas", "embeddings"]),
+    )
+    raw_embeddings = payload.get("embeddings")
+    return _StoredVectorSnapshot(
+        ids=[str(item) for item in payload["ids"]],
+        documents=[str(item) for item in payload.get("documents") or []],
+        metadatas=[
+            cast(dict[str, Any], dict(item or {})) for item in payload.get("metadatas") or []
+        ],
+        embeddings=[[float(value) for value in embedding] for embedding in raw_embeddings]
+        if raw_embeddings is not None
+        else [],
+    )
+
+
+def _best_effort_restore_vectors(
     store: Chroma | None,
     *,
     touched_ids: set[str],
-    previous_chunks: list[Document],
+    previous: _StoredVectorSnapshot,
 ) -> None:
     if store is None:
         return
     try:
         if touched_ids:
-            store.delete(ids=sorted(touched_ids))
+            store._collection.delete(ids=sorted(touched_ids))
     except Exception:
         pass
     try:
-        if previous_chunks:
-            store.add_documents(
-                previous_chunks,
-                ids=[str(chunk.metadata["chunk_id"]) for chunk in previous_chunks],
+        if previous.ids:
+            store._collection.upsert(
+                ids=previous.ids,
+                documents=previous.documents,
+                metadatas=cast(Any, previous.metadatas),
+                embeddings=cast(Any, previous.embeddings),
             )
     except Exception:
         pass
@@ -320,6 +343,13 @@ class VectorIngestionMixin:
         self: _VectorContext,
         uploads: Sequence[_UploadedFile],
     ) -> list[ManifestDocument]:
+        records, _manifest = self.index_upload_batch_with_manifest(uploads)
+        return records
+
+    def index_upload_batch_with_manifest(
+        self: _VectorContext,
+        uploads: Sequence[_UploadedFile],
+    ) -> tuple[list[ManifestDocument], IngestionManifest]:
         prepared = _prepare_uploads(self, uploads)
         self.settings.data_dir.mkdir(parents=True, exist_ok=True)
         previous_manifest = self.manifest()
@@ -332,10 +362,10 @@ class VectorIngestionMixin:
                 old_ids.update(previous_record.chunk_ids)
         touched_ids = set(old_ids)
         store: Chroma | None = None
-        previous_chunks: list[Document] = []
-
-        with tempfile.TemporaryDirectory(prefix="rag-upload-", dir=self.settings.data_dir) as raw:
-            staging = Path(raw)
+        previous_vectors = _StoredVectorSnapshot([], [], [], [])
+        staging = Path(tempfile.mkdtemp(prefix="rag-upload-", dir=self.settings.data_dir))
+        committed: tuple[list[ManifestDocument], IngestionManifest] | None = None
+        try:
             staged: list[tuple[_PreparedUpload, Path, Path | None]] = []
             for index, upload in enumerate(prepared):
                 staged_source = staging / "incoming" / str(index) / upload.filename
@@ -354,7 +384,7 @@ class VectorIngestionMixin:
                     shutil.copy2(staged_source, upload.target)
 
                 store = self._store()
-                previous_chunks = _stored_chunks(store, chunk_ids=old_ids)
+                previous_vectors = _stored_vectors(store, chunk_ids=old_ids)
                 updated_manifest = previous_manifest.model_copy(deep=True)
                 records: list[ManifestDocument] = []
                 for upload, _staged_source, _backup in staged:
@@ -385,12 +415,12 @@ class VectorIngestionMixin:
                     )
                     records.append(updated_manifest.documents[upload.document_id])
                 self._write_manifest(updated_manifest)
-                return records
+                committed = records, updated_manifest.model_copy(deep=True)
             except Exception as exc:
-                _best_effort_restore_chunks(
+                _best_effort_restore_vectors(
                     store,
                     touched_ids=touched_ids,
-                    previous_chunks=previous_chunks,
+                    previous=previous_vectors,
                 )
                 for upload, _staged_source, backup in reversed(staged):
                     try:
@@ -413,6 +443,14 @@ class VectorIngestionMixin:
                 if isinstance(exc, (UploadValidationError, UploadLimitExceededError)):
                     raise
                 raise VectorTransactionError("The upload batch could not be indexed.") from exc
+        finally:
+            try:
+                shutil.rmtree(staging)
+            except Exception:
+                pass
+        if committed is None:
+            raise VectorTransactionError("The upload batch could not be indexed.")
+        return committed
 
     def index_document(self: _VectorContext, path: str | Path) -> IngestionResult:
         source = Path(path)
@@ -420,16 +458,17 @@ class VectorIngestionMixin:
         manifest = self.manifest()
         previous_record = manifest.documents.get(document_id)
         old_ids = set(previous_record.chunk_ids) if previous_record else set()
-        inserted_ids: set[str] = set()
-        previous_chunks: list[Document] = []
+        touched_ids = set(old_ids)
+        store: Chroma | None = None
+        previous_vectors = _StoredVectorSnapshot([], [], [], [])
         try:
             chunks = self.prepare_chunks(self.load_documents([source]))
             if not chunks:
                 raise ValueError("No supported content was parsed")
             ids = [str(chunk.metadata["chunk_id"]) for chunk in chunks]
             store = self._store()
-            previous_chunks = _stored_chunks(store, chunk_ids=old_ids)
-            inserted_ids = set(ids) - old_ids
+            previous_vectors = _stored_vectors(store, chunk_ids=old_ids)
+            touched_ids.update(ids)
             store.add_documents(chunks, ids=ids)
             if set(store.get(ids=ids)["ids"]) != set(ids):
                 raise RuntimeError("New chunks could not be verified after upsert")
@@ -446,7 +485,11 @@ class VectorIngestionMixin:
             )
             return IngestionResult(document_id=document_id, success=True, chunk_count=len(ids))
         except Exception as exc:
-            _restore_previous(self, inserted_ids=inserted_ids, previous_chunks=previous_chunks)
+            _best_effort_restore_vectors(
+                store,
+                touched_ids=touched_ids,
+                previous=previous_vectors,
+            )
             return IngestionResult(
                 document_id=document_id,
                 success=False,
@@ -501,10 +544,24 @@ class VectorMaintenanceMixin:
     def has_deleted_document(
         self: _VectorContext, document_id: str, *, delete_source: bool = True
     ) -> bool:
+        return (
+            self.delete_document_with_manifest(
+                document_id,
+                delete_source=delete_source,
+            )
+            is not None
+        )
+
+    def delete_document_with_manifest(
+        self: _VectorContext,
+        document_id: str,
+        *,
+        delete_source: bool = True,
+    ) -> IngestionManifest | None:
         previous_manifest = self.manifest()
         record = previous_manifest.documents.get(document_id)
         if record is None:
-            return False
+            return None
         source = (self.settings.sources_dir / record.relative_path).resolve()
         sources_root = self.settings.sources_dir.resolve()
         if not source.is_relative_to(sources_root):
@@ -514,15 +571,17 @@ class VectorMaintenanceMixin:
         previous_manifest_bytes = manifest_path.read_bytes() if manifest_path.exists() else None
         self.settings.data_dir.mkdir(parents=True, exist_ok=True)
         store: Chroma | None = None
-        previous_chunks: list[Document] = []
-        with tempfile.TemporaryDirectory(prefix="rag-delete-", dir=self.settings.data_dir) as raw:
-            backup = Path(raw) / source.name
+        previous_vectors = _StoredVectorSnapshot([], [], [], [])
+        staging = Path(tempfile.mkdtemp(prefix="rag-delete-", dir=self.settings.data_dir))
+        committed: IngestionManifest | None = None
+        try:
+            backup = staging / source.name
             had_source = delete_source and source.exists()
             if had_source:
                 shutil.copy2(source, backup)
             try:
                 store = self._store()
-                previous_chunks = _stored_chunks(store, chunk_ids=set(record.chunk_ids))
+                previous_vectors = _stored_vectors(store, chunk_ids=set(record.chunk_ids))
                 if record.chunk_ids:
                     store.delete(ids=record.chunk_ids)
                 updated = previous_manifest.model_copy(deep=True)
@@ -535,12 +594,12 @@ class VectorMaintenanceMixin:
                             source.parent.rmdir()
                         except OSError:
                             pass
-                return True
+                committed = updated.model_copy(deep=True)
             except Exception as exc:
-                _best_effort_restore_chunks(
+                _best_effort_restore_vectors(
                     store,
                     touched_ids=set(record.chunk_ids),
-                    previous_chunks=previous_chunks,
+                    previous=previous_vectors,
                 )
                 try:
                     _restore_manifest(self, previous_manifest_bytes)
@@ -553,6 +612,14 @@ class VectorMaintenanceMixin:
                 except Exception:
                     pass
                 raise VectorTransactionError("The document could not be deleted.") from exc
+        finally:
+            try:
+                shutil.rmtree(staging)
+            except Exception:
+                pass
+        if committed is None:
+            raise VectorTransactionError("The document could not be deleted.")
+        return committed
 
     delete_document = has_deleted_document
 

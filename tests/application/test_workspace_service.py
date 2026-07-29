@@ -92,9 +92,20 @@ class FakeVectorDB:
             records.append(record)
         return records
 
+    def index_upload_batch_with_manifest(
+        self, files: tuple[UploadedFile, ...]
+    ) -> tuple[list[ManifestDocument], IngestionManifest]:
+        records = self.index_upload_batch(files)
+        return records, self._manifest.model_copy(deep=True)
+
     def delete_document(self, document_id: str) -> bool:
         self.worker_threads.append(threading.get_ident())
         return self._manifest.documents.pop(document_id, None) is not None
+
+    def delete_document_with_manifest(self, document_id: str) -> IngestionManifest | None:
+        if not self.delete_document(document_id):
+            return None
+        return self._manifest.model_copy(deep=True)
 
 
 class FakeGraph:
@@ -124,6 +135,32 @@ class UploadFailureVectorDB(FakeVectorDB):
 
     def index_upload_batch(self, files: tuple[UploadedFile, ...]) -> list[ManifestDocument]:
         raise self.error
+
+    def index_upload_batch_with_manifest(
+        self, files: tuple[UploadedFile, ...]
+    ) -> tuple[list[ManifestDocument], IngestionManifest]:
+        raise self.error
+
+
+class CommittedSnapshotVectorDB(FakeVectorDB):
+    def manifest(self) -> IngestionManifest:
+        raise AssertionError("post-commit manifest reads are forbidden")
+
+    def index_upload_batch(self, files: tuple[UploadedFile, ...]) -> list[ManifestDocument]:
+        raise AssertionError("service must request the committed manifest")
+
+    def index_upload_batch_with_manifest(
+        self, files: tuple[UploadedFile, ...]
+    ) -> tuple[list[ManifestDocument], IngestionManifest]:
+        records = super().index_upload_batch(files)
+        return records, self._manifest.model_copy(deep=True)
+
+    def delete_document(self, document_id: str) -> bool:
+        raise AssertionError("service must request the committed manifest")
+
+    def delete_document_with_manifest(self, document_id: str) -> IngestionManifest | None:
+        FakeVectorDB.delete_document(self, document_id)
+        return self._manifest.model_copy(deep=True)
 
 
 def make_settings(tmp_path: Path) -> Settings:
@@ -334,6 +371,37 @@ def test_document_upload_delete_mapping_worker_thread_and_busy_guard(
     with pytest.raises(DocumentNotFoundError) as error:
         asyncio.run(service.delete_document("missing"))
     assert error.value.code == "document_not_found"
+
+
+def test_document_mutations_use_committed_snapshot_and_invalidate_graph_immediately(
+    tmp_path: Path,
+) -> None:
+    settings = make_settings(tmp_path)
+    manager = CommittedSnapshotVectorDB()
+    service = WorkspaceService(
+        settings=settings,
+        vector_db_factory=lambda: manager,
+        graph_factory=lambda _vector_db, _model: FakeGraph(),
+        runtime_probe=lambda: RuntimeProbeResult(
+            reachable=True,
+            models=(settings.llm_model, settings.embedding_model),
+        ),
+    )
+    asyncio.run(service.load_model(ModelLoadRequest(chat_model=settings.llm_model)))
+
+    uploaded = asyncio.run(
+        service.upload_documents((UploadedFile("guide.txt", "text/plain", b"committed guide"),))
+    )
+
+    assert uploaded.corpus.document_count == 1
+    assert asyncio.run(service.get_runtime()).active_chat_model is None
+
+    service._graph = FakeGraph()
+    service._active_chat_model = settings.llm_model
+    deleted = asyncio.run(service.delete_document(uploaded.accepted[0].document_id))
+
+    assert deleted.corpus.status == "empty"
+    assert asyncio.run(service.get_runtime()).active_chat_model is None
 
 
 @pytest.mark.parametrize(

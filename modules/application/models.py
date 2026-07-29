@@ -276,6 +276,7 @@ class BenchmarkSystem(BaseModel):
 class BenchmarkSection(BaseModel):
     id: str
     title: str
+    system_ids: list[str] = Field(default_factory=list)
     metrics: list[BenchmarkMetric]
     detail: str | None = None
 
@@ -291,7 +292,10 @@ class BenchmarkProgress(BaseModel):
     completed_cases: int = Field(ge=0)
     total_cases: int = Field(ge=0)
     current_system: str | None = None
+    current_system_index: int | None = Field(default=None, ge=0)
+    total_systems: int = Field(default=0, ge=0)
     current_case_id: str | None = None
+    current_case_index: int | None = Field(default=None, ge=0)
 
 
 class BenchmarkMetadata(BaseModel):
@@ -302,6 +306,7 @@ class BenchmarkMetadata(BaseModel):
     embedding_model: str
     started_at: datetime | None
     completed_at: datetime | None
+    reproducibility: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class BenchmarkRun(BaseModel):

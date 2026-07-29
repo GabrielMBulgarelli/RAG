@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     manifest_path: Path = PROJECT_ROOT / "data" / "manifest.json"
     trace_dir: Path = PROJECT_ROOT / "data" / "traces"
     logs_dir: Path = PROJECT_ROOT / "logs"
+    benchmark_results_dir: Path = PROJECT_ROOT / "evals" / "results" / "full_rag"
 
     chunk_size: int = Field(default=700, gt=0)
     chunk_overlap: int = Field(default=100, ge=0)

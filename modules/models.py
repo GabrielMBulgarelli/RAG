@@ -1,5 +1,6 @@
 """Small data contracts shared by the MVP workflow."""
 
+from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 
@@ -174,10 +175,13 @@ class ManifestDocument(BaseModel):
     embedding_model: str
     chunk_size: int = Field(gt=0)
     chunk_overlap: int = Field(ge=0)
+    size_bytes: int = Field(default=0, ge=0)
+    indexed_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 class IngestionManifest(BaseModel):
-    schema_version: int = 1
+    schema_version: int = 2
     documents: dict[str, ManifestDocument] = Field(default_factory=dict)
 
 

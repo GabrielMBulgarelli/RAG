@@ -18,15 +18,9 @@ from modules.application.models import (
     QueryRequest,
     QueryResponse,
     RuntimeSnapshot,
+    UploadedFile,
     UploadBatchResult,
 )
-
-
-@dataclass(frozen=True)
-class UploadedFile:
-    filename: str
-    content_type: str | None
-    content: bytes
 
 
 class WorkspaceService(Protocol):

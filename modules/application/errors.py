@@ -68,3 +68,12 @@ class RuntimeUnavailableError(ApplicationError):
             message="A required local runtime dependency is unavailable.",
             details={"operation": operation},
         )
+
+
+class BenchmarkNotFoundError(ApplicationError):
+    def __init__(self) -> None:
+        super().__init__(
+            code="benchmark_not_found",
+            message="The requested benchmark artifact was not found.",
+            details={},
+        )

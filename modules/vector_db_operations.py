@@ -360,7 +360,7 @@ class VectorIngestionMixin:
             previous_record = previous_manifest.documents.get(upload.document_id)
             if previous_record is not None:
                 old_ids.update(previous_record.chunk_ids)
-        touched_ids = set(old_ids)
+        touched_ids: set[str] = set()
         store: Chroma | None = None
         previous_vectors = _StoredVectorSnapshot([], [], [], [])
         staging = Path(tempfile.mkdtemp(prefix="rag-upload-", dir=self.settings.data_dir))
@@ -396,8 +396,7 @@ class VectorIngestionMixin:
                     chunk_ids = [str(chunk.metadata["chunk_id"]) for chunk in chunks]
                     previous_record = updated_manifest.documents.get(upload.document_id)
                     previous_ids = set(previous_record.chunk_ids) if previous_record else set()
-                    touched_ids.update(previous_ids)
-                    touched_ids.update(chunk_ids)
+                    touched_ids.update((*previous_ids, *chunk_ids))
                     store.add_documents(chunks, ids=chunk_ids)
                     if set(store.get(ids=chunk_ids)["ids"]) != set(chunk_ids):
                         raise VectorTransactionError("Uploaded chunks could not be verified.")
@@ -458,7 +457,7 @@ class VectorIngestionMixin:
         manifest = self.manifest()
         previous_record = manifest.documents.get(document_id)
         old_ids = set(previous_record.chunk_ids) if previous_record else set()
-        touched_ids = set(old_ids)
+        touched_ids: set[str] = set()
         store: Chroma | None = None
         previous_vectors = _StoredVectorSnapshot([], [], [], [])
         try:
@@ -468,7 +467,7 @@ class VectorIngestionMixin:
             ids = [str(chunk.metadata["chunk_id"]) for chunk in chunks]
             store = self._store()
             previous_vectors = _stored_vectors(store, chunk_ids=old_ids)
-            touched_ids.update(ids)
+            touched_ids.update((*old_ids, *ids))
             store.add_documents(chunks, ids=ids)
             if set(store.get(ids=ids)["ids"]) != set(ids):
                 raise RuntimeError("New chunks could not be verified after upsert")
@@ -571,6 +570,7 @@ class VectorMaintenanceMixin:
         previous_manifest_bytes = manifest_path.read_bytes() if manifest_path.exists() else None
         self.settings.data_dir.mkdir(parents=True, exist_ok=True)
         store: Chroma | None = None
+        touched_ids: set[str] = set()
         previous_vectors = _StoredVectorSnapshot([], [], [], [])
         staging = Path(tempfile.mkdtemp(prefix="rag-delete-", dir=self.settings.data_dir))
         committed: IngestionManifest | None = None
@@ -583,6 +583,7 @@ class VectorMaintenanceMixin:
                 store = self._store()
                 previous_vectors = _stored_vectors(store, chunk_ids=set(record.chunk_ids))
                 if record.chunk_ids:
+                    touched_ids.update(record.chunk_ids)
                     store.delete(ids=record.chunk_ids)
                 updated = previous_manifest.model_copy(deep=True)
                 del updated.documents[document_id]
@@ -598,7 +599,7 @@ class VectorMaintenanceMixin:
             except Exception as exc:
                 _best_effort_restore_vectors(
                     store,
-                    touched_ids=set(record.chunk_ids),
+                    touched_ids=touched_ids,
                     previous=previous_vectors,
                 )
                 try:

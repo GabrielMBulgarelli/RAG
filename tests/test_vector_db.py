@@ -1,12 +1,17 @@
+import hashlib
 import json
+import shutil
+from datetime import datetime
 from io import BytesIO
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from pypdf import PdfWriter
 
+import modules.vector_db_operations as vector_operations
 from modules.application.models import UploadedFile
 from modules.config import Settings
 from modules.vector_db import VectorDBManager
@@ -28,6 +33,40 @@ class FakeEmbeddings(Embeddings):
     def _embed(text: str) -> list[float]:
         total = sum(text.encode("utf-8"))
         return [float(total % 97), float(len(text)), 1.0]
+
+
+class ArmedEmbeddings(FakeEmbeddings):
+    def __init__(self) -> None:
+        self._calls = 0
+        self._fail_on: int | None = None
+
+    def arm(self, *, fail_on: int) -> None:
+        self._calls = 0
+        self._fail_on = fail_on
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        self._calls += 1
+        if self._fail_on is not None and self._calls >= self._fail_on:
+            raise RuntimeError("embedding unavailable")
+        return super().embed_documents(texts)
+
+
+def raw_vector_snapshot(manager: VectorDBManager) -> dict[str, tuple[str, dict, list[float]]]:
+    payload = manager._store()._collection.get(
+        include=cast(Any, ["documents", "metadatas", "embeddings"])
+    )
+    documents = payload.get("documents") or []
+    metadatas = payload.get("metadatas") or []
+    embeddings = payload.get("embeddings")
+    assert embeddings is not None
+    return {
+        str(chunk_id): (
+            str(documents[index]),
+            dict(metadatas[index] or {}),
+            [float(value) for value in embeddings[index]],
+        )
+        for index, chunk_id in enumerate(payload["ids"])
+    }
 
 
 @pytest.fixture
@@ -291,6 +330,34 @@ def test_atomic_upload_batch_commits_all_records_and_safe_sources(
     assert not list(manager.settings.data_dir.glob("rag-upload-*"))
 
 
+def test_upload_rejects_existing_symlink_component_before_staging(
+    manager: VectorDBManager,
+    tmp_path: Path,
+) -> None:
+    upload = UploadedFile(
+        filename="guide.txt",
+        content_type="text/plain",
+        content=b"safe content",
+    )
+    content_hash = hashlib.sha256(upload.content).hexdigest()
+    upload_key = hashlib.sha256(f"{upload.filename}\0{content_hash}".encode()).hexdigest()
+    manager.settings.sources_dir.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    link = manager.settings.sources_dir / upload_key
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symlink creation is unavailable: {exc}")
+
+    with pytest.raises(UploadValidationError):
+        manager.index_upload_batch((upload,))
+
+    assert not (outside / upload.filename).exists()
+    assert not manager.settings.data_dir.exists()
+    assert not manager.settings.manifest_path.exists()
+
+
 @pytest.mark.parametrize(
     "uploads",
     [
@@ -383,6 +450,75 @@ def test_exact_reupload_preserves_document_id_and_does_not_duplicate_chunks(
     assert not list(manager.settings.data_dir.glob("rag-upload-*"))
 
 
+def test_reupload_updated_at_is_strictly_monotonic_when_clock_does_not_advance(
+    manager: VectorDBManager,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    upload = UploadedFile(
+        filename="guide.txt",
+        content_type="text/plain",
+        content=b"same document content",
+    )
+    first = manager.index_upload_batch((upload,))[0]
+    assert first.updated_at is not None
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return first.updated_at
+
+    monkeypatch.setattr(vector_operations, "datetime", FrozenDateTime)
+
+    second = manager.index_upload_batch((upload,))[0]
+
+    assert second.updated_at is not None
+    assert second.updated_at > first.updated_at
+
+
+def test_second_file_embedding_failure_restores_exact_vectors_without_reembedding(
+    manager: VectorDBManager,
+) -> None:
+    embeddings = ArmedEmbeddings()
+    vector_db = VectorDBManager(settings=manager.settings, embeddings=embeddings)
+    existing = UploadedFile(
+        filename="guide.txt",
+        content_type="text/plain",
+        content=b"existing guide",
+    )
+    unrelated = UploadedFile(
+        filename="unrelated.txt",
+        content_type="text/plain",
+        content=b"unrelated document",
+    )
+    vector_db.index_upload_batch((existing, unrelated))
+    before_vectors = raw_vector_snapshot(vector_db)
+    before_manifest = vector_db.settings.manifest_path.read_bytes()
+    before_sources = {
+        path.relative_to(vector_db.settings.sources_dir): path.read_bytes()
+        for path in vector_db.settings.sources_dir.rglob("*.txt")
+    }
+    embeddings.arm(fail_on=2)
+
+    with pytest.raises(VectorTransactionError):
+        vector_db.index_upload_batch(
+            (
+                existing,
+                UploadedFile(
+                    filename="new.txt",
+                    content_type="text/plain",
+                    content=b"new document",
+                ),
+            )
+        )
+
+    assert raw_vector_snapshot(vector_db) == before_vectors
+    assert vector_db.settings.manifest_path.read_bytes() == before_manifest
+    assert {
+        path.relative_to(vector_db.settings.sources_dir): path.read_bytes()
+        for path in vector_db.settings.sources_dir.rglob("*.txt")
+    } == before_sources
+
+
 def test_second_upload_failure_restores_manifest_chunks_and_sources(
     manager: VectorDBManager,
     monkeypatch: pytest.MonkeyPatch,
@@ -411,6 +547,33 @@ def test_second_upload_failure_restores_manifest_chunks_and_sources(
     assert set(manager._store().get()["ids"]) == set()
     assert not list(manager.settings.sources_dir.rglob("*"))
     assert not list(manager.settings.data_dir.glob("rag-upload-*"))
+
+
+def test_upload_cleanup_failure_after_commit_does_not_change_success(
+    manager: VectorDBManager,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_rmtree = shutil.rmtree
+
+    def cleanup_then_fail(path, *args, **kwargs) -> None:
+        real_rmtree(path, *args, **kwargs)
+        raise OSError("cleanup failure")
+
+    monkeypatch.setattr(vector_operations.shutil, "rmtree", cleanup_then_fail)
+
+    records = manager.index_upload_batch(
+        (
+            UploadedFile(
+                filename="guide.txt",
+                content_type="text/plain",
+                content=b"committed guide",
+            ),
+        )
+    )
+
+    assert len(records) == 1
+    assert records[0].document_id in manager.manifest().documents
+    assert set(manager._store().get()["ids"]) == set(records[0].chunk_ids)
 
 
 def test_manifest_write_failure_restores_unrelated_state(
@@ -443,6 +606,54 @@ def test_manifest_write_failure_restores_unrelated_state(
     assert set(manager._store().get()["ids"]) == before_ids
     assert existing.read_bytes() == before_source
     assert not list(manager.settings.data_dir.glob("rag-upload-*"))
+
+
+def test_delete_rollback_restores_exact_vectors_without_embedding(
+    manager: VectorDBManager,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    embeddings = ArmedEmbeddings()
+    vector_db = VectorDBManager(settings=manager.settings, embeddings=embeddings)
+    target = write_source(vector_db, "target.txt", "target document")
+    unrelated = write_source(vector_db, "unrelated.txt", "unrelated document")
+    assert vector_db.index_document(target).success
+    assert vector_db.index_document(unrelated).success
+    target_id = vector_db.document_id(target)
+    before_vectors = raw_vector_snapshot(vector_db)
+    before_manifest = vector_db.settings.manifest_path.read_bytes()
+    embeddings.arm(fail_on=1)
+
+    def fail_write(_manifest) -> None:
+        raise OSError("manifest failure")
+
+    monkeypatch.setattr(vector_db, "_write_manifest", fail_write)
+
+    with pytest.raises(VectorTransactionError):
+        vector_db.delete_document(target_id)
+
+    assert raw_vector_snapshot(vector_db) == before_vectors
+    assert vector_db.settings.manifest_path.read_bytes() == before_manifest
+    assert target.read_text(encoding="utf-8") == "target document"
+
+
+def test_delete_cleanup_failure_after_commit_does_not_change_success(
+    manager: VectorDBManager,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = write_source(manager, "guide.txt", "committed delete")
+    assert manager.index_document(source).success
+    document_id = manager.document_id(source)
+    real_rmtree = shutil.rmtree
+
+    def cleanup_then_fail(path, *args, **kwargs) -> None:
+        real_rmtree(path, *args, **kwargs)
+        raise OSError("cleanup failure")
+
+    monkeypatch.setattr(vector_operations.shutil, "rmtree", cleanup_then_fail)
+
+    assert manager.delete_document(document_id) is True
+    assert document_id not in manager.manifest().documents
+    assert not source.exists()
 
 
 def test_vector_rollback_failure_still_restores_upload_sources_and_manifest(

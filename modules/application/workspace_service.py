@@ -78,7 +78,13 @@ class _VectorDB(Protocol):
 
     def index_upload_batch(self, files: tuple[UploadedFile, ...]) -> list[ManifestDocument]: ...
 
+    def index_upload_batch_with_manifest(
+        self, files: tuple[UploadedFile, ...]
+    ) -> tuple[list[ManifestDocument], IngestionManifest]: ...
+
     def delete_document(self, document_id: str) -> bool: ...
+
+    def delete_document_with_manifest(self, document_id: str) -> IngestionManifest | None: ...
 
 
 class _Graph(Protocol):
@@ -482,16 +488,18 @@ class WorkspaceService:
         with self.coordinator.acquire(OperationKind.INDEX_DOCUMENTS):
             manager = self._manager()
             try:
-                accepted_records = await asyncio.to_thread(manager.index_upload_batch, files)
-                manifest = await asyncio.to_thread(manager.manifest)
+                accepted_records, manifest = await asyncio.to_thread(
+                    manager.index_upload_batch_with_manifest,
+                    files,
+                )
+                self._graph = None
+                self._active_chat_model = None
             except UploadLimitExceededError as exc:
                 raise UploadLimitExceededApplicationError() from exc
             except UploadValidationError as exc:
                 raise InvalidUploadError() from exc
             except Exception as exc:
                 raise RuntimeUnavailableError(operation="upload_documents") from exc
-            self._graph = None
-            self._active_chat_model = None
         listing = self._document_list(manifest)
         return UploadBatchResult(
             accepted=[
@@ -506,16 +514,18 @@ class WorkspaceService:
         with self.coordinator.acquire(OperationKind.DELETE_DOCUMENT):
             manager = self._manager()
             try:
-                deleted = await asyncio.to_thread(manager.delete_document, document_id)
-                if not deleted:
+                manifest = await asyncio.to_thread(
+                    manager.delete_document_with_manifest,
+                    document_id,
+                )
+                if manifest is None:
                     raise DocumentNotFoundError()
-                manifest = await asyncio.to_thread(manager.manifest)
+                self._graph = None
+                self._active_chat_model = None
             except DocumentNotFoundError:
                 raise
             except Exception as exc:
                 raise RuntimeUnavailableError(operation="delete_document") from exc
-            self._graph = None
-            self._active_chat_model = None
         return self._document_list(manifest)
 
     @staticmethod

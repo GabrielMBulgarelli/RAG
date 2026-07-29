@@ -289,8 +289,8 @@ class FakeBenchmarks:
             sanitized_raw_result=None,
         )
 
-    async def stream_events(self, run_id: UUID) -> Response:
-        self.calls.append(("stream_events", run_id))
+    async def stream_events(self, run_id: UUID, last_event_id: int | None) -> Response:
+        self.calls.append(("stream_events", (run_id, last_event_id)))
         return StreamingResponse(
             iter([b"event: heartbeat\ndata: {}\n\n"]), media_type="text/event-stream"
         )
@@ -404,6 +404,11 @@ def test_benchmark_endpoints_delegate_with_static_routing_and_response_semantics
         events = client.get(f"/api/benchmarks/{RUN_ID}/events")
         assert events.headers["content-type"].startswith("text/event-stream")
         assert events.content == b"event: heartbeat\ndata: {}\n\n"
+        replayed_events = client.get(
+            f"/api/benchmarks/{RUN_ID}/events",
+            headers={"Last-Event-ID": "0"},
+        )
+        assert replayed_events.content == b"event: heartbeat\ndata: {}\n\n"
 
         cancelled = client.post(f"/api/benchmarks/{RUN_ID}/cancel")
         assert cancelled.status_code == 202
@@ -430,6 +435,9 @@ def test_benchmark_endpoints_delegate_with_static_routing_and_response_semantics
         "get_benchmark",
         "get_case",
         "stream_events",
+        "stream_events",
         "cancel_benchmark",
         "download_benchmark",
     ]
+    assert benchmarks.calls[4][1] == (RUN_ID, None)
+    assert benchmarks.calls[5][1] == (RUN_ID, 0)

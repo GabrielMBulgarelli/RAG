@@ -297,6 +297,31 @@ class BenchmarkManager:
             raise BenchmarkNotFoundError()
         return events
 
+    def _read_complete_event_prefix(self, run_id: UUID) -> list[BenchmarkEvent]:
+        try:
+            text = self._artifact_path(
+                run_id,
+                "events.jsonl",
+                must_exist=True,
+            ).read_text(encoding="utf-8")
+        except Exception as exc:
+            raise BenchmarkNotFoundError() from exc
+        lines = text.splitlines()
+        has_incomplete_tail = bool(text) and not text.endswith(("\n", "\r"))
+        events: list[BenchmarkEvent] = []
+        for line_index, line in enumerate(lines):
+            try:
+                event = BenchmarkEvent.model_validate_json(line)
+            except Exception as exc:
+                if line_index == len(lines) - 1 and has_incomplete_tail:
+                    return events
+                raise BenchmarkNotFoundError() from exc
+            expected_id = len(events) + 1
+            if event.run_id != run_id or event.event_id != expected_id:
+                raise BenchmarkNotFoundError()
+            events.append(event)
+        return events
+
     def _read_recovery_events(
         self,
         run_id: UUID,
@@ -679,11 +704,17 @@ class BenchmarkManager:
                     active.run.run_id,
                 )
             except BenchmarkNotFoundError:
+                persisted = await asyncio.to_thread(
+                    self._read_complete_event_prefix,
+                    active.run.run_id,
+                )
                 await asyncio.to_thread(
                     self._write_events,
                     active.run.run_id,
-                    list(active.events),
+                    persisted,
                 )
+                active.events.clear()
+                active.events.extend(persisted[-512:])
             else:
                 active.events.clear()
                 active.events.extend(persisted[-512:])

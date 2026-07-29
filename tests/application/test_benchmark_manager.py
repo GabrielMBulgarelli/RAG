@@ -1359,6 +1359,150 @@ def test_partial_heartbeat_event_append_restores_journal_before_terminal_and_res
     asyncio.run(scenario())
 
 
+def test_partial_append_after_memory_rollover_preserves_full_replay_and_restart(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        settings = make_settings(tmp_path)
+        coordinator = WorkspaceOperationCoordinator()
+        executor = BurstExecutor(count=520)
+        manager = BenchmarkManager(
+            settings=settings,
+            coordinator=coordinator,
+            executor=executor,
+            heartbeat_interval=0.001,
+        )
+        original_append_event = manager._append_event
+        partial_written = False
+
+        def partially_append_post_rollover_heartbeat(event: BenchmarkEvent) -> None:
+            nonlocal partial_written
+            current = manager._active
+            if (
+                event.type is BenchmarkEventType.HEARTBEAT
+                and current is not None
+                and len(current.events) == 512
+                and current.events[0].event_id > 1
+                and not partial_written
+            ):
+                partial_written = True
+                path = manager._artifact_path(event.run_id, "events.jsonl")
+                with path.open("a", encoding="utf-8") as stream:
+                    stream.write('{"event_id":')
+                    stream.flush()
+                raise OSError("injected post-rollover partial append")
+            original_append_event(event)
+
+        monkeypatch.setattr(
+            manager,
+            "_append_event",
+            partially_append_post_rollover_heartbeat,
+        )
+        await manager.start()
+        started = await manager.start_benchmark()
+        await executor.entered.wait()
+        active = manager._active
+        assert active is not None
+        assert active.task is not None
+        execution_task = active.task
+        executor.begin.set()
+        await executor.published.wait()
+        for _ in range(400):
+            if active.heartbeat_task is not None and active.heartbeat_task.done():
+                break
+            await asyncio.sleep(0.005)
+        else:
+            raise AssertionError("post-rollover partial append was not observed")
+        assert partial_written is True
+        assert len(active.events) == 512
+        executor.release.set()
+        await execution_task
+
+        failed = await manager.get_benchmark(started.run_id)
+        events = manager._read_events(started.run_id)
+        terminals = [
+            event
+            for event in events
+            if event.type
+            in {
+                BenchmarkEventType.BENCHMARK_CANCELLED,
+                BenchmarkEventType.BENCHMARK_COMPLETED,
+                BenchmarkEventType.BENCHMARK_FAILED,
+            }
+        ]
+        system_indexes = [
+            event.data["index"]
+            for event in events
+            if event.type is BenchmarkEventType.SYSTEM_STARTED
+        ]
+        assert failed.status is BenchmarkRunStatus.FAILED
+        assert [event.event_id for event in events] == list(range(1, len(events) + 1))
+        assert system_indexes == list(range(520))
+        assert [event.type for event in terminals] == [BenchmarkEventType.BENCHMARK_FAILED]
+        assert coordinator.snapshot() is None
+
+        restarted = BenchmarkManager(
+            settings=settings,
+            coordinator=WorkspaceOperationCoordinator(),
+            executor=IdleExecutor(),
+        )
+        await restarted.start()
+        reloaded = await restarted.get_benchmark(started.run_id)
+        replay = sse_events(await response_text(await restarted.stream_events(started.run_id, 0)))
+        assert reloaded.status is BenchmarkRunStatus.FAILED
+        assert [event["event_id"] for event in replay] == list(range(1, len(events) + 1))
+        assert replay[-1]["type"] == "benchmark.failed"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    ["non_trailing_fragment", "terminated_malformed_line", "wrong_run", "id_gap"],
+)
+def test_complete_event_prefix_rejects_nontrailing_identity_and_id_corruption(
+    tmp_path: Path,
+    corruption: str,
+) -> None:
+    settings = make_settings(tmp_path)
+    settings.benchmark_results_dir.mkdir(parents=True)
+    run = persisted_run(settings, status=BenchmarkRunStatus.RUNNING)
+    first = BenchmarkEvent(
+        event_id=1,
+        run_id=run.run_id,
+        type=BenchmarkEventType.BENCHMARK_STARTED,
+        timestamp=datetime.now(timezone.utc),
+        data={},
+    )
+    second = BenchmarkEvent(
+        event_id=2,
+        run_id=run.run_id,
+        type=BenchmarkEventType.SYSTEM_STARTED,
+        timestamp=datetime.now(timezone.utc),
+        data={},
+    )
+    if corruption == "non_trailing_fragment":
+        journal = f"{first.model_dump_json()}\n{{broken\n{second.model_dump_json()}\n"
+    elif corruption == "terminated_malformed_line":
+        journal = f"{first.model_dump_json()}\n{{broken\n"
+    elif corruption == "wrong_run":
+        journal = first.model_copy(update={"run_id": uuid4()}).model_dump_json() + "\n"
+    else:
+        journal = first.model_copy(update={"event_id": 2}).model_dump_json() + "\n"
+    (settings.benchmark_results_dir / str(run.run_id) / "events.jsonl").write_text(
+        journal, encoding="utf-8"
+    )
+    manager = BenchmarkManager(
+        settings=settings,
+        coordinator=WorkspaceOperationCoordinator(),
+        executor=IdleExecutor(),
+    )
+
+    with pytest.raises(BenchmarkNotFoundError):
+        manager._read_complete_event_prefix(run.run_id)
+
+
 def test_executor_and_heartbeat_failure_still_terminalize_once(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

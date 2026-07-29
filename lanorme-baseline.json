@@ -209,22 +209,6 @@
       "severity": "error"
     },
     {
-      "anchor": "sha:025bcfd85b3794ece6ba2ac97924192f6e5ebaff7eb226f473dab6741a7fa35d",
-      "code": "PROSE-001",
-      "count": 1,
-      "file": "RAG_IMPROVEMENTS.md",
-      "message": "PROSE-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:a7287e05eaf50ba0d73a83dd624d3e04ca73f18295b25c5e1ea535086017490a",
-      "code": "PROSE-001",
-      "count": 1,
-      "file": "RAG_IMPROVEMENTS.md",
-      "message": "PROSE-001",
-      "severity": "error"
-    },
-    {
       "anchor": "sha:12eb8a13dfeab24134e5ce3944d9bffb6c322f963816f23b6908df26832e3e66",
       "code": "PROSE-001",
       "count": 1,

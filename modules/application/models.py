@@ -1,5 +1,6 @@
 """Presentation-neutral application data contracts."""
 
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from typing import Literal, Self
@@ -99,6 +100,13 @@ class DocumentList(BaseModel):
     documents: list[DocumentRecord]
     corpus: CorpusSnapshot
     active_operation: ActiveOperation | None
+
+
+@dataclass(frozen=True)
+class UploadedFile:
+    filename: str
+    content_type: str | None
+    content: bytes
 
 
 class UploadAccepted(BaseModel):

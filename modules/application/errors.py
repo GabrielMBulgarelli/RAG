@@ -32,3 +32,39 @@ class OperationBusyError(ApplicationError):
             message="Another workspace operation is currently running.",
             details=details,
         )
+
+
+class InvalidUploadError(ApplicationError):
+    def __init__(self) -> None:
+        super().__init__(
+            code="invalid_upload",
+            message="One or more uploaded files are invalid.",
+            details={},
+        )
+
+
+class UploadLimitExceededApplicationError(ApplicationError):
+    def __init__(self) -> None:
+        super().__init__(
+            code="upload_limit_exceeded",
+            message="The upload exceeds the workspace limits.",
+            details={},
+        )
+
+
+class DocumentNotFoundError(ApplicationError):
+    def __init__(self) -> None:
+        super().__init__(
+            code="document_not_found",
+            message="The requested document was not found.",
+            details={},
+        )
+
+
+class RuntimeUnavailableError(ApplicationError):
+    def __init__(self, *, operation: str) -> None:
+        super().__init__(
+            code="runtime_unavailable",
+            message="A required local runtime dependency is unavailable.",
+            details={"operation": operation},
+        )

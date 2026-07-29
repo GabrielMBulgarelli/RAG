@@ -50,7 +50,7 @@ class VectorDBManager(VectorIngestionMixin, VectorMaintenanceMixin):
         path = self.settings.manifest_path
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_suffix(".tmp")
-        payload = manifest.model_dump_json(indent=2)
+        payload = manifest.model_copy(update={"schema_version": 2}).model_dump_json(indent=2)
         temporary.write_text(payload, encoding="utf-8")
         IngestionManifest.model_validate_json(temporary.read_text(encoding="utf-8"))
         os.replace(temporary, path)

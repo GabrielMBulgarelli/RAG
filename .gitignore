@@ -24,6 +24,7 @@ data/*
 .idea/
 .codex/
 .worktrees/
+.superpowers/
 
 # Logs
 logs/

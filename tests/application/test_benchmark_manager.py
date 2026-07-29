@@ -1280,6 +1280,85 @@ def test_heartbeat_persistence_failure_still_writes_one_terminal_event(
     asyncio.run(scenario())
 
 
+def test_partial_heartbeat_event_append_restores_journal_before_terminal_and_restart(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        settings = make_settings(tmp_path)
+        coordinator = WorkspaceOperationCoordinator()
+        executor = HoldingExecutor()
+        manager = BenchmarkManager(
+            settings=settings,
+            coordinator=coordinator,
+            executor=executor,
+            heartbeat_interval=0.005,
+        )
+        original_append_event = manager._append_event
+        partial_written = False
+
+        def partially_append_heartbeat(event: BenchmarkEvent) -> None:
+            nonlocal partial_written
+            if event.type is BenchmarkEventType.HEARTBEAT and not partial_written:
+                partial_written = True
+                path = manager._artifact_path(event.run_id, "events.jsonl")
+                with path.open("a", encoding="utf-8") as stream:
+                    stream.write('{"event_id":')
+                    stream.flush()
+                raise OSError("injected partial heartbeat append")
+            original_append_event(event)
+
+        monkeypatch.setattr(manager, "_append_event", partially_append_heartbeat)
+        await manager.start()
+        started = await manager.start_benchmark()
+        await executor.entered.wait()
+        active = manager._active
+        assert active is not None
+        assert active.task is not None
+        execution_task = active.task
+        for _ in range(200):
+            if active.heartbeat_task is not None and active.heartbeat_task.done():
+                break
+            await asyncio.sleep(0.005)
+        else:
+            raise AssertionError("partial heartbeat append failure was not observed")
+        executor.release.set()
+        await execution_task
+
+        failed = await manager.get_benchmark(started.run_id)
+        events = manager._read_events(started.run_id)
+        terminals = [
+            event
+            for event in events
+            if event.type
+            in {
+                BenchmarkEventType.BENCHMARK_CANCELLED,
+                BenchmarkEventType.BENCHMARK_COMPLETED,
+                BenchmarkEventType.BENCHMARK_FAILED,
+            }
+        ]
+        assert failed.status is BenchmarkRunStatus.FAILED
+        assert failed.error is not None
+        assert failed.error.code == "benchmark_failed"
+        assert [event.event_id for event in events] == list(range(1, len(events) + 1))
+        assert [event.type for event in terminals] == [BenchmarkEventType.BENCHMARK_FAILED]
+        assert coordinator.snapshot() is None
+
+        restarted = BenchmarkManager(
+            settings=settings,
+            coordinator=WorkspaceOperationCoordinator(),
+            executor=IdleExecutor(),
+        )
+        await restarted.start()
+        reloaded = await restarted.get_benchmark(started.run_id)
+        assert reloaded.status is BenchmarkRunStatus.FAILED
+        assert [event.event_id for event in restarted._read_events(started.run_id)] == [
+            event.event_id for event in events
+        ]
+
+    asyncio.run(scenario())
+
+
 def test_executor_and_heartbeat_failure_still_terminalize_once(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

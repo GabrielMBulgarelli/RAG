@@ -519,6 +519,81 @@ def test_second_file_embedding_failure_restores_exact_vectors_without_reembeddin
     } == before_sources
 
 
+def test_upload_snapshot_failure_does_not_delete_existing_vectors(
+    manager: VectorDBManager,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    existing = UploadedFile(
+        filename="guide.txt",
+        content_type="text/plain",
+        content=b"existing guide",
+    )
+    unrelated = UploadedFile(
+        filename="unrelated.txt",
+        content_type="text/plain",
+        content=b"unrelated document",
+    )
+    manager.index_upload_batch((existing, unrelated))
+    before_vectors = raw_vector_snapshot(manager)
+    before_manifest = manager.settings.manifest_path.read_bytes()
+    before_sources = {
+        path.relative_to(manager.settings.sources_dir): path.read_bytes()
+        for path in manager.settings.sources_dir.rglob("*.txt")
+    }
+    collection = manager._store()._collection
+    real_get = collection.get
+
+    def fail_snapshot(*args, **kwargs):
+        raise OSError("snapshot failure")
+
+    monkeypatch.setattr(collection, "get", fail_snapshot)
+
+    with pytest.raises(VectorTransactionError):
+        manager.index_upload_batch((existing,))
+
+    monkeypatch.setattr(collection, "get", real_get)
+    assert raw_vector_snapshot(manager) == before_vectors
+    assert manager.settings.manifest_path.read_bytes() == before_manifest
+    assert {
+        path.relative_to(manager.settings.sources_dir): path.read_bytes()
+        for path in manager.settings.sources_dir.rglob("*.txt")
+    } == before_sources
+
+
+def test_single_reindex_snapshot_failure_does_not_delete_existing_vectors(
+    manager: VectorDBManager,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = write_source(manager, "target.txt", "target document")
+    unrelated = write_source(manager, "unrelated.txt", "unrelated document")
+    assert manager.index_document(target).success
+    assert manager.index_document(unrelated).success
+    before_vectors = raw_vector_snapshot(manager)
+    before_manifest = manager.settings.manifest_path.read_bytes()
+    before_sources = {
+        path.relative_to(manager.settings.sources_dir): path.read_bytes()
+        for path in manager.settings.sources_dir.rglob("*.txt")
+    }
+    collection = manager._store()._collection
+    real_get = collection.get
+
+    def fail_snapshot(*args, **kwargs):
+        raise OSError("snapshot failure")
+
+    monkeypatch.setattr(collection, "get", fail_snapshot)
+
+    result = manager.index_document(target)
+
+    monkeypatch.setattr(collection, "get", real_get)
+    assert result.success is False
+    assert raw_vector_snapshot(manager) == before_vectors
+    assert manager.settings.manifest_path.read_bytes() == before_manifest
+    assert {
+        path.relative_to(manager.settings.sources_dir): path.read_bytes()
+        for path in manager.settings.sources_dir.rglob("*.txt")
+    } == before_sources
+
+
 def test_second_upload_failure_restores_manifest_chunks_and_sources(
     manager: VectorDBManager,
     monkeypatch: pytest.MonkeyPatch,
@@ -634,6 +709,41 @@ def test_delete_rollback_restores_exact_vectors_without_embedding(
     assert raw_vector_snapshot(vector_db) == before_vectors
     assert vector_db.settings.manifest_path.read_bytes() == before_manifest
     assert target.read_text(encoding="utf-8") == "target document"
+
+
+def test_delete_snapshot_failure_does_not_delete_existing_vectors(
+    manager: VectorDBManager,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = write_source(manager, "target.txt", "target document")
+    unrelated = write_source(manager, "unrelated.txt", "unrelated document")
+    assert manager.index_document(target).success
+    assert manager.index_document(unrelated).success
+    target_id = manager.document_id(target)
+    before_vectors = raw_vector_snapshot(manager)
+    before_manifest = manager.settings.manifest_path.read_bytes()
+    before_sources = {
+        path.relative_to(manager.settings.sources_dir): path.read_bytes()
+        for path in manager.settings.sources_dir.rglob("*.txt")
+    }
+    collection = manager._store()._collection
+    real_get = collection.get
+
+    def fail_snapshot(*args, **kwargs):
+        raise OSError("snapshot failure")
+
+    monkeypatch.setattr(collection, "get", fail_snapshot)
+
+    with pytest.raises(VectorTransactionError):
+        manager.delete_document(target_id)
+
+    monkeypatch.setattr(collection, "get", real_get)
+    assert raw_vector_snapshot(manager) == before_vectors
+    assert manager.settings.manifest_path.read_bytes() == before_manifest
+    assert {
+        path.relative_to(manager.settings.sources_dir): path.read_bytes()
+        for path in manager.settings.sources_dir.rglob("*.txt")
+    } == before_sources
 
 
 def test_delete_cleanup_failure_after_commit_does_not_change_success(

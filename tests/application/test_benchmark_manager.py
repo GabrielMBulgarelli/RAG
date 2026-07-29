@@ -1,6 +1,7 @@
 import asyncio
 import io
 import json
+import threading
 import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -14,9 +15,10 @@ from modules.application.benchmark_manager import (
     BenchmarkManager,
     BenchmarkReporter,
 )
-from modules.application.errors import BenchmarkNotFoundError
+from modules.application.errors import ApplicationError, BenchmarkNotFoundError
 from modules.application.models import (
     BenchmarkCaseDetail,
+    BenchmarkEvent,
     BenchmarkEventType,
     BenchmarkMetadata,
     BenchmarkMetric,
@@ -207,6 +209,18 @@ class HoldingExecutor(IdleExecutor):
         self.entered.set()
         await self.release.wait()
         return BenchmarkExecutionResult(sections=[], failures=[])
+
+
+class HoldingFailingExecutor(HoldingExecutor):
+    async def execute(
+        self,
+        run_id: UUID,
+        reporter: BenchmarkReporter,
+        cancellation: BenchmarkCancellation,
+    ) -> BenchmarkExecutionResult:
+        self.entered.set()
+        await self.release.wait()
+        raise RuntimeError("private executor failure")
 
 
 class CooperativeCloseExecutor(IdleExecutor):
@@ -463,6 +477,22 @@ def test_start_preparation_or_task_creation_failure_never_leaks_lease_or_active_
         assert coordinator.snapshot() is None
         assert metadata_failure._active is None
 
+        path_failure = BenchmarkManager(
+            settings=settings,
+            coordinator=coordinator,
+            executor=IdleExecutor(),
+        )
+        await path_failure.start()
+
+        def fail_run_dir(run_id: UUID, *, must_exist: bool = False) -> Path:
+            raise BenchmarkNotFoundError()
+
+        monkeypatch.setattr(path_failure, "_run_dir", fail_run_dir)
+        with pytest.raises(BenchmarkNotFoundError):
+            await path_failure.start_benchmark()
+        assert coordinator.snapshot() is None
+        assert path_failure._active is None
+
         task_failure = BenchmarkManager(
             settings=settings,
             coordinator=coordinator,
@@ -482,6 +512,53 @@ def test_start_preparation_or_task_creation_failure_never_leaks_lease_or_active_
         assert task_failure._active is None
         run_dirs = [path for path in settings.benchmark_results_dir.iterdir() if path.is_dir()]
         assert run_dirs == []
+
+    asyncio.run(scenario())
+
+
+def test_task_creation_and_cleanup_failure_leaves_inspectable_failed_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        settings = make_settings(tmp_path)
+        coordinator = WorkspaceOperationCoordinator()
+        manager = BenchmarkManager(
+            settings=settings,
+            coordinator=coordinator,
+            executor=IdleExecutor(),
+        )
+        await manager.start()
+
+        def fail_create_task(coroutine, *args, **kwargs):
+            coroutine.close()
+            raise RuntimeError("task creation unavailable")
+
+        def fail_remove_tree(path: Path) -> None:
+            raise OSError("cleanup unavailable")
+
+        monkeypatch.setattr(asyncio, "create_task", fail_create_task)
+        monkeypatch.setattr(
+            "modules.application.benchmark_manager.shutil.rmtree",
+            fail_remove_tree,
+        )
+        with pytest.raises(RuntimeError):
+            await manager.start_benchmark()
+
+        assert coordinator.snapshot() is None
+        assert manager._active is None
+        run_dirs = [path for path in settings.benchmark_results_dir.iterdir() if path.is_dir()]
+        assert len(run_dirs) == 1
+        run_id = UUID(run_dirs[0].name)
+        failed = await manager.get_benchmark(run_id)
+        events = [
+            BenchmarkEvent.model_validate_json(line)
+            for line in (run_dirs[0] / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        ]
+        assert failed.status is BenchmarkRunStatus.FAILED
+        assert failed.error is not None
+        assert failed.error.code == "benchmark_start_failed"
+        assert [event.type for event in events] == [BenchmarkEventType.BENCHMARK_FAILED]
 
     asyncio.run(scenario())
 
@@ -647,7 +724,24 @@ def persisted_run(
     run_dir = settings.benchmark_results_dir / str(run_id)
     run_dir.mkdir(parents=True)
     (run_dir / "run.json").write_text(run.model_dump_json(indent=2), encoding="utf-8")
-    (run_dir / "events.jsonl").write_text("", encoding="utf-8")
+    terminal_type = {
+        BenchmarkRunStatus.CANCELLED: BenchmarkEventType.BENCHMARK_CANCELLED,
+        BenchmarkRunStatus.COMPLETED: BenchmarkEventType.BENCHMARK_COMPLETED,
+        BenchmarkRunStatus.FAILED: BenchmarkEventType.BENCHMARK_FAILED,
+    }.get(status)
+    terminal_event = (
+        BenchmarkEvent(
+            event_id=1,
+            run_id=run_id,
+            type=terminal_type,
+            timestamp=completed_at or datetime.now(timezone.utc),
+            data={},
+        ).model_dump_json()
+        + "\n"
+        if terminal_type is not None
+        else ""
+    )
+    (run_dir / "events.jsonl").write_text(terminal_event, encoding="utf-8")
     (run_dir / "cases.jsonl").write_text("", encoding="utf-8")
     return run
 
@@ -781,6 +875,116 @@ def test_start_recovers_stale_runs_and_latest_uses_completed_timestamp(
         await empty.start()
         with pytest.raises(BenchmarkNotFoundError):
             await empty.latest_benchmark()
+
+    asyncio.run(scenario())
+
+
+def test_recovery_canonicalizes_terminal_crash_windows(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        settings = make_settings(tmp_path)
+        settings.benchmark_results_dir.mkdir(parents=True)
+        completed_missing_terminal = persisted_run(
+            settings,
+            status=BenchmarkRunStatus.COMPLETED,
+            completed_at=datetime.now(timezone.utc),
+        )
+        (
+            settings.benchmark_results_dir / str(completed_missing_terminal.run_id) / "events.jsonl"
+        ).write_text("", encoding="utf-8")
+
+        stale_with_terminal = persisted_run(
+            settings,
+            status=BenchmarkRunStatus.RUNNING,
+        )
+        stale_dir = settings.benchmark_results_dir / str(stale_with_terminal.run_id)
+        (stale_dir / "events.jsonl").write_text(
+            BenchmarkEvent(
+                event_id=1,
+                run_id=stale_with_terminal.run_id,
+                type=BenchmarkEventType.BENCHMARK_COMPLETED,
+                timestamp=datetime.now(timezone.utc),
+                data={},
+            ).model_dump_json()
+            + "\n",
+            encoding="utf-8",
+        )
+
+        completed_mismatched_terminals = persisted_run(
+            settings,
+            status=BenchmarkRunStatus.COMPLETED,
+            completed_at=datetime.now(timezone.utc),
+        )
+        mismatched_dir = settings.benchmark_results_dir / str(completed_mismatched_terminals.run_id)
+        (mismatched_dir / "events.jsonl").write_text(
+            "\n".join(
+                event.model_dump_json()
+                for event in (
+                    BenchmarkEvent(
+                        event_id=1,
+                        run_id=completed_mismatched_terminals.run_id,
+                        type=BenchmarkEventType.BENCHMARK_FAILED,
+                        timestamp=datetime.now(timezone.utc),
+                        data={},
+                    ),
+                    BenchmarkEvent(
+                        event_id=2,
+                        run_id=completed_mismatched_terminals.run_id,
+                        type=BenchmarkEventType.BENCHMARK_CANCELLED,
+                        timestamp=datetime.now(timezone.utc),
+                        data={},
+                    ),
+                )
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        manager = BenchmarkManager(
+            settings=settings,
+            coordinator=WorkspaceOperationCoordinator(),
+            executor=IdleExecutor(),
+        )
+        await manager.start()
+
+        expected = (
+            (
+                completed_missing_terminal.run_id,
+                BenchmarkRunStatus.COMPLETED,
+                BenchmarkEventType.BENCHMARK_COMPLETED,
+            ),
+            (
+                stale_with_terminal.run_id,
+                BenchmarkRunStatus.FAILED,
+                BenchmarkEventType.BENCHMARK_FAILED,
+            ),
+            (
+                completed_mismatched_terminals.run_id,
+                BenchmarkRunStatus.COMPLETED,
+                BenchmarkEventType.BENCHMARK_COMPLETED,
+            ),
+        )
+        for run_id, expected_status, expected_terminal in expected:
+            run = await manager.get_benchmark(run_id)
+            events = [
+                BenchmarkEvent.model_validate_json(line)
+                for line in (settings.benchmark_results_dir / str(run_id) / "events.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()
+            ]
+            terminals = [
+                event
+                for event in events
+                if event.type
+                in {
+                    BenchmarkEventType.BENCHMARK_CANCELLED,
+                    BenchmarkEventType.BENCHMARK_COMPLETED,
+                    BenchmarkEventType.BENCHMARK_FAILED,
+                }
+            ]
+            assert run.status is expected_status
+            assert [event.event_id for event in events] == list(range(1, len(events) + 1))
+            assert [event.type for event in terminals] == [expected_terminal]
+            assert events[-1].type is expected_terminal
 
     asyncio.run(scenario())
 
@@ -982,6 +1186,153 @@ def test_heartbeats_have_monotonic_ids_and_stop_before_terminal(tmp_path: Path) 
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("failure_point", ["run_write", "event_append"])
+def test_heartbeat_persistence_failure_still_writes_one_terminal_event(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_point: str,
+) -> None:
+    async def scenario() -> None:
+        settings = make_settings(tmp_path)
+        coordinator = WorkspaceOperationCoordinator()
+        executor = HoldingExecutor()
+        manager = BenchmarkManager(
+            settings=settings,
+            coordinator=coordinator,
+            executor=executor,
+            heartbeat_interval=0.005,
+        )
+        original_write_run = manager._write_run
+        original_append_event = manager._append_event
+        write_count = 0
+        heartbeat_append_failed = False
+
+        def fail_one_run_write(run: BenchmarkRun) -> None:
+            nonlocal write_count
+            write_count += 1
+            if failure_point == "run_write" and write_count == 3:
+                raise OSError("injected heartbeat run write failure")
+            original_write_run(run)
+
+        def fail_one_event_append(event) -> None:
+            nonlocal heartbeat_append_failed
+            original_append_event(event)
+            if (
+                failure_point == "event_append"
+                and event.type is BenchmarkEventType.HEARTBEAT
+                and not heartbeat_append_failed
+            ):
+                heartbeat_append_failed = True
+                raise OSError("injected heartbeat append failure after durable write")
+
+        monkeypatch.setattr(manager, "_write_run", fail_one_run_write)
+        monkeypatch.setattr(manager, "_append_event", fail_one_event_append)
+        await manager.start()
+        started = await manager.start_benchmark()
+        await executor.entered.wait()
+        active = manager._active
+        assert active is not None
+        for _ in range(200):
+            if active.heartbeat_task is not None and active.heartbeat_task.done():
+                break
+            await asyncio.sleep(0.005)
+        else:
+            raise AssertionError("heartbeat persistence failure was not observed")
+
+        if failure_point == "event_append":
+            requested = await manager.cancel_benchmark(started.run_id)
+            assert requested.status is BenchmarkRunStatus.CANCELLATION_REQUESTED
+        executor.release.set()
+        terminal = await wait_for_terminal(manager, started.run_id)
+
+        expected_status = (
+            BenchmarkRunStatus.CANCELLED
+            if failure_point == "event_append"
+            else BenchmarkRunStatus.FAILED
+        )
+        assert terminal.status is expected_status
+        assert coordinator.snapshot() is None
+        events = [
+            BenchmarkEvent.model_validate_json(line)
+            for line in (settings.benchmark_results_dir / str(started.run_id) / "events.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        assert [event.event_id for event in events] == list(range(1, len(events) + 1))
+        terminal_events = [
+            event
+            for event in events
+            if event.type.value.startswith("benchmark.")
+            and event.type
+            in {
+                BenchmarkEventType.BENCHMARK_CANCELLED,
+                BenchmarkEventType.BENCHMARK_COMPLETED,
+                BenchmarkEventType.BENCHMARK_FAILED,
+            }
+        ]
+        assert len(terminal_events) == 1
+        assert terminal_events[0].type is (
+            BenchmarkEventType.BENCHMARK_CANCELLED
+            if failure_point == "event_append"
+            else BenchmarkEventType.BENCHMARK_FAILED
+        )
+
+    asyncio.run(scenario())
+
+
+def test_executor_and_heartbeat_failure_still_terminalize_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        settings = make_settings(tmp_path)
+        coordinator = WorkspaceOperationCoordinator()
+        executor = HoldingFailingExecutor()
+        manager = BenchmarkManager(
+            settings=settings,
+            coordinator=coordinator,
+            executor=executor,
+            heartbeat_interval=0.005,
+        )
+        original_write_run = manager._write_run
+        write_count = 0
+
+        def fail_one_heartbeat_write(run: BenchmarkRun) -> None:
+            nonlocal write_count
+            write_count += 1
+            if write_count == 3:
+                raise OSError("injected heartbeat run write failure")
+            original_write_run(run)
+
+        monkeypatch.setattr(manager, "_write_run", fail_one_heartbeat_write)
+        await manager.start()
+        started = await manager.start_benchmark()
+        await executor.entered.wait()
+        active = manager._active
+        assert active is not None
+        for _ in range(200):
+            if active.heartbeat_task is not None and active.heartbeat_task.done():
+                break
+            await asyncio.sleep(0.005)
+        else:
+            raise AssertionError("heartbeat persistence failure was not observed")
+        executor.release.set()
+
+        failed = await wait_for_terminal(manager, started.run_id)
+
+        assert failed.status is BenchmarkRunStatus.FAILED
+        assert failed.error is not None
+        assert failed.error.code == "benchmark_failed"
+        assert coordinator.snapshot() is None
+        events = manager._read_events(started.run_id)
+        assert [event.type for event in events] == [
+            BenchmarkEventType.BENCHMARK_STARTED,
+            BenchmarkEventType.BENCHMARK_FAILED,
+        ]
+
+    asyncio.run(scenario())
+
+
 def test_close_requests_cancellation_awaits_completion_and_closes_subscriber(
     tmp_path: Path,
 ) -> None:
@@ -1009,6 +1360,83 @@ def test_close_requests_cancellation_awaits_completion_and_closes_subscriber(
             "benchmark.cancellation_requested",
             "benchmark.cancelled",
         ]
+        assert manager._active is None
+
+    asyncio.run(scenario())
+
+
+def test_start_after_close_is_rejected_without_acquiring_a_lease(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        settings = make_settings(tmp_path)
+        coordinator = WorkspaceOperationCoordinator()
+        manager = BenchmarkManager(
+            settings=settings,
+            coordinator=coordinator,
+            executor=IdleExecutor(),
+        )
+        await manager.start()
+        await manager.close()
+
+        with pytest.raises(ApplicationError) as raised:
+            await manager.start_benchmark()
+
+        assert raised.value.code == "benchmark_manager_closed"
+        assert coordinator.snapshot() is None
+        assert manager._active is None
+        assert list(settings.benchmark_results_dir.iterdir()) == []
+
+    asyncio.run(scenario())
+
+
+def test_close_waits_for_start_preparation_then_cancels_the_created_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        settings = make_settings(tmp_path)
+        coordinator = WorkspaceOperationCoordinator()
+        executor = CooperativeCloseExecutor()
+        manager = BenchmarkManager(
+            settings=settings,
+            coordinator=coordinator,
+            executor=executor,
+            heartbeat_interval=60,
+        )
+        await manager.start()
+        original_write_run = manager._write_run
+        preparation_entered = threading.Event()
+        release_preparation = threading.Event()
+        blocked = False
+
+        def block_queued_write(run: BenchmarkRun) -> None:
+            nonlocal blocked
+            if run.status is BenchmarkRunStatus.QUEUED and not blocked:
+                blocked = True
+                preparation_entered.set()
+                if not release_preparation.wait(timeout=5):
+                    raise TimeoutError("test did not release start preparation")
+            original_write_run(run)
+
+        monkeypatch.setattr(manager, "_write_run", block_queued_write)
+        start_task = asyncio.create_task(manager.start_benchmark())
+        assert await asyncio.to_thread(preparation_entered.wait, 1)
+        close_task = asyncio.create_task(manager.close())
+        await asyncio.sleep(0)
+        close_finished_during_preparation = close_task.done()
+        release_preparation.set()
+        started = await start_task
+        await close_task
+
+        if close_finished_during_preparation:
+            await manager.cancel_benchmark(started.run_id)
+            active = manager._active
+            if active is not None and active.task is not None:
+                await active.task
+
+        terminal = await manager.get_benchmark(started.run_id)
+        assert close_finished_during_preparation is False
+        assert terminal.status is BenchmarkRunStatus.CANCELLED
+        assert coordinator.snapshot() is None
         assert manager._active is None
 
     asyncio.run(scenario())

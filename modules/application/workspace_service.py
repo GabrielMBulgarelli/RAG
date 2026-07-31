@@ -161,6 +161,10 @@ class WorkspaceService:
         self._conversations: dict[UUID, list[ConversationMessage]] = {}
         self._latest_public_query: dict[UUID, dict[str, Any]] = {}
 
+    @property
+    def active_chat_model(self) -> str | None:
+        return self._active_chat_model
+
     async def start(self) -> None:
         for directory in (
             self.settings.sources_dir,
@@ -277,9 +281,7 @@ class WorkspaceService:
                 can_upload=probe.reachable
                 and _normalize_model_name(self.settings.embedding_model) in installed
                 and idle,
-                can_run_benchmark=(
-                    self._benchmark_available and loaded and bool(manifest.documents) and idle
-                ),
+                can_run_benchmark=(self._benchmark_available and loaded and idle),
             ),
             active_operation=active,
             corpus=self._corpus(manifest),

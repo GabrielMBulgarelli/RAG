@@ -262,6 +262,11 @@ class BenchmarkMetricObservation(BaseModel):
         return self
 
 
+class BenchmarkCaseMetricObservation(BenchmarkMetricObservation):
+    name: str
+    label: str
+
+
 class BenchmarkMetric(BaseModel):
     name: str
     label: str
@@ -350,7 +355,7 @@ class BenchmarkCaseDetail(BaseModel):
     generated_answer: str | None
     expected_evidence: list[dict[str, JsonValue]]
     retrieved_evidence: list[dict[str, JsonValue]]
-    metric_observations: list[BenchmarkMetricObservation]
+    metric_observations: list[BenchmarkCaseMetricObservation]
     failure_classification: str | None
     public_trace: list[TraceEvent]
     sanitized_raw_result: dict[str, JsonValue] | None

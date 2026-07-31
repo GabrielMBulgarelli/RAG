@@ -281,6 +281,31 @@ def test_runtime_keeps_benchmark_disabled_when_no_executor_is_configured(
     assert runtime.capabilities.can_run_benchmark is False
 
 
+def test_loaded_runtime_can_benchmark_embedded_corpus_without_workspace_documents(
+    tmp_path: Path,
+) -> None:
+    # Arrange
+    settings = make_settings(tmp_path)
+    service = WorkspaceService(
+        settings=settings,
+        vector_db_factory=FakeVectorDB,
+        graph_factory=lambda _vector_db, _model: FakeGraph(),
+        runtime_probe=lambda: RuntimeProbeResult(
+            reachable=True,
+            models=(settings.llm_model, settings.embedding_model),
+        ),
+    )
+
+    # Act
+    asyncio.run(service.load_model(ModelLoadRequest(chat_model=settings.llm_model)))
+    runtime = asyncio.run(service.get_runtime())
+
+    # Then the embedded benchmark is independent from workspace documents
+    assert runtime.corpus.document_count == 0
+    assert runtime.capabilities.can_run_benchmark is True
+    assert service.active_chat_model == settings.llm_model
+
+
 def test_model_load_publishes_only_after_full_success(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     managers = [

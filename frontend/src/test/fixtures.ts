@@ -135,8 +135,18 @@ export const benchmarkCase: BenchmarkCaseDetail = {
     { chunk_id: "chunk-1", text: "Retrieved second." },
   ],
   metric_observations: [
-    { system: "full-rag", value: 0, status: "measured", sample_count: 1, note: null },
     {
+      name: "recall_at_5",
+      label: "Recall at 5",
+      system: "full-rag",
+      value: 0,
+      status: "measured",
+      sample_count: 1,
+      note: null,
+    },
+    {
+      name: "answer_token_f1",
+      label: "Answer token F1",
       system: "dense",
       value: null,
       status: "not_applicable",

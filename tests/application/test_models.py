@@ -8,6 +8,7 @@ from modules.application.models import (
     ActiveOperation,
     ApiProblem,
     BenchmarkCaseDetail,
+    BenchmarkCaseMetricObservation,
     BenchmarkEvent,
     BenchmarkEventType,
     BenchmarkFailure,
@@ -263,6 +264,7 @@ def test_query_contract_serializes_public_observability() -> None:
 
 
 def test_benchmark_contract_has_exact_states_and_json_serialization() -> None:
+    assert {"name", "label"} <= set(BenchmarkCaseMetricObservation.model_fields)
     assert [status.value for status in BenchmarkRunStatus] == [
         "queued",
         "running",
@@ -297,6 +299,11 @@ def test_benchmark_contract_has_exact_states_and_json_serialization() -> None:
         status=BenchmarkMetricStatus.MEASURED,
         sample_count=4,
         note=None,
+    )
+    case_observation = BenchmarkCaseMetricObservation(
+        name="recall_at_5",
+        label="Recall at 5",
+        **observation.model_dump(),
     )
     benchmark = BenchmarkRun(
         run_id=run_id,
@@ -355,7 +362,7 @@ def test_benchmark_contract_has_exact_states_and_json_serialization() -> None:
         generated_answer="The limit is 4.",
         expected_evidence=[{"document_id": "guide", "text": "The limit is 4."}],
         retrieved_evidence=[{"chunk_id": "chunk-1", "text": "The limit is 4."}],
-        metric_observations=[observation],
+        metric_observations=[case_observation],
         failure_classification=None,
         public_trace=[],
         sanitized_raw_result={"route": "simple_search"},

@@ -8,7 +8,7 @@ from typing import cast
 
 import pytest
 
-from modules import evaluation
+from modules import evaluation, evaluation_models
 from modules.evaluation import (
     BenchmarkEvidence,
     CaseResult,
@@ -27,6 +27,7 @@ from modules.evaluation import (
     p95,
     recall_at_k,
     run_agentic_case,
+    run_fixed_rag_case,
     token_f1,
     write_experiment,
 )
@@ -34,11 +35,33 @@ from modules.evaluation_metrics import aggregate_metrics as decomposed_aggregate
 from modules.evaluation_models import EvaluationCase as DecomposedEvaluationCase
 from modules.evaluation_reporting import write_experiment as decomposed_write_experiment
 
+EXPECTED_SYSTEMS = (
+    "dense",
+    "bm25",
+    "hybrid",
+    "dense-rag",
+    "bm25-rag",
+    "hybrid-rag",
+    "full-rag",
+)
+
 
 def test_evaluation_facade_preserves_decomposed_public_api() -> None:
     assert EvaluationCase is DecomposedEvaluationCase
     assert aggregate_metrics is decomposed_aggregate_metrics
     assert write_experiment is decomposed_write_experiment
+
+
+def test_schema_v3_has_exact_retrieval_fixed_rag_and_full_rag_system_order() -> None:
+    # Given / When
+    systems = evaluation_models.SYSTEMS
+
+    # Then
+    assert systems == EXPECTED_SYSTEMS
+    assert evaluation_models.RETRIEVAL_SYSTEMS == ("dense", "bm25", "hybrid")
+    assert evaluation_models.FIXED_RAG_SYSTEMS == ("dense-rag", "bm25-rag", "hybrid-rag")
+    assert evaluation_models.ANSWER_SYSTEMS == (*evaluation_models.FIXED_RAG_SYSTEMS, "full-rag")
+    assert evaluation_models.FULL_RAG_SYSTEM == "full-rag"
 
 
 def case(**updates: object) -> EvaluationCase:
@@ -61,7 +84,7 @@ def case(**updates: object) -> EvaluationCase:
 def result(**updates: object) -> CaseResult:
     values: dict[str, object] = {
         "case_id": "case-1",
-        "system": "agentic",
+        "system": "full-rag",
         "retrieved_chunk_ids": ["a", "x"],
         "cited_chunk_ids": ["a"],
         "route": "simple_search",
@@ -135,6 +158,32 @@ def test_agent_accuracy_denominators_exclude_non_agentic_results() -> None:
     metrics = aggregate_metrics(cases, results)
     assert_observation(metrics, "route_accuracy", value=0.5, status="measured", sample_count=2)
     assert_observation(metrics, "strategy_accuracy", value=1.0, status="measured", sample_count=2)
+
+
+def test_fixed_rag_measures_answers_but_only_full_rag_measures_workflow_decisions() -> None:
+    # Arrange
+    benchmark = case(expected_answer="expected answer")
+    fixed = aggregate_metrics(
+        [benchmark],
+        [result(system="dense-rag", answer="expected answer", route=None, strategy=None)],
+        system="dense-rag",
+    )
+    full = aggregate_metrics(
+        [benchmark],
+        [result(system="full-rag", answer="expected answer")],
+        system="full-rag",
+    )
+
+    # Then fixed RAG omits workflow decisions without losing answer scores
+    assert_observation(fixed, "answer_token_f1", value=1.0, status="measured", sample_count=1)
+    assert_observation(
+        fixed,
+        "route_accuracy",
+        value=None,
+        status="not_applicable",
+        sample_count=0,
+    )
+    assert_observation(full, "route_accuracy", value=1.0, status="measured", sample_count=1)
 
 
 def test_retry_precision_and_recall_edge_cases() -> None:
@@ -240,8 +289,8 @@ def test_required_models_depend_on_selected_systems() -> None:
     # Act
     bm25 = evaluation.required_models_for_systems(["bm25"])
     dense_hybrid = evaluation.required_models_for_systems(["dense", "hybrid"])
-    agentic = evaluation.required_models_for_systems(["agentic"])
-    alternate = evaluation.required_models_for_systems(["agentic"], "qwen3:4b")
+    agentic = evaluation.required_models_for_systems(["full-rag"])
+    alternate = evaluation.required_models_for_systems(["full-rag"], "qwen3:4b")
 
     # Then dependency checks include only the resources each selected system needs.
     assert bm25 == ()
@@ -348,7 +397,7 @@ def test_run_evaluation_uses_normalized_run_scoped_chat_model(
         evaluation,
         "run_agentic_case",
         lambda item, _graph, _model, *, timeout_seconds: result(
-            case_id=item.id, system="agentic", latency_seconds=timeout_seconds
+            case_id=item.id, system="full-rag", latency_seconds=timeout_seconds
         ),
     )
 
@@ -366,7 +415,7 @@ def test_run_evaluation_uses_normalized_run_scoped_chat_model(
     # Act
     output = evaluation.run_evaluation(
         dataset,
-        ["agentic"],
+        ["full-rag"],
         "development",
         chat_model=" qwen3 ",
     )
@@ -418,7 +467,7 @@ def test_experiment_configuration_serializes(tmp_path: Path) -> None:
         git_commit="abc123",
         dataset_hash="sha256",
         evaluated_split="test",
-        systems=["dense", "agentic"],
+        systems=["dense", "full-rag"],
         chat_model="chat",
         embedding_model="embed",
         chunk_size=700,
@@ -434,7 +483,7 @@ def test_experiment_configuration_serializes(tmp_path: Path) -> None:
         config,
         [result()],
         {
-            "agentic": {
+            "full-rag": {
                 "recall_at_5": MetricObservation(
                     value=1.0,
                     status="measured",
@@ -446,10 +495,10 @@ def test_experiment_configuration_serializes(tmp_path: Path) -> None:
     )
 
     summary = json.loads((output / "summary.json").read_text())
-    assert summary["schema_version"] == 2
-    assert summary["configuration"]["systems"] == ["dense", "agentic"]
+    assert summary["schema_version"] == 3
+    assert summary["configuration"]["systems"] == ["dense", "full-rag"]
     assert summary["configuration"]["case_timeout_seconds"] == 30.0
-    assert summary["metrics"]["agentic"]["recall_at_5"] == {
+    assert summary["metrics"]["full-rag"]["recall_at_5"] == {
         "value": 1.0,
         "status": "measured",
         "sample_count": 1,
@@ -457,7 +506,7 @@ def test_experiment_configuration_serializes(tmp_path: Path) -> None:
     }
     assert (output / "cases.jsonl").read_text().strip()
     markdown = (output / "summary.md").read_text(encoding="utf-8")
-    assert "agentic" in markdown
+    assert "full-rag" in markdown
     assert "1.000000 · n=1" in markdown
     assert "Cases with expected chunk evidence." in markdown
 
@@ -465,11 +514,11 @@ def test_experiment_configuration_serializes(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("dataset_name", "split", "systems", "expected"),
     [
-        ("multihop", "development", ["dense", "bm25", "hybrid", "agentic"], True),
-        ("multihop", "development", ["agentic", "hybrid", "bm25", "dense"], True),
+        ("multihop", "development", list(EXPECTED_SYSTEMS), True),
+        ("multihop", "development", list(reversed(EXPECTED_SYSTEMS)), True),
         ("multihop", "development", ["bm25"], False),
-        ("multihop", "test", ["dense", "bm25", "hybrid", "agentic"], False),
-        ("regression", "development", ["dense", "bm25", "hybrid", "agentic"], False),
+        ("multihop", "test", list(EXPECTED_SYSTEMS), False),
+        ("regression", "development", list(EXPECTED_SYSTEMS), False),
     ],
 )
 def test_standard_benchmark_contract(
@@ -479,7 +528,7 @@ def test_standard_benchmark_contract(
     expected: bool,
 ) -> None:
     summary = {
-        "schema_version": 2,
+        "schema_version": 3,
         "configuration": {
             "dataset_name": dataset_name,
             "evaluated_split": split,
@@ -515,7 +564,7 @@ def test_experiment_summary_records_standard_or_custom_kind(tmp_path: Path) -> N
     standard = ExperimentConfig(
         run_id="standard",
         evaluated_split="development",
-        systems=["dense", "bm25", "hybrid", "agentic"],
+        systems=list(EXPECTED_SYSTEMS),
         **base,
     )
     custom = ExperimentConfig(
@@ -613,6 +662,85 @@ def test_retrieval_baselines_do_not_receive_agent_only_failure_labels() -> None:
     )
 
     assert labels == ["retrieval_miss"]
+
+
+def test_fixed_rag_uses_exactly_one_grounded_model_call_and_validates_citations() -> None:
+    # Arrange
+    class FakeRetriever:
+        def semantic(self, _question: str, _limit: int) -> list[evaluation.RetrievalHit]:
+            return [
+                evaluation.RetrievalHit(
+                    chunk_id="a",
+                    document_id="doc",
+                    content="The answer is expected.",
+                    filename="doc.pdf",
+                    page=1,
+                    score=0.9,
+                )
+            ]
+
+    class FakeModel:
+        calls = 0
+
+        def invoke(self, _messages: object, **_kwargs: object) -> str:
+            self.calls += 1
+            return "Expected [C1]"
+
+    model = FakeModel()
+    # Act
+    measured = run_fixed_rag_case(
+        case(expected_answer="expected"),
+        "dense-rag",
+        cast(evaluation.Retriever, FakeRetriever()),
+        cast(CountingModel, model),
+    )
+
+    # Then the answer remains grounded without a repair call
+    assert model.calls == 1
+    assert measured.answer == "Expected [C1]"
+    assert measured.cited_chunk_ids == ["a"]
+    assert measured.retrieved_chunk_ids == ["a"]
+    assert measured.terminated is True
+    assert measured.abstained is False
+    assert measured.route is None
+    assert measured.strategy is None
+
+
+def test_fixed_rag_abstains_when_the_single_answer_cannot_be_grounded() -> None:
+    # Arrange
+    class FakeRetriever:
+        def sparse(self, _question: str, _limit: int) -> list[evaluation.RetrievalHit]:
+            return [
+                evaluation.RetrievalHit(
+                    chunk_id="a",
+                    document_id="doc",
+                    content="Grounded evidence.",
+                    filename="doc.pdf",
+                    page=1,
+                    score=0.9,
+                )
+            ]
+
+    class FakeModel:
+        calls = 0
+
+        def invoke(self, _messages: object, **_kwargs: object) -> str:
+            self.calls += 1
+            return "An unsupported answer without a citation."
+
+    # Act
+    measured = run_fixed_rag_case(
+        case(),
+        "bm25-rag",
+        cast(evaluation.Retriever, FakeRetriever()),
+        cast(CountingModel, FakeModel()),
+    )
+
+    # Then unsupported prose becomes an explicit abstention
+    assert measured.abstained is True
+    assert measured.cited_chunk_ids == []
+    assert measured.validation_violations == ["uncited_claim"]
+    assert "over_abstention" in measured.failure_labels
 
 
 def test_agentic_case_records_decision_diagnostics() -> None:

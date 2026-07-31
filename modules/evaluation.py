@@ -1,4 +1,4 @@
-"""Small comparative evaluation harness for the four MVP RAG systems."""
+"""Comparative evaluation harness for retrieval, fixed RAG, and full RAG systems."""
 
 from __future__ import annotations
 
@@ -17,8 +17,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Iterator
 
+from langchain_core.messages import HumanMessage
 from langchain_ollama import ChatOllama
+from pydantic import JsonValue
 
+from modules.citations import build_cited_context, retain_cited_claims, validate_answer
 from modules.config import PROJECT_ROOT, Settings, config
 from modules.evaluation_metrics import (
     aggregate_metrics,
@@ -34,6 +37,9 @@ from modules.evaluation_metrics import (
     token_f1,
 )
 from modules.evaluation_models import (
+    ANSWER_SYSTEMS,
+    FIXED_RAG_SYSTEMS,
+    FULL_RAG_SYSTEM,
     MULTIHOP_ROOT,
     STANDARD_BENCHMARK_DATASET,
     STANDARD_BENCHMARK_SPLIT,
@@ -84,6 +90,7 @@ __all__ = [
     "recall_at_k",
     "run_agentic_case",
     "run_evaluation",
+    "run_fixed_rag_case",
     "run_retrieval_case",
     "token_f1",
     "write_experiment",
@@ -200,6 +207,7 @@ def _retrieval_result(
         abstained=not bool(hits),
         latency_seconds=elapsed,
         retrieval_rounds=1,
+        retrieved_evidence=_retrieved_evidence(hits),
     )
     result.failure_labels = failure_labels(case, result)
     return result
@@ -222,7 +230,114 @@ def run_retrieval_case(
     return _retrieval_result(case, system, hits, time.perf_counter() - started)
 
 
-def run_agentic_case(
+def _fixed_rag_hits(
+    *, question: str, system: SystemName, retriever: Retriever
+) -> list[RetrievalHit]:
+    if system == "dense-rag":
+        return retriever.semantic(question, 5)
+    if system == "bm25-rag":
+        return retriever.sparse(question, 5)
+    if system == "hybrid-rag":
+        dense = retriever.semantic(question, config.semantic_candidates)
+        sparse = retriever.sparse(question, config.sparse_candidates)
+        return reciprocal_rank_fusion(dense, sparse, limit=5)
+    raise ValueError(f"Unsupported fixed RAG system: {system}")
+
+
+def _retrieved_evidence(hits: Sequence[RetrievalHit]) -> list[dict[str, JsonValue]]:
+    return [
+        {
+            "chunk_id": hit.chunk_id,
+            "document_id": hit.document_id,
+            "filename": hit.filename,
+            "page": hit.page,
+            "excerpt": " ".join(hit.content.split())[:300],
+        }
+        for hit in hits[:5]
+    ]
+
+
+def _message_text(value: object) -> str:
+    content = getattr(value, "content", value)
+    return content if isinstance(content, str) else str(content)
+
+
+def run_fixed_rag_case(  # lanorme: ignore[KWARG-001] -- Stable evaluator API
+    case: EvaluationCase,
+    system: SystemName,
+    retriever: Retriever,
+    model: CountingModel,
+) -> CaseResult:
+    """Run fixed retrieval followed by at most one grounded answer call."""
+    started_calls = model.calls
+    started = time.perf_counter()
+    try:
+        hits = _fixed_rag_hits(question=case.question, system=system, retriever=retriever)
+        context, sources = build_cited_context(hits)
+        if not hits:
+            answer = "I could not find enough evidence in the indexed documents to answer."
+            validation = validate_answer(answer, [], known_labels=set(), require_citations=False)
+            cited_sources = []
+            abstained = True
+        else:
+            prompt = f"""Begin with a direct, concise answer. Use only the evidence below and
+cite every factual claim with its exact [C#] label. Do not invent labels or facts.
+Question: {case.question}
+Evidence:
+{context}"""
+            raw_answer = _message_text(model.invoke([HumanMessage(content=prompt)], think=False))
+            known_labels = {source.label for source in sources}
+            validation = validate_answer(
+                raw_answer,
+                sources,
+                known_labels=known_labels,
+                require_citations=True,
+            )
+            grounded = validation
+            if not validation.is_valid:
+                grounded = retain_cited_claims(
+                    raw_answer,
+                    sources,
+                    known_labels=known_labels,
+                )
+            if grounded.is_valid and grounded.used_sources:
+                answer = grounded.sanitized_text
+                cited_sources = grounded.used_sources
+                abstained = False
+            else:
+                answer = "I could not produce a fully cited answer from the available evidence."
+                cited_sources = []
+                abstained = True
+        result = CaseResult(
+            case_id=case.id,
+            system=system,
+            retrieved_chunk_ids=[hit.chunk_id for hit in hits[:5]],
+            retrieved_document_ids=list(
+                dict.fromkeys(hit.document_id for hit in hits[:5] if hit.document_id)
+            ),
+            cited_chunk_ids=[source.chunk_id for source in cited_sources],
+            terminated=True,
+            abstained=abstained,
+            latency_seconds=time.perf_counter() - started,
+            llm_calls=model.calls - started_calls,
+            retrieval_rounds=1,
+            answer=answer,
+            validation_violations=[item.value for item in validation.violations],
+            retrieved_evidence=_retrieved_evidence(hits),
+        )
+    except Exception as exc:  # noqa: BLE001 - evaluation must preserve per-case failures
+        result = CaseResult(
+            case_id=case.id,
+            system=system,
+            latency_seconds=time.perf_counter() - started,
+            llm_calls=model.calls - started_calls,
+            runtime_error=f"{type(exc).__name__}: {exc}",
+        )
+    result.failure_labels = failure_labels(case, result)
+    return result
+
+
+def run_agentic_case(  # lanorme: ignore[KWARG-001,SIZE-002] -- Stable evaluator API
     case: EvaluationCase,
     graph: RAGGraph,
     model: CountingModel,
@@ -241,7 +356,7 @@ def run_agentic_case(
     except Exception as exc:  # noqa: BLE001 - evaluation must preserve per-case failures
         result = CaseResult(
             case_id=case.id,
-            system="agentic",
+            system=FULL_RAG_SYSTEM,
             latency_seconds=time.perf_counter() - started,
             llm_calls=model.calls - started_calls,
             runtime_error=f"{type(exc).__name__}: {exc}",
@@ -260,7 +375,7 @@ def run_agentic_case(
     validation = payload.get("validation", {})
     result = CaseResult(
         case_id=case.id,
-        system="agentic",
+        system=FULL_RAG_SYSTEM,
         retrieved_chunk_ids=[hit["chunk_id"] for hit in payload.get("retrieval_hits", [])][:5],
         retrieved_document_ids=list(
             dict.fromkeys(
@@ -289,6 +404,31 @@ def run_agentic_case(
         validation_violations=validation.get("violations", []),
         initial_validation_violations=validation.get("initial_violations", []),
         repair_validation_violations=validation.get("repair_violations", []),
+        retrieved_evidence=[
+            {
+                key: hit[key]
+                for key in ("chunk_id", "document_id", "filename", "page", "excerpt")
+                if key in hit
+            }
+            for hit in payload.get("retrieval_hits", [])[:5]
+        ],
+        public_trace=[
+            {
+                key: event.get(key)
+                for key in (
+                    "stage",
+                    "decision",
+                    "retrieved_count",
+                    "fused_count",
+                    "selected_count",
+                    "retry_count",
+                    "llm_calls",
+                    "termination",
+                    "duration_ms",
+                )
+            }
+            for event in trace
+        ],
     )
     result.failure_labels = failure_labels(case, result)
     return result
@@ -315,9 +455,9 @@ def required_models_for_systems(  # lanorme: ignore[KWARG-001] -- Public API sup
 ) -> tuple[str, ...]:
     """Return only the local models needed by the selected evaluation systems."""
     required: list[str] = []
-    if any(system in {"dense", "hybrid", "agentic"} for system in systems):
+    if any(system != "bm25" for system in systems):
         required.append(normalize_model_name(config.embedding_model))
-    if "agentic" in systems:
+    if any(system in ANSWER_SYSTEMS for system in systems):
         required.append(normalize_model_name(chat_model or config.llm_model))
     return tuple(dict.fromkeys(required))
 
@@ -471,7 +611,7 @@ def run_evaluation(  # lanorme: ignore[PARAM-001,SIZE-002,COMPLEXITY-001,KWARG-0
     retriever = Retriever(manager.setup())
     counted: CountingModel | None = None
     graph: RAGGraph | None = None
-    if "agentic" in selected:
+    if any(system in ANSWER_SYSTEMS for system in selected):
         counted = CountingModel(
             ChatOllama(
                 model=selected_chat_model,
@@ -481,20 +621,28 @@ def run_evaluation(  # lanorme: ignore[PARAM-001,SIZE-002,COMPLEXITY-001,KWARG-0
                 client_kwargs={"timeout": 60.0},
             )
         )
-        graph = RAGGraph(manager, llm=counted)  # type: ignore[arg-type]
+        if FULL_RAG_SYSTEM in selected:
+            graph = RAGGraph(manager, llm=counted)  # type: ignore[arg-type]
     results: list[CaseResult] = []
     for system in selected:
         for case in cases:
-            results.append(
-                run_agentic_case(
+            if system == FULL_RAG_SYSTEM:
+                result = run_agentic_case(
                     case,
                     graph,  # type: ignore[arg-type]
                     counted,  # type: ignore[arg-type]
                     timeout_seconds=case_timeout_seconds,
                 )
-                if system == "agentic"
-                else run_retrieval_case(case, system, retriever)
-            )
+            elif system in FIXED_RAG_SYSTEMS:
+                result = run_fixed_rag_case(
+                    case,
+                    system,
+                    retriever,
+                    counted,  # type: ignore[arg-type]
+                )
+            else:
+                result = run_retrieval_case(case, system, retriever)
+            results.append(result)
     metrics = {
         system: aggregate_metrics(
             cases,

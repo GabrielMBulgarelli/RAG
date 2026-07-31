@@ -38,6 +38,7 @@ from modules.evaluation_metrics import (
 )
 from modules.evaluation_models import (
     ANSWER_SYSTEMS,
+    FIXED_RAG_PROMPT_ID,
     FIXED_RAG_SYSTEMS,
     FULL_RAG_SYSTEM,
     MULTIHOP_ROOT,
@@ -662,6 +663,8 @@ def run_evaluation(  # lanorme: ignore[PARAM-001,SIZE-002,COMPLEXITY-001,KWARG-0
         systems=list(selected),
         chat_model=selected_chat_model,
         embedding_model=config.embedding_model,
+        temperature=config.temperature,
+        fixed_rag_prompt_id=FIXED_RAG_PROMPT_ID,
         chunk_size=config.chunk_size,
         chunk_overlap=config.chunk_overlap,
         retrieval_limit=5,

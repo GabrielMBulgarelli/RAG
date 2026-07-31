@@ -8,6 +8,7 @@ from typing import Protocol, cast
 from uuid import UUID
 
 from langchain_ollama import ChatOllama
+from pydantic import JsonValue
 
 from modules.application.benchmark_manager import (
     BenchmarkCancellation,
@@ -43,6 +44,21 @@ from modules.evaluation import (
 from modules.evaluation_metrics import aggregate_metrics, failure_labels
 from modules.evaluation_models import (
     ANSWER_SYSTEMS,
+    CANONICAL_BENCHMARK_CASE_IDS,
+    CANONICAL_BENCHMARK_RESULT_COUNT,
+    CANONICAL_CHAT_MODEL,
+    CANONICAL_CHUNK_OVERLAP,
+    CANONICAL_CHUNK_SIZE,
+    CANONICAL_EMBEDDING_MODEL,
+    CANONICAL_MAX_CONTEXT_CHUNKS,
+    CANONICAL_REQUEST_TIMEOUT_SECONDS,
+    CANONICAL_RETRIEVAL_LIMIT,
+    CANONICAL_RETRY_LIMIT,
+    CANONICAL_SEMANTIC_CANDIDATES,
+    CANONICAL_SPARSE_CANDIDATES,
+    CANONICAL_SUBQUERY_LIMIT,
+    CANONICAL_TEMPERATURE,
+    FIXED_RAG_PROMPT_ID,
     FIXED_RAG_SYSTEMS,
     FULL_RAG_SYSTEM,
     MULTIHOP_ROOT,
@@ -152,7 +168,7 @@ class LocalEvaluationRuntime:
                 base_url=self.settings.ollama_base_url,
                 temperature=self.settings.temperature,
                 num_predict=512,
-                client_kwargs={"timeout": 60.0},
+                client_kwargs={"timeout": CANONICAL_REQUEST_TIMEOUT_SECONDS},
             )
         )
         self._graph = RAGGraph(manager, llm=self._model)  # type: ignore[arg-type]
@@ -311,8 +327,49 @@ class FullRagBenchmarkExecutor:
         self._runtime = runtime or LocalEvaluationRuntime(settings=settings)
         self._chat_model_provider = chat_model_provider or (lambda: settings.llm_model)
         self._embedding_model = embedding_model or settings.embedding_model
+        self._settings = settings
+
+    def _canonical_reproducibility(self) -> dict[str, JsonValue]:
+        values: dict[str, JsonValue] = {
+            "benchmark_name": "full_rag_benchmark",
+            "case_ids": list(CANONICAL_BENCHMARK_CASE_IDS),
+            "expected_result_count": CANONICAL_BENCHMARK_RESULT_COUNT,
+            "chat_model": self._chat_model_provider(),
+            "embedding_model": self._embedding_model,
+            "temperature": self._settings.temperature,
+            "fixed_rag_prompt_id": FIXED_RAG_PROMPT_ID,
+            "chunk_size": self._settings.chunk_size,
+            "chunk_overlap": self._settings.chunk_overlap,
+            "retrieval_limit": CANONICAL_RETRIEVAL_LIMIT,
+            "semantic_candidates": self._settings.semantic_candidates,
+            "sparse_candidates": self._settings.sparse_candidates,
+            "maximum_context_chunks": self._settings.max_context_chunks,
+            "retry_limit": self._settings.max_retries,
+            "subquery_limit": self._settings.max_subqueries,
+            "request_timeout_seconds": CANONICAL_REQUEST_TIMEOUT_SECONDS,
+        }
+        expected = {
+            "chat_model": CANONICAL_CHAT_MODEL,
+            "embedding_model": CANONICAL_EMBEDDING_MODEL,
+            "temperature": CANONICAL_TEMPERATURE,
+            "chunk_size": CANONICAL_CHUNK_SIZE,
+            "chunk_overlap": CANONICAL_CHUNK_OVERLAP,
+            "retrieval_limit": CANONICAL_RETRIEVAL_LIMIT,
+            "semantic_candidates": CANONICAL_SEMANTIC_CANDIDATES,
+            "sparse_candidates": CANONICAL_SPARSE_CANDIDATES,
+            "maximum_context_chunks": CANONICAL_MAX_CONTEXT_CHUNKS,
+            "retry_limit": CANONICAL_RETRY_LIMIT,
+            "subquery_limit": CANONICAL_SUBQUERY_LIMIT,
+            "request_timeout_seconds": CANONICAL_REQUEST_TIMEOUT_SECONDS,
+        }
+        if any(values[name] != expected_value for name, expected_value in expected.items()):
+            raise ValueError(
+                "The Full RAG Benchmark requires the canonical benchmark configuration."
+            )
+        return values
 
     def initial_metadata(self) -> BenchmarkMetadata:
+        reproducibility = self._canonical_reproducibility()
         return BenchmarkMetadata(
             dataset="MultiHopRAG",
             split="development",
@@ -323,7 +380,7 @@ class FullRagBenchmarkExecutor:
             embedding_model=self._embedding_model,
             started_at=None,
             completed_at=None,
-            reproducibility={"case_limit": 20},
+            reproducibility=reproducibility,
         )
 
     async def _run_and_publish_case(
@@ -380,8 +437,18 @@ class FullRagBenchmarkExecutor:
         cancellation: BenchmarkCancellation,
     ) -> BenchmarkExecutionResult:
         del run_id
+        self._canonical_reproducibility()
         chat_model = self._chat_model_provider()
         cases = await asyncio.to_thread(self._runtime.prepare, chat_model)
+        case_ids = [case.id for case in cases]
+        if (
+            len(case_ids) != len(CANONICAL_BENCHMARK_CASE_IDS)
+            or set(case_ids) != set(CANONICAL_BENCHMARK_CASE_IDS)
+            or any(case.split != "development" for case in cases)
+        ):
+            raise ValueError(
+                "The Full RAG Benchmark requires the canonical 20-case development dataset."
+            )
         total_cases = len(cases)
         results: list[CaseResult] = []
         failures: list[BenchmarkFailure] = []

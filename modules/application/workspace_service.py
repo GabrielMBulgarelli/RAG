@@ -45,7 +45,10 @@ from modules.application.models import (
 )
 from modules.application.operation_coordinator import WorkspaceOperationCoordinator
 from modules.config import PROJECT_ROOT, Settings, config
-from modules.evaluation_models import is_complete_full_rag_benchmark_artifact
+from modules.evaluation_models import (
+    CaseResult,
+    is_complete_full_rag_benchmark_artifact,
+)
 from modules.models import IngestionManifest, ManifestDocument, ReconciliationResult
 from modules.rag_graph import RAGGraph, make_chat_model
 from modules.vector_db import VectorDBManager
@@ -319,12 +322,17 @@ class WorkspaceService:
         for summary_path in results_root.rglob("summary.json"):
             try:
                 summary = json.loads(summary_path.read_text(encoding="utf-8"))
-                if (
-                    is_complete_full_rag_benchmark_artifact(summary)
-                    and (summary_path.parent / "cases.jsonl").is_file()
+                cases_path = summary_path.parent / "cases.jsonl"
+                results = [
+                    CaseResult.model_validate_json(line)
+                    for line in cases_path.read_text(encoding="utf-8").splitlines()
+                    if line.strip()
+                ]
+                if cases_path.is_file() and is_complete_full_rag_benchmark_artifact(
+                    summary, results
                 ):
                     return True
-            except (OSError, json.JSONDecodeError):
+            except (OSError, json.JSONDecodeError, ValueError):
                 continue
         return False
 

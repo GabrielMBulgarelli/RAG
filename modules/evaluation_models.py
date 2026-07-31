@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any, Literal, Self
 
 from pydantic import BaseModel, Field, JsonValue, model_validator
@@ -27,6 +28,42 @@ ANSWER_SYSTEMS: tuple[SystemName, ...] = (*FIXED_RAG_SYSTEMS, FULL_RAG_SYSTEM)
 SYSTEMS: tuple[SystemName, ...] = (*RETRIEVAL_SYSTEMS, *ANSWER_SYSTEMS)
 STANDARD_BENCHMARK_DATASET = "multihop"
 STANDARD_BENCHMARK_SPLIT: Split = "development"
+CANONICAL_BENCHMARK_CASE_IDS = (
+    "multihop-0063",
+    "multihop-0716",
+    "multihop-0994",
+    "multihop-2512",
+    "multihop-0460",
+    "multihop-0457",
+    "multihop-1441",
+    "multihop-0590",
+    "multihop-1576",
+    "multihop-1651",
+    "multihop-1673",
+    "multihop-1946",
+    "multihop-1233",
+    "multihop-1798",
+    "multihop-2477",
+    "multihop-1778",
+    "multihop-2436",
+    "multihop-0842",
+    "multihop-1772",
+    "multihop-0685",
+)
+CANONICAL_BENCHMARK_RESULT_COUNT = len(CANONICAL_BENCHMARK_CASE_IDS) * len(SYSTEMS)
+CANONICAL_CHAT_MODEL = "qwen3.5:9b"
+CANONICAL_EMBEDDING_MODEL = "nomic-embed-text"
+CANONICAL_TEMPERATURE = 0.0
+CANONICAL_CHUNK_SIZE = 700
+CANONICAL_CHUNK_OVERLAP = 100
+CANONICAL_RETRIEVAL_LIMIT = 5
+CANONICAL_SEMANTIC_CANDIDATES = 10
+CANONICAL_SPARSE_CANDIDATES = 10
+CANONICAL_MAX_CONTEXT_CHUNKS = 6
+CANONICAL_RETRY_LIMIT = 1
+CANONICAL_SUBQUERY_LIMIT = 4
+CANONICAL_REQUEST_TIMEOUT_SECONDS = 30.0
+FIXED_RAG_PROMPT_ID = "fixed_rag_grounded_answer"
 FAILURE_ORDER = (
     "route_error",
     "strategy_error",
@@ -44,7 +81,10 @@ FAILURE_ORDER = (
 MULTIHOP_ROOT = PROJECT_ROOT / "evals" / "multihop"
 
 
-def is_complete_full_rag_benchmark_artifact(summary: dict[str, Any]) -> bool:
+def is_complete_full_rag_benchmark_artifact(
+    summary: dict[str, Any],
+    results: Sequence[CaseResult],
+) -> bool:
     """Return whether an artifact contains the complete Full RAG Benchmark."""
     configuration = summary.get("configuration")
     if not isinstance(configuration, dict):
@@ -52,19 +92,55 @@ def is_complete_full_rag_benchmark_artifact(summary: dict[str, Any]) -> bool:
     systems = configuration.get("systems")
     if not isinstance(systems, list):
         return False
+    case_ids = summary.get("case_ids")
+    if not isinstance(case_ids, list) or not all(isinstance(case_id, str) for case_id in case_ids):
+        return False
+    expected_configuration = {
+        "dataset_name": STANDARD_BENCHMARK_DATASET,
+        "evaluated_split": STANDARD_BENCHMARK_SPLIT,
+        "chat_model": CANONICAL_CHAT_MODEL,
+        "embedding_model": CANONICAL_EMBEDDING_MODEL,
+        "temperature": CANONICAL_TEMPERATURE,
+        "fixed_rag_prompt_id": FIXED_RAG_PROMPT_ID,
+        "chunk_size": CANONICAL_CHUNK_SIZE,
+        "chunk_overlap": CANONICAL_CHUNK_OVERLAP,
+        "retrieval_limit": CANONICAL_RETRIEVAL_LIMIT,
+        "semantic_candidates": CANONICAL_SEMANTIC_CANDIDATES,
+        "sparse_candidates": CANONICAL_SPARSE_CANDIDATES,
+        "retry_limit": CANONICAL_RETRY_LIMIT,
+        "subquery_limit": CANONICAL_SUBQUERY_LIMIT,
+        "case_timeout_seconds": CANONICAL_REQUEST_TIMEOUT_SECONDS,
+    }
+    if any(
+        configuration.get(name) != expected for name, expected in expected_configuration.items()
+    ):
+        return False
+    expected_pairs = {
+        (case_id, system) for case_id in CANONICAL_BENCHMARK_CASE_IDS for system in SYSTEMS
+    }
+    actual_pairs = {(item.case_id, item.system) for item in results}
     return (
-        configuration.get("dataset_name") == STANDARD_BENCHMARK_DATASET
-        and configuration.get("evaluated_split") == STANDARD_BENCHMARK_SPLIT
+        summary.get("benchmark_name") == "full_rag_benchmark"
         and len(systems) == len(SYSTEMS)
         and set(systems) == set(SYSTEMS)
+        and len(case_ids) == len(CANONICAL_BENCHMARK_CASE_IDS)
+        and set(case_ids) == set(CANONICAL_BENCHMARK_CASE_IDS)
+        and summary.get("expected_result_count") == CANONICAL_BENCHMARK_RESULT_COUNT
+        and summary.get("completed_result_count") == CANONICAL_BENCHMARK_RESULT_COUNT
+        and len(results) == CANONICAL_BENCHMARK_RESULT_COUNT
+        and len(actual_pairs) == CANONICAL_BENCHMARK_RESULT_COUNT
+        and actual_pairs == expected_pairs
     )
 
 
-def evaluation_result_kind(summary: dict[str, Any]) -> EvaluationResultKind:
+def evaluation_result_kind(
+    summary: dict[str, Any],
+    results: Sequence[CaseResult],
+) -> EvaluationResultKind:
     """Classify complete Full RAG Benchmark artifacts and custom evaluations."""
     return (
         "standard_benchmark"
-        if is_complete_full_rag_benchmark_artifact(summary)
+        if is_complete_full_rag_benchmark_artifact(summary, results)
         else "custom_evaluation"
     )
 
@@ -141,6 +217,8 @@ class ExperimentConfig(BaseModel):
     systems: list[SystemName]
     chat_model: str
     embedding_model: str
+    temperature: float = CANONICAL_TEMPERATURE
+    fixed_rag_prompt_id: str = FIXED_RAG_PROMPT_ID
     chunk_size: int
     chunk_overlap: int
     retrieval_limit: int

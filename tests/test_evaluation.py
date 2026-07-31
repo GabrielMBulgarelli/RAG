@@ -495,7 +495,19 @@ def test_experiment_configuration_serializes(tmp_path: Path) -> None:
     )
 
     summary = json.loads((output / "summary.json").read_text())
-    assert set(summary) == {"configuration", "result_kind", "metrics"}
+    assert set(summary) == {
+        "benchmark_name",
+        "case_ids",
+        "completed_result_count",
+        "configuration",
+        "expected_result_count",
+        "metrics",
+        "result_kind",
+    }
+    assert summary["benchmark_name"] == "full_rag_benchmark"
+    assert summary["case_ids"] == ["case-1"]
+    assert summary["expected_result_count"] == 140
+    assert summary["completed_result_count"] == 1
     assert summary["configuration"]["systems"] == ["dense", "full-rag"]
     assert summary["configuration"]["case_timeout_seconds"] == 30.0
     assert summary["metrics"]["full-rag"]["recall_at_5"] == {
@@ -511,34 +523,105 @@ def test_experiment_configuration_serializes(tmp_path: Path) -> None:
     assert "Cases with expected chunk evidence." in markdown
 
 
-@pytest.mark.parametrize(
-    ("dataset_name", "split", "systems", "expected"),
-    [
-        ("multihop", "development", list(EXPECTED_SYSTEMS), True),
-        ("multihop", "development", list(reversed(EXPECTED_SYSTEMS)), True),
-        ("multihop", "development", ["bm25"], False),
-        ("multihop", "test", list(EXPECTED_SYSTEMS), False),
-        ("regression", "development", list(EXPECTED_SYSTEMS), False),
-    ],
-)
-def test_complete_full_rag_benchmark_artifact(
-    dataset_name: str,
-    split: str,
-    systems: list[str],
-    expected: bool,
-) -> None:
-    summary = {
-        "configuration": {
-            "dataset_name": dataset_name,
-            "evaluated_split": split,
-            "systems": systems,
-        },
+def canonical_experiment(**updates: object) -> ExperimentConfig:
+    values: dict[str, object] = {
+        "run_id": "standard",
+        "timestamp": "2026-01-02T03:04:05Z",
+        "git_commit": "abc123",
+        "dataset_hash": "sha256",
+        "evaluated_split": "development",
+        "systems": list(EXPECTED_SYSTEMS),
+        "chat_model": "qwen3.5:9b",
+        "embedding_model": "nomic-embed-text",
+        "temperature": 0.0,
+        "fixed_rag_prompt_id": "fixed_rag_grounded_answer",
+        "chunk_size": 700,
+        "chunk_overlap": 100,
+        "retrieval_limit": 5,
+        "semantic_candidates": 10,
+        "sparse_candidates": 10,
+        "retry_limit": 1,
+        "subquery_limit": 4,
+        "case_timeout_seconds": 30.0,
+        "dataset_name": "multihop",
+    }
+    values.update(updates)
+    return ExperimentConfig.model_validate(values)
+
+
+def canonical_results() -> list[CaseResult]:
+    return [
+        result(case_id=case_id, system=system)
+        for case_id in evaluation_models.CANONICAL_BENCHMARK_CASE_IDS
+        for system in EXPECTED_SYSTEMS
+    ]
+
+
+def completeness_summary(
+    experiment: ExperimentConfig,
+    results: list[CaseResult],
+) -> dict[str, object]:
+    return {
+        "benchmark_name": "full_rag_benchmark",
+        "configuration": experiment.model_dump(mode="json"),
+        "case_ids": list(dict.fromkeys(item.case_id for item in results)),
+        "expected_result_count": 140,
+        "completed_result_count": len(results),
     }
 
-    assert evaluation.is_complete_full_rag_benchmark_artifact(summary) is expected
-    assert evaluation.evaluation_result_kind(summary) == (
-        "standard_benchmark" if expected else "custom_evaluation"
+
+def test_complete_reordered_full_rag_benchmark_artifact_is_accepted() -> None:
+    results = list(reversed(canonical_results()))
+    summary = completeness_summary(canonical_experiment(), results)
+
+    assert evaluation.is_complete_full_rag_benchmark_artifact(summary, results)
+    assert evaluation.evaluation_result_kind(summary, results) == "standard_benchmark"
+
+
+@pytest.mark.parametrize(
+    "incomplete_results",
+    [
+        lambda items: [
+            item
+            for item in items
+            if item.case_id != evaluation_models.CANONICAL_BENCHMARK_CASE_IDS[-1]
+        ],
+        lambda items: [item for item in items if item.system != EXPECTED_SYSTEMS[-1]],
+        lambda items: [*items[:-1], items[0]],
+        lambda items: [
+            item
+            for item in items
+            if item.case_id == evaluation_models.CANONICAL_BENCHMARK_CASE_IDS[0]
+        ],
+    ],
+    ids=["missing-case", "missing-system", "duplicate-pair", "one-case-seven-systems"],
+)
+def test_incomplete_full_rag_benchmark_artifact_is_custom(
+    incomplete_results,
+) -> None:
+    results = incomplete_results(canonical_results())
+    summary = completeness_summary(canonical_experiment(), results)
+
+    assert not evaluation.is_complete_full_rag_benchmark_artifact(summary, results)
+    assert evaluation.evaluation_result_kind(summary, results) == "custom_evaluation"
+
+
+def test_incorrect_benchmark_configuration_is_custom() -> None:
+    results = canonical_results()
+    summary = completeness_summary(
+        canonical_experiment(case_timeout_seconds=31.0),
+        results,
     )
+
+    assert not evaluation.is_complete_full_rag_benchmark_artifact(summary, results)
+
+
+def test_exactly_140_canonical_results_are_accepted() -> None:
+    results = canonical_results()
+    summary = completeness_summary(canonical_experiment(), results)
+
+    assert len(results) == 140
+    assert evaluation.is_complete_full_rag_benchmark_artifact(summary, results)
 
 
 def test_experiment_summary_records_standard_or_custom_kind(tmp_path: Path) -> None:
@@ -560,12 +643,7 @@ def test_experiment_summary_records_standard_or_custom_kind(tmp_path: Path) -> N
     metric = {
         "bm25": {"recall_at_5": MetricObservation(value=1.0, status="measured", sample_count=1)}
     }
-    standard = ExperimentConfig(
-        run_id="standard",
-        evaluated_split="development",
-        systems=list(EXPECTED_SYSTEMS),
-        **base,
-    )
+    standard = canonical_experiment()
     custom = ExperimentConfig(
         run_id="custom",
         evaluated_split="development",
@@ -573,7 +651,7 @@ def test_experiment_summary_records_standard_or_custom_kind(tmp_path: Path) -> N
         **base,
     )
 
-    standard_path = write_experiment(tmp_path, standard, [result()], metric)
+    standard_path = write_experiment(tmp_path, standard, canonical_results(), metric)
     custom_path = write_experiment(tmp_path, custom, [result()], metric)
 
     assert json.loads((standard_path / "summary.json").read_text())["result_kind"] == (

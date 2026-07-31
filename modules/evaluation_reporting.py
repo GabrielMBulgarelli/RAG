@@ -9,6 +9,7 @@ from pathlib import Path
 
 from modules.config import PROJECT_ROOT
 from modules.evaluation_models import (
+    CANONICAL_BENCHMARK_RESULT_COUNT,
     CaseResult,
     ExperimentConfig,
     MetricObservation,
@@ -39,12 +40,17 @@ def write_experiment(
         for system, values in metrics.items()
     }
     configuration = experiment.model_dump(mode="json")
+    case_ids = list(dict.fromkeys(result.case_id for result in results))
     summary_core = {
+        "benchmark_name": "full_rag_benchmark",
         "configuration": configuration,
+        "case_ids": case_ids,
+        "expected_result_count": CANONICAL_BENCHMARK_RESULT_COUNT,
+        "completed_result_count": len(results),
     }
     summary = {
         **summary_core,
-        "result_kind": evaluation_result_kind(summary_core),
+        "result_kind": evaluation_result_kind(summary_core, results),
         "metrics": serialized_metrics,
     }
     (output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")

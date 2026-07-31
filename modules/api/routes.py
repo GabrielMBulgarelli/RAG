@@ -131,7 +131,11 @@ async def get_benchmark_case(
     system_id: str,
     benchmarks: BenchmarkDependency,
 ) -> BenchmarkCaseDetail:
-    return await benchmarks.get_case(run_id, case_id, system_id)
+    return await benchmarks.get_case(
+        run_id=run_id,
+        case_id=case_id,
+        system_id=system_id,
+    )
 
 
 @router.get("/benchmarks/{run_id}/events", response_class=Response)
@@ -140,7 +144,10 @@ async def stream_benchmark_events(
     benchmarks: BenchmarkDependency,
     last_event_id: Annotated[int | None, Header(alias="Last-Event-ID", ge=0)] = None,
 ) -> Response:
-    return await benchmarks.stream_events(run_id, last_event_id)
+    return await benchmarks.stream_events(
+        run_id=run_id,
+        last_event_id=last_event_id,
+    )
 
 
 @router.post(

@@ -1,27 +1,52 @@
-"""Backward-compatible entry point for the refactored UI application."""
+"""Production FastAPI entry point for the React workspace."""
 
 from __future__ import annotations
 
-import gradio as gr
+import sys
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
 
-from modules.config import config
-from modules.ui.application import *  # noqa: F403
-from modules.ui.application import RAGApplication
-from modules.ui.shell import build_application
+import uvicorn
+from fastapi import FastAPI
 
-app = RAGApplication()
+from modules.api.app import create_app
+from modules.bootstrap import create_application_container
+from modules.config import PROJECT_ROOT, Settings, config
 
-
-def create_interface() -> gr.Blocks:
-    """Build the routed dashboard using the shared application controller."""
-    return build_application(app)
+FRONTEND_DIST = PROJECT_ROOT / "frontend" / "dist"
+ServerRunner = Callable[..., Any]
 
 
-def main() -> int:
-    create_interface().launch(
-        server_name=config.gradio_host,
-        server_port=config.gradio_port,
-        share=config.gradio_share,
+def create_application(
+    *,
+    settings: Settings = config,
+    frontend_dist: Path = FRONTEND_DIST,
+) -> FastAPI:
+    """Compose the production application while keeping services lifespan-owned."""
+    return create_app(
+        lambda: create_application_container(settings),
+        frontend_dist=frontend_dist,
+    )
+
+
+def main(
+    *,
+    settings: Settings = config,
+    frontend_dist: Path = FRONTEND_DIST,
+    server_runner: ServerRunner = uvicorn.run,
+) -> int:
+    try:
+        application = create_application(settings=settings, frontend_dist=frontend_dist)
+    except FileNotFoundError as error:
+        print(error, file=sys.stderr)
+        return 1
+
+    server_runner(
+        application,
+        host=settings.server_host,
+        port=settings.server_port,
+        log_level=settings.log_level.lower(),
     )
     return 0
 

@@ -144,6 +144,7 @@ class WorkspaceService:
         graph_factory: GraphFactory | None = None,
         runtime_probe: RuntimeProbe | None = None,
         evaluation_probe: EvaluationProbe | None = None,
+        benchmark_available: bool = True,
     ) -> None:
         self.settings = settings or config
         self.coordinator = coordinator or WorkspaceOperationCoordinator()
@@ -153,6 +154,7 @@ class WorkspaceService:
         self._graph_factory = graph_factory or _default_graph_factory
         self._runtime_probe = runtime_probe or (lambda: _default_runtime_probe(self.settings))
         self._evaluation_probe = evaluation_probe or self._default_evaluation_probe
+        self._benchmark_available = benchmark_available
         self._vector_db: _VectorDB | None = None
         self._graph: _Graph | None = None
         self._active_chat_model: str | None = None
@@ -275,7 +277,9 @@ class WorkspaceService:
                 can_upload=probe.reachable
                 and _normalize_model_name(self.settings.embedding_model) in installed
                 and idle,
-                can_run_benchmark=loaded and bool(manifest.documents) and idle,
+                can_run_benchmark=(
+                    self._benchmark_available and loaded and bool(manifest.documents) and idle
+                ),
             ),
             active_operation=active,
             corpus=self._corpus(manifest),

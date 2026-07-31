@@ -10,6 +10,15 @@ else
   uv sync
 fi
 
+echo "==> Frontend dependencies"
+npm --prefix frontend ci
+
+echo "==> Frontend tests and build"
+npm --prefix frontend test -- --run
+npm --prefix frontend run typecheck
+npm --prefix frontend run build
+npm --prefix frontend audit --audit-level=low
+
 echo "==> Ruff"
 uv run ruff check .
 uv run ruff format --check .

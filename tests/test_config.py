@@ -9,11 +9,15 @@ from modules.config import Settings
 def test_settings_read_rag_prefixed_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RAG_LLM_MODEL", "test-model")
     monkeypatch.setenv("RAG_CHUNK_SIZE", "900")
+    monkeypatch.setenv("RAG_SERVER_HOST", "0.0.0.0")
+    monkeypatch.setenv("RAG_SERVER_PORT", "8080")
 
     settings = Settings(_env_file=None)  # pyright: ignore[reportCallIssue]
 
     assert settings.llm_model == "test-model"
     assert settings.chunk_size == 900
+    assert settings.server_host == "0.0.0.0"
+    assert settings.server_port == 8080
 
 
 def test_temperature_is_deterministic_by_default_and_can_be_overridden(
@@ -44,6 +48,7 @@ def test_settings_reject_unknown_environment_setting(
         ("RAG_CHUNK_SIZE", "0"),
         ("RAG_CHUNK_OVERLAP", "-1"),
         ("RAG_MAX_RETRIES", "2"),
+        ("RAG_SERVER_PORT", "0"),
     ],
 )
 def test_settings_reject_invalid_bounds(

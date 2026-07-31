@@ -234,6 +234,9 @@ describe("benchmark overlays", () => {
     const evidence = within(retrieved).getAllByRole("listitem");
     expect(evidence[0]).toHaveTextContent("Retrieved first.");
     expect(evidence[1]).toHaveTextContent("Retrieved second.");
+    const drawer = screen.getByRole("dialog", { name: /Case case/ });
+    expect(within(drawer).getByText("Recall at 5")).toBeVisible();
+    expect(within(drawer).getByText("Answer token F1")).toBeVisible();
     expect(screen.getByText("Retrieval only.")).toBeVisible();
     expect(within(screen.getByRole("dialog", { name: "Case case / 1 · Full RAG" }))
       .getByText("citation_mismatch")).toBeVisible();

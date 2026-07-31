@@ -233,7 +233,7 @@ function CaseDrawer({
                 <ul className="case-metrics">
                   {detail.metric_observations.map((observation, index) => (
                     <li key={`${observation.system}:${index}`}>
-                      <strong>{systemLabel(run, observation.system)}</strong>
+                      <strong>{observation.label}</strong>
                       {observation.status === "measured" && observation.value !== null
                         ? <span className="metric-value">{observation.value}</span>
                         : <span>—</span>}

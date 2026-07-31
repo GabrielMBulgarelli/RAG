@@ -76,10 +76,12 @@ uv run python -m modules.run
 Open [http://127.0.0.1:7860](http://127.0.0.1:7860). The workspace remains
 available in limited-readiness mode when Ollama is offline.
 
-During the Task 7 production cutover, embedded benchmark execution is
-intentionally unavailable rather than emulating the old four-system
-evaluation. Task 8 will connect the benchmark overlays to the full RAG
-executor. The legacy schema-v2 benchmark remains available from the CLI:
+The benchmark overlay runs the embedded MultiHopRAG development suite across
+seven systems: three retrieval-only baselines, three fixed single-call RAG
+baselines, and the bounded full RAG workflow. Results use schema v3, retain
+explicit not-applicable metric states, persist across restarts, and expose
+case details without replacing the workspace. The same evaluator is available
+from the CLI:
 
 ```bash
 uv run python -m modules.evaluation \
@@ -125,7 +127,7 @@ modules/
 ├── app.py                  # FastAPI/React production launcher
 ├── bootstrap.py            # Production dependency composition
 ├── citations.py            # Answer and citation validation
-├── evaluation.py           # Legacy schema-v2 benchmark CLI
+├── evaluation.py           # Seven-system schema-v3 benchmark CLI
 ├── rag_graph.py            # Bounded retrieval and answer workflow
 ├── retrieval.py            # Semantic, BM25, fusion, and selection
 ├── vector_db.py            # Ingestion, manifest, and Chroma lifecycle

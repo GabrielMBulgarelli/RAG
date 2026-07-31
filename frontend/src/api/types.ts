@@ -200,6 +200,11 @@ export interface BenchmarkMetricObservation {
   note: string | null;
 }
 
+export interface BenchmarkCaseMetricObservation extends BenchmarkMetricObservation {
+  name: string;
+  label: string;
+}
+
 export interface BenchmarkMetric {
   name: string;
   label: string;
@@ -287,7 +292,7 @@ export interface BenchmarkCaseDetail {
   generated_answer: string | null;
   expected_evidence: Array<Record<string, JsonValue>>;
   retrieved_evidence: Array<Record<string, JsonValue>>;
-  metric_observations: BenchmarkMetricObservation[];
+  metric_observations: BenchmarkCaseMetricObservation[];
   failure_classification: string | null;
   public_trace: TraceEvent[];
   sanitized_raw_result: Record<string, JsonValue> | null;

@@ -9,7 +9,9 @@ from collections import Counter
 from collections.abc import Sequence
 
 from modules.evaluation_models import (
+    ANSWER_SYSTEMS,
     FAILURE_ORDER,
+    FULL_RAG_SYSTEM,
     CaseResult,
     EvaluationCase,
     MetricObservation,
@@ -143,32 +145,34 @@ def aggregate_metrics(
     paired = [(by_id[item.case_id], item) for item in results if item.case_id in by_id]
     retrieval = [(case, result) for case, result in paired if case.relevant_chunk_ids]
     document_retrieval = [(case, result) for case, result in paired if case.relevant_document_ids]
-    agentic = [(case, result) for case, result in paired if result.system == "agentic"]
+    answering = [(case, result) for case, result in paired if result.system in ANSWER_SYSTEMS]
+    full_rag = [(case, result) for case, result in paired if result.system == FULL_RAG_SYSTEM]
     evaluated_system = system or (paired[0][1].system if paired else None)
-    produces_answers = evaluated_system == "agentic"
+    produces_answers = evaluated_system in ANSWER_SYSTEMS
+    produces_workflow_decisions = evaluated_system == FULL_RAG_SYSTEM
 
-    route = [(case, result) for case, result in agentic if result.route is not None]
-    strategy = [(case, result) for case, result in agentic if result.strategy is not None]
-    retry_tp = sum(case.expected_retry and result.retry_count > 0 for case, result in agentic)
-    retry_fp = sum(not case.expected_retry and result.retry_count > 0 for case, result in agentic)
-    retry_fn = sum(case.expected_retry and result.retry_count == 0 for case, result in agentic)
+    route = [(case, result) for case, result in full_rag if result.route is not None]
+    strategy = [(case, result) for case, result in full_rag if result.strategy is not None]
+    retry_tp = sum(case.expected_retry and result.retry_count > 0 for case, result in full_rag)
+    retry_fp = sum(not case.expected_retry and result.retry_count > 0 for case, result in full_rag)
+    retry_fn = sum(case.expected_retry and result.retry_count == 0 for case, result in full_rag)
     retry_expected = retry_tp + retry_fn
     retry_predicted = retry_tp + retry_fp
     answer_pairs = [
         (case, result)
-        for case, result in agentic
+        for case, result in answering
         if case.expected_answer is not None and case.answerable
     ]
-    answerable = [(case, result) for case, result in agentic if case.answerable]
-    unanswerable = [(case, result) for case, result in agentic if not case.answerable]
-    conflict_positive = [(case, result) for case, result in agentic if case.expected_conflict]
-    conflict_negative = [(case, result) for case, result in agentic if not case.expected_conflict]
+    answerable = [(case, result) for case, result in answering if case.answerable]
+    unanswerable = [(case, result) for case, result in answering if not case.answerable]
+    conflict_positive = [(case, result) for case, result in full_rag if case.expected_conflict]
+    conflict_negative = [(case, result) for case, result in full_rag if not case.expected_conflict]
     coverage_pairs = [
-        (case, result) for case, result in agentic if case.answerable and case.relevant_chunk_ids
+        (case, result) for case, result in answering if case.answerable and case.relevant_chunk_ids
     ]
     emitted_citations = [
         (chunk_id, set(result.retrieved_chunk_ids))
-        for _, result in agentic
+        for _, result in answering
         for chunk_id in result.cited_chunk_ids
     ]
 
@@ -254,26 +258,10 @@ def aggregate_metrics(
 
     metrics.update(
         {
-            "route_accuracy": _ratio_observation(
-                sum(result.route == case.expected_route for case, result in route),
-                len(route),
-                "Agentic cases with a recorded route.",
-            ),
-            "strategy_accuracy": _ratio_observation(
-                sum(result.strategy == case.expected_strategy for case, result in strategy),
-                len(strategy),
-                "Agentic cases with a recorded retrieval strategy.",
-            ),
-            "retry_precision": _ratio_observation(
-                retry_tp, retry_predicted, "Agentic cases where a retry was attempted."
-            ),
-            "retry_recall": _ratio_observation(
-                retry_tp, retry_expected, "Agentic cases where a retry was expected."
-            ),
             "citation_precision": _ratio_observation(
                 sum(chunk_id in retrieved for chunk_id, retrieved in emitted_citations),
                 len(emitted_citations),
-                "Citations emitted by agentic answers.",
+                "Citations emitted by answer-producing systems.",
             ),
             "gold_evidence_citation_coverage": _mean_observation(
                 [
@@ -289,43 +277,88 @@ def aggregate_metrics(
                 "Answerable cases with expected chunk evidence.",
             ),
             "abstention_accuracy": _ratio_observation(
-                sum(result.abstained == (not case.answerable) for case, result in agentic),
-                len(agentic),
-                "All agentic cases.",
+                sum(result.abstained == (not case.answerable) for case, result in answering),
+                len(answering),
+                "All answer-producing cases.",
             ),
             "unanswerable_abstention_recall": _ratio_observation(
                 sum(result.abstained for _, result in unanswerable),
                 len(unanswerable),
-                "Unanswerable agentic cases.",
+                "Unanswerable answer-producing cases.",
             ),
             "answerable_response_rate": _ratio_observation(
                 sum(not result.abstained for _, result in answerable),
                 len(answerable),
-                "Answerable agentic cases.",
-            ),
-            "conflict_recall": _ratio_observation(
-                sum(result.conflict_detected for _, result in conflict_positive),
-                len(conflict_positive),
-                "Agentic cases expected to contain a conflict.",
-            ),
-            "conflict_false_positive_rate": _ratio_observation(
-                sum(result.conflict_detected for _, result in conflict_negative),
-                len(conflict_negative),
-                "Agentic cases not expected to contain a conflict.",
+                "Answerable answer-producing cases.",
             ),
             "normalized_answer_exact_match": _mean_observation(
                 [
                     normalized_exact_match(result.answer, case.expected_answer or "")
                     for case, result in answer_pairs
                 ],
-                "Answerable agentic cases with an expected answer.",
+                "Answerable cases with an expected answer.",
             ),
             "answer_token_f1": _mean_observation(
                 [
                     token_f1(result.answer, case.expected_answer or "")
                     for case, result in answer_pairs
                 ],
-                "Answerable agentic cases with an expected answer.",
+                "Answerable cases with an expected answer.",
+            ),
+        }
+    )
+    workflow_only = "Fixed RAG systems do not perform workflow decisions."
+    metrics.update(
+        {
+            "route_accuracy": (
+                _ratio_observation(
+                    sum(result.route == case.expected_route for case, result in route),
+                    len(route),
+                    "Full RAG cases with a recorded route.",
+                )
+                if produces_workflow_decisions
+                else _not_applicable(workflow_only)
+            ),
+            "strategy_accuracy": (
+                _ratio_observation(
+                    sum(result.strategy == case.expected_strategy for case, result in strategy),
+                    len(strategy),
+                    "Full RAG cases with a recorded retrieval strategy.",
+                )
+                if produces_workflow_decisions
+                else _not_applicable(workflow_only)
+            ),
+            "retry_precision": (
+                _ratio_observation(
+                    retry_tp, retry_predicted, "Full RAG cases where a retry was attempted."
+                )
+                if produces_workflow_decisions
+                else _not_applicable(workflow_only)
+            ),
+            "retry_recall": (
+                _ratio_observation(
+                    retry_tp, retry_expected, "Full RAG cases where a retry was expected."
+                )
+                if produces_workflow_decisions
+                else _not_applicable(workflow_only)
+            ),
+            "conflict_recall": (
+                _ratio_observation(
+                    sum(result.conflict_detected for _, result in conflict_positive),
+                    len(conflict_positive),
+                    "Full RAG cases expected to contain a conflict.",
+                )
+                if produces_workflow_decisions
+                else _not_applicable(workflow_only)
+            ),
+            "conflict_false_positive_rate": (
+                _ratio_observation(
+                    sum(result.conflict_detected for _, result in conflict_negative),
+                    len(conflict_negative),
+                    "Full RAG cases not expected to contain a conflict.",
+                )
+                if produces_workflow_decisions
+                else _not_applicable(workflow_only)
             ),
         }
     )
@@ -338,11 +371,11 @@ def failure_labels(case: EvaluationCase, result: CaseResult) -> list[str]:
         set(result.retrieved_chunk_ids) & set(case.relevant_chunk_ids)
     ):
         labels.add("retrieval_miss")
-    if result.system == "agentic":
-        if result.route is not None and result.route != case.expected_route:
-            labels.add("route_error")
-        if result.strategy is not None and result.strategy != case.expected_strategy:
-            labels.add("strategy_error")
+    if not result.terminated:
+        labels.add("non_termination")
+    if result.runtime_error:
+        labels.add("runtime_error")
+    if result.system in ANSWER_SYSTEMS:
         if set(result.cited_chunk_ids) - set(result.retrieved_chunk_ids):
             labels.add("invalid_citation")
         coverage = gold_citation_coverage(result.cited_chunk_ids, case.relevant_chunk_ids)
@@ -352,14 +385,15 @@ def failure_labels(case: EvaluationCase, result: CaseResult) -> list[str]:
             labels.add("over_abstention")
         if not case.answerable and not result.abstained:
             labels.add("failed_abstention")
+    if result.system == FULL_RAG_SYSTEM:
+        if result.route is not None and result.route != case.expected_route:
+            labels.add("route_error")
+        if result.strategy is not None and result.strategy != case.expected_strategy:
+            labels.add("strategy_error")
         if (result.retry_count > 0) != case.expected_retry:
             labels.add("retry_error")
         if result.conflict_detected != case.expected_conflict:
             labels.add("conflict_miss")
-        if not result.terminated:
-            labels.add("non_termination")
-        if result.runtime_error:
-            labels.add("runtime_error")
     return [label for label in FAILURE_ORDER if label in labels]
 
 

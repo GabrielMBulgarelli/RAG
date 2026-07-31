@@ -4,15 +4,27 @@ from __future__ import annotations
 
 from typing import Any, Literal, Self
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, JsonValue, model_validator
 
 from modules.config import PROJECT_ROOT
 
 Split = Literal["development", "test"]
-SystemName = Literal["dense", "bm25", "hybrid", "agentic"]
+SystemName = Literal[
+    "dense",
+    "bm25",
+    "hybrid",
+    "dense-rag",
+    "bm25-rag",
+    "hybrid-rag",
+    "full-rag",
+]
 MetricStatus = Literal["measured", "not_applicable", "no_eligible_cases"]
 EvaluationResultKind = Literal["standard_benchmark", "custom_evaluation"]
-SYSTEMS: tuple[SystemName, ...] = ("dense", "bm25", "hybrid", "agentic")
+RETRIEVAL_SYSTEMS: tuple[SystemName, ...] = ("dense", "bm25", "hybrid")
+FIXED_RAG_SYSTEMS: tuple[SystemName, ...] = ("dense-rag", "bm25-rag", "hybrid-rag")
+FULL_RAG_SYSTEM: SystemName = "full-rag"
+ANSWER_SYSTEMS: tuple[SystemName, ...] = (*FIXED_RAG_SYSTEMS, FULL_RAG_SYSTEM)
+SYSTEMS: tuple[SystemName, ...] = (*RETRIEVAL_SYSTEMS, *ANSWER_SYSTEMS)
 STANDARD_BENCHMARK_DATASET = "multihop"
 STANDARD_BENCHMARK_SPLIT: Split = "development"
 FAILURE_ORDER = (
@@ -33,8 +45,8 @@ MULTIHOP_ROOT = PROJECT_ROOT / "evals" / "multihop"
 
 
 def is_standard_benchmark_summary(summary: dict[str, Any]) -> bool:
-    """Return whether a schema-v2 result satisfies the canonical benchmark contract."""
-    if summary.get("schema_version") != 2:
+    """Return whether a schema-v3 result satisfies the canonical benchmark contract."""
+    if summary.get("schema_version") != 3:
         return False
     configuration = summary.get("configuration")
     if not isinstance(configuration, dict):
@@ -114,6 +126,8 @@ class CaseResult(BaseModel):
     validation_violations: list[str] = Field(default_factory=list)
     initial_validation_violations: list[str] = Field(default_factory=list)
     repair_validation_violations: list[str] = Field(default_factory=list)
+    retrieved_evidence: list[dict[str, JsonValue]] = Field(default_factory=list)
+    public_trace: list[dict[str, JsonValue]] = Field(default_factory=list)
 
 
 class ExperimentConfig(BaseModel):

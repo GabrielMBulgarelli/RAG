@@ -225,62 +225,6 @@
       "severity": "error"
     },
     {
-      "anchor": "sha:12eb8a13dfeab24134e5ce3944d9bffb6c322f963816f23b6908df26832e3e66",
-      "code": "PROSE-001",
-      "count": 1,
-      "file": "README.md",
-      "message": "PROSE-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:352afc685c378a8ffb11b8e444a8bfc9debf7eb814435d7fabca094233b52e45",
-      "code": "PROSE-001",
-      "count": 1,
-      "file": "README.md",
-      "message": "PROSE-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:4d8bd61d9f3a0075123e357a2d8e1490582b029452931a4d08df470a39b4059d",
-      "code": "PROSE-001",
-      "count": 1,
-      "file": "README.md",
-      "message": "PROSE-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:4f62a186b5053061b83db97c8d30979dba88eb8e1b9e719e94099168e692c6ab",
-      "code": "PROSE-001",
-      "count": 1,
-      "file": "README.md",
-      "message": "PROSE-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:c068515dbc715d8b105f54eb5ca33da561cd95b472a11460a2f7eb93f0625310",
-      "code": "PROSE-001",
-      "count": 1,
-      "file": "README.md",
-      "message": "PROSE-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:c76b15fb33a1d33cecb039512129e9e637dc9113b31f8a739047dae389c41469",
-      "code": "PROSE-001",
-      "count": 1,
-      "file": "README.md",
-      "message": "PROSE-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:f75707f479dcde966f19e68da22d8bb423ca1da6721884b8eb326ce02d0ba79f",
-      "code": "PROSE-001",
-      "count": 1,
-      "file": "README.md",
-      "message": "PROSE-001",
-      "severity": "error"
-    },
-    {
       "anchor": "sha:54a313b7ff6a9ba8df67fee56e647363ce42ca261fd211e1d6713464c44bff0e",
       "code": "PROSE-002",
       "count": 1,
@@ -425,6 +369,462 @@
       "severity": "error"
     },
     {
+      "anchor": "sha:9755b13fda1827cc07eb1f1fea1c368c417dfd2a393ed2f37994ffa065de91d9",
+      "code": "PROSE-002",
+      "count": 1,
+      "file": "docs/superpowers/plans/2026-07-30-seven-system-benchmark.md",
+      "message": "PROSE-002",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:1edbc4ef4e4e5de742fb6d8d0c1570985e67e86bf9c131d724eb7c55b70e7842",
+      "code": "SIZE-003",
+      "count": 1,
+      "file": "modules/api/dependencies.py",
+      "message": "Class has too many methods",
+      "severity": "warning"
+    },
+    {
+      "anchor": "sha:5dc2e76f9d659ca0640d92ca27dbbb6a7320474350d2ec4da8ce52ba635d38ae",
+      "code": "KWARG-001",
+      "count": 1,
+      "file": "modules/api/errors.py",
+      "message": "Functions with >1 parameter must use bare * separator",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:a1c94da861177382992d9c1236ca9baf7bef4adcd0da82538c92f168b5c22c1b",
+      "code": "KWARG-001",
+      "count": 1,
+      "file": "modules/api/errors.py",
+      "message": "Functions with >1 parameter must use bare * separator",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:eb1ef722333fea1f3cf5708b8c44aede672c9085012928b308c5ac4e11bc59bf",
+      "code": "KWARG-001",
+      "count": 1,
+      "file": "modules/api/errors.py",
+      "message": "Functions with >1 parameter must use bare * separator",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:28fc1d943252be0b5acdf2057cfcb7733395dd6d3eec4c50f3354ead66bad3a3",
+      "code": "KWARG-001",
+      "count": 1,
+      "file": "modules/api/routes.py",
+      "message": "Functions with >1 parameter must use bare * separator",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:56e69ba6d896d0b060c0a0808ccfdd4b06af6ca6b486ff4190d266d73f073149",
+      "code": "KWARG-001",
+      "count": 1,
+      "file": "modules/api/routes.py",
+      "message": "Functions with >1 parameter must use bare * separator",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:5bcaf9c32338295fa0a59d334527fc40fc1f0b92b2eb4d366a37afee6f3ab360",
+      "code": "KWARG-001",
+      "count": 1,
+      "file": "modules/api/routes.py",
+      "message": "Functions with >1 parameter must use bare * separator",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:5d3ba4d943e964909c2dd324511b0f2be6696677966001e13184ce810c923405",
+      "code": "KWARG-001",
+      "count": 1,
+      "file": "modules/api/routes.py",
+      "message": "Functions with >1 parameter must use bare * separator",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:635b8086a45a662d068effbd9855aaf7ea0628c750806f1e85fcd14a508de556",
+      "code": "KWARG-001",
+      "count": 1,
+      "file": "modules/api/routes.py",
+      "message": "Functions with >1 parameter must use bare * separator",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:958e58afe82664f61884bbbe67c24e7de26508c6b3dc900149058c5262f52595",
+      "code": "KWARG-001",
+      "count": 1,
+      "file": "modules/api/routes.py",
+      "message": "Functions with >1 parameter must use bare * separator",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:962d59cfe1f827dcf48c8aa2e0a4d50d3d4e23cebd472e121cd1b8b7c7ca4227",
+      "code": "KWARG-001",
+      "count": 1,
+      "file": "modules/api/routes.py",
+      "message": "Functions with >1 parameter must use bare * separator",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:9cc671f02e3773639c674507c93f087459f96c5c7b7b51b3371527143f7bcb42",
+      "code": "KWARG-001",
+      "count": 1,
+      "file": "modules/api/routes.py",
+      "message": "Functions with >1 parameter must use bare * separator",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:ccaa4f2efa4b1d00a1a23cf30432a4679a35c61dc96aa6aa480e3288923eed84",
+      "code": "KWARG-001",
+      "count": 1,
+      "file": "modules/api/routes.py",
+      "message": "Functions with >1 parameter must use bare * separator",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:cefcc09ef9b9aced9d17f668d47d5e7cfa2447fd123203c5a5c7f5cc7b1af3ce",
+      "code": "KWARG-001",
+      "count": 1,
+      "file": "modules/api/routes.py",
+      "message": "Functions with >1 parameter must use bare * separator",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:e55b73815389a3f05a826cba5c4e8a8cc80e29831720db51d620545ce65550a9",
+      "code": "KWARG-001",
+      "count": 1,
+      "file": "modules/api/routes.py",
+      "message": "Functions with >1 parameter must use bare * separator",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:53fba142ff88d89c8ba6c931d73cd63c5b1c6ab156c9b9475ee467964b455945",
+      "code": "COMPLEXITY-001",
+      "count": 1,
+      "file": "modules/application/benchmark_manager.py",
+      "message": "Function approaching complexity 15",
+      "severity": "warning"
+    },
+    {
+      "anchor": "sha:a2cddfdb565d292422306350b3d80ce4aaf3ce85d51da708238355cb20195ec4",
+      "code": "COMPLEXITY-001",
+      "count": 1,
+      "file": "modules/application/benchmark_manager.py",
+      "message": "Function approaching complexity 15",
+      "severity": "warning"
+    },
+    {
+      "anchor": "sha:19cde66f01844d5a25043b35997ad268b8efbb950de706e151da92a52589386f",
+      "code": "KWARG-001",
+      "count": 1,
+      "file": "modules/application/benchmark_manager.py",
+      "message": "Functions with >1 parameter must use bare * separator",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:4808565c780ad626134fe025f95e393a7e1a491243adc9eac56fcaab9c735d66",
+      "code": "KWARG-001",
+      "count": 1,
+      "file": "modules/application/benchmark_manager.py",
+      "message": "Functions with >1 parameter must use bare * separator",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:53fba142ff88d89c8ba6c931d73cd63c5b1c6ab156c9b9475ee467964b455945",
+      "code": "KWARG-001",
+      "count": 1,
+      "file": "modules/application/benchmark_manager.py",
+      "message": "Functions with >1 parameter must use bare * separator",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:5b7eb373882176cdafb0fd95e334fb9647615145f7db56ec908107615fbd8d8d",
+      "code": "KWARG-001",
+      "count": 1,
+      "file": "modules/application/benchmark_manager.py",
+      "message": "Functions with >1 parameter must use bare * separator",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:95241990d2893943271087972b93f6ba8455912f721085939a9288bc8d7657ae",
+      "code": "KWARG-001",
+      "count": 1,
+      "file": "modules/application/benchmark_manager.py",
+      "message": "Functions with >1 parameter must use bare * separator",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:a7947f90030a9e32f75da2c42a08842dc3c711d4f2860671c557c27a6d13be8e",
+      "code": "KWARG-001",
+      "count": 1,
+      "file": "modules/application/benchmark_manager.py",
+      "message": "Functions with >1 parameter must use bare * separator",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:acd095884293fceb91f8befada737c1ce83e19260eeb79101d63f819c711c447",
+      "code": "KWARG-001",
+      "count": 1,
+      "file": "modules/application/benchmark_manager.py",
+      "message": "Functions with >1 parameter must use bare * separator",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:ae7cb9934efc43229914c5fea572669681a7da2a76481a14b6784d34fe77c192",
+      "code": "KWARG-001",
+      "count": 1,
+      "file": "modules/application/benchmark_manager.py",
+      "message": "Functions with >1 parameter must use bare * separator",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:b2238c311343def247db73c2a2b4aa70ec3ec47e75787295964e83d0a5280e47",
+      "code": "KWARG-001",
+      "count": 2,
+      "file": "modules/application/benchmark_manager.py",
+      "message": "Functions with >1 parameter must use bare * separator",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:b816765ac9b3e45a4afed127c103042827e21ae5f6dbeb99008ee9d151a4cc59",
+      "code": "KWARG-001",
+      "count": 1,
+      "file": "modules/application/benchmark_manager.py",
+      "message": "Functions with >1 parameter must use bare * separator",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:e1964b13c7709bd0f83e794d319445580a7ab5449832619d2d79f4da704e5cb7",
+      "code": "KWARG-001",
+      "count": 1,
+      "file": "modules/application/benchmark_manager.py",
+      "message": "Functions with >1 parameter must use bare * separator",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:5b7eb373882176cdafb0fd95e334fb9647615145f7db56ec908107615fbd8d8d",
+      "code": "PARAM-001",
+      "count": 1,
+      "file": "modules/application/benchmark_manager.py",
+      "message": "Function approaching 8 parameters",
+      "severity": "warning"
+    },
+    {
+      "anchor": "sha:95241990d2893943271087972b93f6ba8455912f721085939a9288bc8d7657ae",
+      "code": "PARAM-001",
+      "count": 1,
+      "file": "modules/application/benchmark_manager.py",
+      "message": "Function approaching 8 parameters",
+      "severity": "warning"
+    },
+    {
+      "anchor": "sha:36719f279ccaf2365fcb9c097d6dacf7abb930a138667ce4a0cdb42d4d67eca3",
+      "code": "SIMILAR-001",
+      "count": 1,
+      "file": "modules/application/benchmark_manager.py",
+      "message": "SIMILAR-001",
+      "severity": "warning"
+    },
+    {
+      "anchor": "desc:3e4ed908f59dd2ecb3077342dfc7630b28fc545dbba4bb856b89339df0dce019",
+      "code": "SIZE-001",
+      "count": 1,
+      "file": "modules/application/benchmark_manager.py",
+      "message": "File exceeds 500 effective lines",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:0bef9ff314076cb5e8070ae20fb964448ccd559200b2ec5ca039ce3e7ad86e4f",
+      "code": "SIZE-002",
+      "count": 1,
+      "file": "modules/application/benchmark_manager.py",
+      "message": "Function approaching 80 lines",
+      "severity": "warning"
+    },
+    {
+      "anchor": "sha:53fba142ff88d89c8ba6c931d73cd63c5b1c6ab156c9b9475ee467964b455945",
+      "code": "SIZE-002",
+      "count": 1,
+      "file": "modules/application/benchmark_manager.py",
+      "message": "Function approaching 80 lines",
+      "severity": "warning"
+    },
+    {
+      "anchor": "sha:95241990d2893943271087972b93f6ba8455912f721085939a9288bc8d7657ae",
+      "code": "SIZE-002",
+      "count": 1,
+      "file": "modules/application/benchmark_manager.py",
+      "message": "Function approaching 80 lines",
+      "severity": "warning"
+    },
+    {
+      "anchor": "sha:af1f86ccaad32bbc6eaa8b377a9042b49588867c5e0924c220545644c0878ee3",
+      "code": "SIZE-002",
+      "count": 1,
+      "file": "modules/application/benchmark_manager.py",
+      "message": "Function approaching 80 lines",
+      "severity": "warning"
+    },
+    {
+      "anchor": "sha:582bf59404c804d3c191e79a88eedf7a7aab9308f12cf9466f05a5c807f3173e",
+      "code": "SIZE-003",
+      "count": 1,
+      "file": "modules/application/benchmark_manager.py",
+      "message": "Class has too many methods",
+      "severity": "warning"
+    },
+    {
+      "anchor": "sha:5356520464434212d632b831e821f0fc9edcf50e8986f905afa8f08032d2ebf9",
+      "code": "TYPE-001",
+      "count": 1,
+      "file": "modules/application/benchmark_manager.py",
+      "message": "TYPE-001",
+      "severity": "warning"
+    },
+    {
+      "anchor": "sha:63f2aaab22ae12208773740367010965142b45a310aa39e1f9dba05e129c027d",
+      "code": "COMPLEXITY-001",
+      "count": 1,
+      "file": "modules/application/full_rag_benchmark.py",
+      "message": "Function approaching complexity 15",
+      "severity": "warning"
+    },
+    {
+      "anchor": "sha:5f6964ded0092ec29590caf2d97f13f8020bb046d39973af7d5bff83d5cd2921",
+      "code": "SECRETPY-001",
+      "count": 1,
+      "file": "modules/application/full_rag_benchmark.py",
+      "message": "No hardcoded secrets in source code",
+      "severity": "error"
+    },
+    {
+      "anchor": "desc:18e72a4f1292061e865c4ddf5f63b68f60bd459dae5b028512f0798cd5f3e4a7",
+      "code": "SIZE-001",
+      "count": 1,
+      "file": "modules/application/full_rag_benchmark.py",
+      "message": "File approaching 500 effective lines",
+      "severity": "warning"
+    },
+    {
+      "anchor": "sha:7c4356046bb677a441d1fb97a04476adc72155e115df6b16083d679d39b7adb8",
+      "code": "SIZE-002",
+      "count": 1,
+      "file": "modules/application/full_rag_benchmark.py",
+      "message": "Function approaching 80 lines",
+      "severity": "warning"
+    },
+    {
+      "anchor": "sha:2857de3f5bed8cbf8c96911ae8b6a956f24ae13f2aa7c0c5b442b25d7ae30150",
+      "code": "COMPLEXITY-001",
+      "count": 1,
+      "file": "modules/application/workspace_service.py",
+      "message": "Function exceeds complexity 15",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:a03cc12d6dc6cfa10ab670ed483bcff462976e72653190658fb42c0bdd13d357",
+      "code": "COMPLEXITY-001",
+      "count": 1,
+      "file": "modules/application/workspace_service.py",
+      "message": "Function exceeds complexity 15",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:22ad23457773b4f02c5fc6d1a1e7c9517a0a06683aab12aec8f9a908c428dcaf",
+      "code": "KWARG-001",
+      "count": 1,
+      "file": "modules/application/workspace_service.py",
+      "message": "Functions with >1 parameter must use bare * separator",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:242296c3163557d6797fd79d3ed60d26f7e393c27a27267e03115ab031743f81",
+      "code": "KWARG-001",
+      "count": 1,
+      "file": "modules/application/workspace_service.py",
+      "message": "Functions with >1 parameter must use bare * separator",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:869114d755ac896acdba6018d676a7ff057c0b42f594d94b66d6789a38abb68c",
+      "code": "KWARG-001",
+      "count": 1,
+      "file": "modules/application/workspace_service.py",
+      "message": "Functions with >1 parameter must use bare * separator",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:9290c7844270a5155cecfcd872dbd5e3053784d2e0c7dc91b4986d3955588f3a",
+      "code": "KWARG-001",
+      "count": 1,
+      "file": "modules/application/workspace_service.py",
+      "message": "Functions with >1 parameter must use bare * separator",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:29b36ada7e7459c95d5151f8e7955df3677eee6245d3a87014e5c4447748f5e7",
+      "code": "PARAM-001",
+      "count": 1,
+      "file": "modules/application/workspace_service.py",
+      "message": "Function approaching 8 parameters",
+      "severity": "warning"
+    },
+    {
+      "anchor": "desc:3e4ed908f59dd2ecb3077342dfc7630b28fc545dbba4bb856b89339df0dce019",
+      "code": "SIZE-001",
+      "count": 1,
+      "file": "modules/application/workspace_service.py",
+      "message": "File exceeds 500 effective lines",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:2857de3f5bed8cbf8c96911ae8b6a956f24ae13f2aa7c0c5b442b25d7ae30150",
+      "code": "SIZE-002",
+      "count": 1,
+      "file": "modules/application/workspace_service.py",
+      "message": "Function exceeds 80 lines",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:9290c7844270a5155cecfcd872dbd5e3053784d2e0c7dc91b4986d3955588f3a",
+      "code": "SIZE-002",
+      "count": 1,
+      "file": "modules/application/workspace_service.py",
+      "message": "Function approaching 80 lines",
+      "severity": "warning"
+    },
+    {
+      "anchor": "sha:b34d690ccdd9e041e2aa1977aa2e7437efce8d1a94455b6f10c88dcef3a93827",
+      "code": "SIZE-003",
+      "count": 1,
+      "file": "modules/application/workspace_service.py",
+      "message": "Class has too many methods",
+      "severity": "warning"
+    },
+    {
+      "anchor": "sha:22ad23457773b4f02c5fc6d1a1e7c9517a0a06683aab12aec8f9a908c428dcaf",
+      "code": "TYPE-001",
+      "count": 1,
+      "file": "modules/application/workspace_service.py",
+      "message": "TYPE-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:81e46b4789c46234fbceb6d6e98f07015c56e097acb71f2788947a62990df855",
+      "code": "TYPE-001",
+      "count": 1,
+      "file": "modules/application/workspace_service.py",
+      "message": "TYPE-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:9290c7844270a5155cecfcd872dbd5e3053784d2e0c7dc91b4986d3955588f3a",
+      "code": "TYPE-001",
+      "count": 1,
+      "file": "modules/application/workspace_service.py",
+      "message": "TYPE-001",
+      "severity": "error"
+    },
+    {
       "anchor": "sha:0d6e3a7cd2f0b47a38932db5224e6a9a6812db8f215d7cb4c7de50b8d336791f",
       "code": "KWARG-001",
       "count": 1,
@@ -442,14 +842,6 @@
     },
     {
       "anchor": "sha:17a6c14cf5c80734defa9c2d8ac2bfea3a469544662e6991dff0307ff55df262",
-      "code": "KWARG-001",
-      "count": 1,
-      "file": "modules/evaluation.py",
-      "message": "Functions with >1 parameter must use bare * separator",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:2f1eab32259e1b9f3c12b8925f39d5b72f5def3ec6b5c910953cdb3cd2f9628f",
       "code": "KWARG-001",
       "count": 1,
       "file": "modules/evaluation.py",
@@ -497,7 +889,7 @@
       "severity": "error"
     },
     {
-      "anchor": "sha:2f1eab32259e1b9f3c12b8925f39d5b72f5def3ec6b5c910953cdb3cd2f9628f",
+      "anchor": "sha:2eadd0ed1f8728ac70cd6201e309afa95ce794d33213958a23b34374bffe843c",
       "code": "SIZE-002",
       "count": 1,
       "file": "modules/evaluation.py",
@@ -905,715 +1297,387 @@
       "severity": "warning"
     },
     {
-      "anchor": "sha:193fa8b399dfe0ad52f62d7612e83a1c0bcb04fd66328226a165c47bd0e916f5",
+      "anchor": "sha:6bbf73ab1c9df1b2b1d6d8fce24a39b2d87492cc2423d0b810a41f23bdf4d2e9",
       "code": "COMPLEXITY-001",
       "count": 1,
-      "file": "modules/ui/application.py",
+      "file": "modules/vector_db_operations.py",
       "message": "Function approaching complexity 15",
       "severity": "warning"
     },
     {
-      "anchor": "sha:48f300555fb7def8d3d51311fa613267007fbdb2405796d1224da925ae0afec9",
+      "anchor": "sha:ac57f6d037f6143b1d503f031a3ab00eb1531193fcfba5fc2caa49a4aee86490",
       "code": "COMPLEXITY-001",
       "count": 1,
-      "file": "modules/ui/application.py",
+      "file": "modules/vector_db_operations.py",
       "message": "Function exceeds complexity 15",
       "severity": "error"
     },
     {
-      "anchor": "sha:5b9c0041342d5bbeb3ebbd8f2274285163c586518c5c999e01e2aaa3ee62e2f1",
+      "anchor": "sha:eef2a7bbc40bc644f2879f2a7b832d316aa25cc24c899a5c025d9d17fd3a8969",
       "code": "COMPLEXITY-001",
       "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "Function approaching complexity 15",
-      "severity": "warning"
-    },
-    {
-      "anchor": "sha:7eddfdbb24a4f59fbe97dd51a3040dccb7563a01e3646002b5915b036443bf62",
-      "code": "COMPLEXITY-001",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "Function approaching complexity 15",
-      "severity": "warning"
-    },
-    {
-      "anchor": "sha:8acb5e11fb8f18e627da5f3c52451915920690f61a331e606f07da793e853ec3",
-      "code": "COMPLEXITY-001",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "Function approaching complexity 15",
-      "severity": "warning"
-    },
-    {
-      "anchor": "sha:94d43ac10d6f10b86082afa456aef48f801febe674cf4f4924264d17413de4cc",
-      "code": "COMPLEXITY-001",
-      "count": 1,
-      "file": "modules/ui/application.py",
+      "file": "modules/vector_db_operations.py",
       "message": "Function exceeds complexity 15",
       "severity": "error"
     },
     {
-      "anchor": "sha:06d5f08d044c81270a0538bd1e2a2368951dbac50c0d37d7a08844666e379cc3",
+      "anchor": "sha:19e979454a3142c2808933af78c9d5a488d6e310e6a7bf03550e28b819174551",
       "code": "KWARG-001",
       "count": 1,
-      "file": "modules/ui/application.py",
+      "file": "modules/vector_db_operations.py",
       "message": "Functions with >1 parameter must use bare * separator",
       "severity": "error"
     },
     {
-      "anchor": "sha:15f0a26751c167638c86765044b09cdcdc3866b3e4f1c84287fca786d149abb8",
+      "anchor": "sha:6bbf73ab1c9df1b2b1d6d8fce24a39b2d87492cc2423d0b810a41f23bdf4d2e9",
       "code": "KWARG-001",
       "count": 1,
-      "file": "modules/ui/application.py",
+      "file": "modules/vector_db_operations.py",
       "message": "Functions with >1 parameter must use bare * separator",
       "severity": "error"
     },
     {
-      "anchor": "sha:193fa8b399dfe0ad52f62d7612e83a1c0bcb04fd66328226a165c47bd0e916f5",
+      "anchor": "sha:d3708e4b141ee33e6d04d163ea012c1eb785d1669fb588e0bf4abc0724001fd8",
       "code": "KWARG-001",
       "count": 1,
-      "file": "modules/ui/application.py",
+      "file": "modules/vector_db_operations.py",
       "message": "Functions with >1 parameter must use bare * separator",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:1a0557d54fbcea51c85ec88098089839b277acf26baf8e583f2800b22834f0d8",
-      "code": "KWARG-001",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "Functions with >1 parameter must use bare * separator",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:2153714f6010470242bc71b08e0b41b81ed8d5d4254db37505e986948310f568",
-      "code": "KWARG-001",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "Functions with >1 parameter must use bare * separator",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:263a1c9a8c8a5185bbc28d8187c474fb2a8ce532fe2da43fc3758942fb692218",
-      "code": "KWARG-001",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "Functions with >1 parameter must use bare * separator",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:2a68c422e78139d2856c446a21df717083dd66c9c04f4d21d0f7b3fe4d843dfb",
-      "code": "KWARG-001",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "Functions with >1 parameter must use bare * separator",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:452281fc9c7ac8a11b4f0f87f78be287de6422d5c9818ae2efc48c01ea0d3b10",
-      "code": "KWARG-001",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "Functions with >1 parameter must use bare * separator",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:4dbadaa209ad950e880ed5d1c17807890433d56ae8ea4bae019d93ce67090805",
-      "code": "KWARG-001",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "Functions with >1 parameter must use bare * separator",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:5b0e13a318bfa5b4661079b9ad8ecd7fbb5ce421601ba02c694b1792f97f650c",
-      "code": "KWARG-001",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "Functions with >1 parameter must use bare * separator",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:7eddfdbb24a4f59fbe97dd51a3040dccb7563a01e3646002b5915b036443bf62",
-      "code": "KWARG-001",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "Functions with >1 parameter must use bare * separator",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:923aa17cced3b6b53ad5f60e8950ad3775b76fcdc4fdc1fc7e6ebd6be5dbe41b",
-      "code": "KWARG-001",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "Functions with >1 parameter must use bare * separator",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:96b04e622daec19264fe4666915b193f688256f8589e8ebbf3de1f0dd69eba0a",
-      "code": "KWARG-001",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "Functions with >1 parameter must use bare * separator",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:9f365773b572d0b7a31b2659f4f31a8261399eb1c26913ce6978f841074f5a15",
-      "code": "KWARG-001",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "Functions with >1 parameter must use bare * separator",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:a3de7c60381c2a71e3ec101a5220c3409cad8619c97016b24767e036e260c013",
-      "code": "KWARG-001",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "Functions with >1 parameter must use bare * separator",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:ad619cd4a89a5aa9ddd8d3e19efa4006f31eaa26957210329271e00f8d6e3273",
-      "code": "KWARG-001",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "Functions with >1 parameter must use bare * separator",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:b1177679809151059cb5b6604e326741903f2c95ad9066eb9ac97f267c65603b",
-      "code": "KWARG-001",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "Functions with >1 parameter must use bare * separator",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:c54aee4bc784a90b52bd2ac558961a5cde89d5a12746d29f1bf22ab853f5c181",
-      "code": "KWARG-001",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "Functions with >1 parameter must use bare * separator",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:cd4c1bb90ed7075373df7f1877fbbde629c53a7dfdeab1d2717a2d50db91e1a6",
-      "code": "KWARG-001",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "Functions with >1 parameter must use bare * separator",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:cf0f8627b7e3da71308c1aa4a9d687a78cf7fdd2ec616a3d4c1a7d488b562b43",
-      "code": "KWARG-001",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "Functions with >1 parameter must use bare * separator",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:fbdac83b073f7a85050b6aef556caa6ef3c1c72fc3b6e814d5db157eaa996d4e",
-      "code": "KWARG-001",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "Functions with >1 parameter must use bare * separator",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:193fa8b399dfe0ad52f62d7612e83a1c0bcb04fd66328226a165c47bd0e916f5",
-      "code": "PARAM-001",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "Function approaching 8 parameters",
-      "severity": "warning"
-    },
-    {
-      "anchor": "sha:fbdac83b073f7a85050b6aef556caa6ef3c1c72fc3b6e814d5db157eaa996d4e",
-      "code": "PARAM-001",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "Function approaching 8 parameters",
-      "severity": "warning"
-    },
-    {
-      "anchor": "sha:5f6964ded0092ec29590caf2d97f13f8020bb046d39973af7d5bff83d5cd2921",
-      "code": "SECRETPY-001",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "No hardcoded secrets in source code",
       "severity": "error"
     },
     {
       "anchor": "desc:3e4ed908f59dd2ecb3077342dfc7630b28fc545dbba4bb856b89339df0dce019",
       "code": "SIZE-001",
       "count": 1,
-      "file": "modules/ui/application.py",
+      "file": "modules/vector_db_operations.py",
       "message": "File exceeds 500 effective lines",
       "severity": "error"
     },
     {
-      "anchor": "sha:48f300555fb7def8d3d51311fa613267007fbdb2405796d1224da925ae0afec9",
+      "anchor": "sha:ac57f6d037f6143b1d503f031a3ab00eb1531193fcfba5fc2caa49a4aee86490",
       "code": "SIZE-002",
       "count": 1,
-      "file": "modules/ui/application.py",
+      "file": "modules/vector_db_operations.py",
       "message": "Function approaching 80 lines",
       "severity": "warning"
     },
     {
-      "anchor": "sha:5b9c0041342d5bbeb3ebbd8f2274285163c586518c5c999e01e2aaa3ee62e2f1",
+      "anchor": "sha:eef2a7bbc40bc644f2879f2a7b832d316aa25cc24c899a5c025d9d17fd3a8969",
       "code": "SIZE-002",
       "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "Function approaching 80 lines",
-      "severity": "warning"
+      "file": "modules/vector_db_operations.py",
+      "message": "Function exceeds 80 lines",
+      "severity": "error"
     },
     {
-      "anchor": "sha:6a956cb4f097bb65d7e91b25c954dedbd45bf6baa40fbb2e8dca56b0e553f07c",
-      "code": "SIZE-002",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "Function approaching 80 lines",
-      "severity": "warning"
-    },
-    {
-      "anchor": "sha:7eddfdbb24a4f59fbe97dd51a3040dccb7563a01e3646002b5915b036443bf62",
-      "code": "SIZE-002",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "Function approaching 80 lines",
-      "severity": "warning"
-    },
-    {
-      "anchor": "sha:8acb5e11fb8f18e627da5f3c52451915920690f61a331e606f07da793e853ec3",
-      "code": "SIZE-002",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "Function approaching 80 lines",
-      "severity": "warning"
-    },
-    {
-      "anchor": "sha:923aa17cced3b6b53ad5f60e8950ad3775b76fcdc4fdc1fc7e6ebd6be5dbe41b",
-      "code": "SIZE-002",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "Function approaching 80 lines",
-      "severity": "warning"
-    },
-    {
-      "anchor": "sha:94d43ac10d6f10b86082afa456aef48f801febe674cf4f4924264d17413de4cc",
-      "code": "SIZE-002",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "Function approaching 80 lines",
-      "severity": "warning"
-    },
-    {
-      "anchor": "sha:8e6708c1f3a899c85053fe3e5da0ec6bf13d03bc3ab2311cc5bd39c9f5e005b4",
+      "anchor": "sha:d2b831a3a773cf658a1347660347fe7d0a4fae1daadaa6f18c35589e6ce0279e",
       "code": "SIZE-003",
       "count": 1,
-      "file": "modules/ui/application.py",
+      "file": "modules/vector_db_operations.py",
       "message": "Class has too many methods",
       "severity": "warning"
     },
     {
-      "anchor": "sha:0fbf63af4910475d51d583f1f74965491605798c839a65128245a4a17dfbfc4d",
-      "code": "TYPE-001",
+      "anchor": "sha:0f5f7811a7e301ee307d016b337fe7d61be0b710ceaa16e136574ef9899732f1",
+      "code": "AAA-001",
       "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "TYPE-001",
-      "severity": "warning"
+      "file": "tests/api/test_api_errors.py",
+      "message": "AAA-001",
+      "severity": "error"
     },
     {
-      "anchor": "sha:263a1c9a8c8a5185bbc28d8187c474fb2a8ce532fe2da43fc3758942fb692218",
-      "code": "TYPE-001",
+      "anchor": "sha:71d4e21a3b29a3c41c2e6f061923077b6ae4eebdd6c5229b3fa61234b940d6ff",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/api/test_api_errors.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:831f7f5ba3f9fe9346bbebba9d97a85401dbed2967259d3856395d66f4097000",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/api/test_api_errors.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:f2de758c16b75f80640b9dac05ab933c86098135e4acdf34684c3dc727d1587c",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/api/test_api_errors.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:fb05e751cb99a61372bca5f2eaff1776d0d1acdd83abb7636c3653416b60f449",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/api/test_api_errors.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:2560d16dfd59ddc922e381d24f1de3a013da9a56de148d3a80f86b51d1e04d38",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/api/test_lifespan.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:a85a23b0d5e211d290bcbe024e316170b9d2b01d217c59cd93fd4ca5696a12ba",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/api/test_lifespan.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:dd5854f282e28a1fa01e98b5895163d750803076bb20d6b7042ce967fe6c89b1",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/api/test_lifespan.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:fea606909d0c84f2a627d1fb7604e50eb755f902d859d32d6e734de3e411ac5a",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/api/test_lifespan.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:0f8a6b83acd0d58ec3a098589c549a3b2efd7d86584146163372127b82b111aa",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/api/test_routes.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:3c69d825c710a350f31a908a52ac553e030b2e35a2f2aeceada7a22e2fa624a2",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/api/test_routes.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:47ba6b2c029862e2fd3c96e23de4d622c501a6ae312bb9cf64ef18170a01b813",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/application/test_benchmark_manager.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:9a3ed3c6b9b0f5e2689182aa3f3a98ccb48bde879b3224acc7008185a8a168da",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/application/test_benchmark_manager.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:a137febcb9ff59f456de073edef4067993a5177e015bde31ba7c8b763441a583",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/application/test_benchmark_manager.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:74d4bc1d710313bbcf027f5e4f72fd9c923921b5e74da1247633d70dcce31064",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/application/test_errors.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:92c5d9c8fe59648f414020dddeedbb50190887221c67680e811b3c6021933739",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/application/test_errors.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:0be45b6ced269b0ee712bfb00e67aa08bb980072cc1cf5305e00843c12141dfb",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/application/test_models.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:10a1b4ed62bdea1e22a2a9ba8f731af40660a3c04fbefcc3a73a9dc5573ded06",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/application/test_models.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:917707d5e96bee2d6a2d376f3ca791c7810ad1a6fa9ed1bde4f3af462cf6c4f2",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/application/test_models.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:bc2f5cf252d0fecfbcba6b697e97633d1bfeab090a7c58449db3ff24811f3b9e",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/application/test_models.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:ce11809833d9439f761648fb37a1c45777f2d02713f41a0e1e3a8cfbcb6c409a",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/application/test_models.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:555b332f995d209aa0d7db28ebfd64337bcb69b92ff165b6e399b51471f231af",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/application/test_operation_coordinator.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:6c1e9b58f9477386647ea9176b56bdc6ffae33a587ba3d8e4a46d7f364c10978",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/application/test_operation_coordinator.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:abea52f407cf5179c5d51b111b2ccf4969cbd2df8a981ae5e2f848a4c2816f30",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/application/test_operation_coordinator.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:af0391a56c3085596797a8c3a61e0047d8a1489ac4b3e8fbf2b01f5924e43864",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/application/test_operation_coordinator.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:c144b399efde57f6c950aa14d2fcf24ccdb427a9942a799dd5917f74472d4297",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/application/test_operation_coordinator.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:db299d528d7dab0d1e53c0592148a07aa4b32f456f1564d4f36ddb6f961448d4",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/application/test_operation_coordinator.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:f9fcb8f24a6a7c89cb082ca80a68e5fb33f6d72cfd5cccc3ba37521afe9d3b53",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/application/test_operation_coordinator.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:0c67606fc5316ef0f0bf3522c799ba09aed11b1fdc2a821d0c5139f5e20adb2c",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/application/test_workspace_service.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:2d14183be7b2a4a30246debd6ee8af808ba50eb908c56275ba985eaaa5835b95",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/application/test_workspace_service.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:41193b82b1ab37384ed1e7aa1f07a67377fdaa1d76e57cf0e35e52453661a69d",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/application/test_workspace_service.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:7872f5c320c334d9d61986511c2ebd94e35374b61dccdf43efefbd9f2e722771",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/application/test_workspace_service.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:83162cab4ef2000179ead532b9663979e63f9bbeaef708fa50375fbc1496919b",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/application/test_workspace_service.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:9138fd196e6d0d624ba872e63466260782dd3b8124c7a0b85432b29b1f013c09",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/application/test_workspace_service.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:de4ef89613262881a291140d1f538334e650dee30c46b5e089664450755baeb5",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/application/test_workspace_service.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:f36fe64de6726d35d052b4470f91ac453f8324f231d43ce5495fd37b937dc420",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/application/test_workspace_service.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:f9235a8a8e85c2a9e86feb032db9b11d3deb5e59d781be7c57b1bab1440f1f54",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/application/test_workspace_service.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:55ae6b31870f3c1cae66847a57a4d65ad2bad2e83b41d5669cc8fb600b059c24",
+      "code": "NAMING-004",
       "count": 2,
-      "file": "modules/ui/application.py",
-      "message": "TYPE-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:4dbadaa209ad950e880ed5d1c17807890433d56ae8ea4bae019d93ce67090805",
-      "code": "TYPE-001",
-      "count": 3,
-      "file": "modules/ui/application.py",
-      "message": "TYPE-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:624a0cfd3e9ff644a55ce056dcfcdd741ebff3a77e79068b1bf31578e66dbd6f",
-      "code": "TYPE-001",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "TYPE-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:70264848fe989ac7fb128786d07a6f5c9fc1fd273e127bd7a4057dedd92b8f2d",
-      "code": "TYPE-001",
-      "count": 2,
-      "file": "modules/ui/application.py",
-      "message": "TYPE-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:80bb5a7413093bba50b3207dcca80177b2f827d2e810f169d2394d5ee7b75339",
-      "code": "TYPE-001",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "TYPE-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:9e4cc596a71e02f1e548f80d92fe150bd05f6a33755bd67a0a129808f36f19b2",
-      "code": "TYPE-001",
-      "count": 2,
-      "file": "modules/ui/application.py",
-      "message": "TYPE-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:9f365773b572d0b7a31b2659f4f31a8261399eb1c26913ce6978f841074f5a15",
-      "code": "TYPE-001",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "TYPE-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:b1177679809151059cb5b6604e326741903f2c95ad9066eb9ac97f267c65603b",
-      "code": "TYPE-001",
-      "count": 2,
-      "file": "modules/ui/application.py",
-      "message": "TYPE-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:c491abad825c20e1c94c3cb6792a6d3e0f4bfb311d44fa3e3d2c0f528f36529e",
-      "code": "TYPE-001",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "TYPE-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:ea36ff247449b26402ecbdb6f3501ae07b387da682f9b12a0ff8000d76a6efec",
-      "code": "TYPE-001",
-      "count": 2,
-      "file": "modules/ui/application.py",
-      "message": "TYPE-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:ea5bf839e04edb7c63a4112641abc6ff161d57d75f47c63305013760bb89fdd1",
-      "code": "TYPE-001",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "TYPE-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:fee23d3e3d3db7dc3c0913283503550a96bf60698705dc96f72cc9b25a0187df",
-      "code": "TYPE-001",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "TYPE-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:0025a739f309d967bcac65e133978bfeb2d42092058b15648385966ff6d7a2ef",
-      "code": "TYPE-004",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "TYPE-004",
-      "severity": "warning"
-    },
-    {
-      "anchor": "sha:06d5f08d044c81270a0538bd1e2a2368951dbac50c0d37d7a08844666e379cc3",
-      "code": "TYPE-004",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "TYPE-004",
-      "severity": "warning"
-    },
-    {
-      "anchor": "sha:15f0a26751c167638c86765044b09cdcdc3866b3e4f1c84287fca786d149abb8",
-      "code": "TYPE-004",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "TYPE-004",
-      "severity": "warning"
-    },
-    {
-      "anchor": "sha:1a0557d54fbcea51c85ec88098089839b277acf26baf8e583f2800b22834f0d8",
-      "code": "TYPE-004",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "TYPE-004",
-      "severity": "warning"
-    },
-    {
-      "anchor": "sha:1cd26d27cd4e042a10a7005ed8802107820dadd9971fc46516f7c73a5580b147",
-      "code": "TYPE-004",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "TYPE-004",
-      "severity": "warning"
-    },
-    {
-      "anchor": "sha:263a1c9a8c8a5185bbc28d8187c474fb2a8ce532fe2da43fc3758942fb692218",
-      "code": "TYPE-004",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "TYPE-004",
-      "severity": "warning"
-    },
-    {
-      "anchor": "sha:2a68c422e78139d2856c446a21df717083dd66c9c04f4d21d0f7b3fe4d843dfb",
-      "code": "TYPE-004",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "TYPE-004",
-      "severity": "warning"
-    },
-    {
-      "anchor": "sha:452281fc9c7ac8a11b4f0f87f78be287de6422d5c9818ae2efc48c01ea0d3b10",
-      "code": "TYPE-004",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "TYPE-004",
-      "severity": "warning"
-    },
-    {
-      "anchor": "sha:483bc0561b573b200a61fc054743bbe7185a09ac8787d9ae9d6ec52c113d61ee",
-      "code": "TYPE-004",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "TYPE-004",
-      "severity": "warning"
-    },
-    {
-      "anchor": "sha:4c27cd4ad4bcf96bcd6f2aef2193654832f32f3a3a533b9bfdb0b6b1756b56ea",
-      "code": "TYPE-004",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "TYPE-004",
-      "severity": "warning"
-    },
-    {
-      "anchor": "sha:5361a0db49b05406c712f3da0e89e718b7941cfe7a49bc482688bf8bfccdc4e6",
-      "code": "TYPE-004",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "TYPE-004",
-      "severity": "warning"
-    },
-    {
-      "anchor": "sha:553fff62225714045943b8f79330e0576831e345143b24da44fd127e1dbd5654",
-      "code": "TYPE-004",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "TYPE-004",
-      "severity": "warning"
-    },
-    {
-      "anchor": "sha:5b0e13a318bfa5b4661079b9ad8ecd7fbb5ce421601ba02c694b1792f97f650c",
-      "code": "TYPE-004",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "TYPE-004",
-      "severity": "warning"
-    },
-    {
-      "anchor": "sha:761abd5738cbe16ae47470145a8c73b3eff2e73388ac13eeaa224898ada45a96",
-      "code": "TYPE-004",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "TYPE-004",
-      "severity": "warning"
-    },
-    {
-      "anchor": "sha:7799c652f7cb16ee40186694253f46e0a520fcebb6957a2ea88a423b43bd555a",
-      "code": "TYPE-004",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "TYPE-004",
-      "severity": "warning"
-    },
-    {
-      "anchor": "sha:87692f2f32e2c5643c616aea232ac579b00f1a251082a6d86ac958f6fd4cde2a",
-      "code": "TYPE-004",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "TYPE-004",
-      "severity": "warning"
-    },
-    {
-      "anchor": "sha:8acb5e11fb8f18e627da5f3c52451915920690f61a331e606f07da793e853ec3",
-      "code": "TYPE-004",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "TYPE-004",
-      "severity": "warning"
-    },
-    {
-      "anchor": "sha:91518df457f2d1287bff4c0c98b6993774753b013ff900296a25f48e7b8d4428",
-      "code": "TYPE-004",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "TYPE-004",
-      "severity": "warning"
-    },
-    {
-      "anchor": "sha:923aa17cced3b6b53ad5f60e8950ad3775b76fcdc4fdc1fc7e6ebd6be5dbe41b",
-      "code": "TYPE-004",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "TYPE-004",
-      "severity": "warning"
-    },
-    {
-      "anchor": "sha:9fee45494df72755794f1cce4b3f6a9a4ddbac641f3e85ac259541c5d9e8e862",
-      "code": "TYPE-004",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "TYPE-004",
-      "severity": "warning"
-    },
-    {
-      "anchor": "sha:a3de7c60381c2a71e3ec101a5220c3409cad8619c97016b24767e036e260c013",
-      "code": "TYPE-004",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "TYPE-004",
-      "severity": "warning"
-    },
-    {
-      "anchor": "sha:a6fe90f7643e666c04745e0cf196d2e923a3a0afb2fc6d1842371bd85c0c90b8",
-      "code": "TYPE-004",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "TYPE-004",
-      "severity": "warning"
-    },
-    {
-      "anchor": "sha:b3a593bb36a5f25a9e59126131ed03db3b5ee5055d871304e58e6892d01b47a7",
-      "code": "TYPE-004",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "TYPE-004",
-      "severity": "warning"
-    },
-    {
-      "anchor": "sha:b7c226f8026061a889afdf3147567b130c211d98636e1a1f18a59767db489c24",
-      "code": "TYPE-004",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "TYPE-004",
-      "severity": "warning"
-    },
-    {
-      "anchor": "sha:c54aee4bc784a90b52bd2ac558961a5cde89d5a12746d29f1bf22ab853f5c181",
-      "code": "TYPE-004",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "TYPE-004",
-      "severity": "warning"
-    },
-    {
-      "anchor": "sha:c821961f639f888d610a94713e7a3530efc3ab1aab82d738780a418c6103e596",
-      "code": "TYPE-004",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "TYPE-004",
-      "severity": "warning"
-    },
-    {
-      "anchor": "sha:cd4c1bb90ed7075373df7f1877fbbde629c53a7dfdeab1d2717a2d50db91e1a6",
-      "code": "TYPE-004",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "TYPE-004",
-      "severity": "warning"
-    },
-    {
-      "anchor": "sha:cf0f8627b7e3da71308c1aa4a9d687a78cf7fdd2ec616a3d4c1a7d488b562b43",
-      "code": "TYPE-004",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "TYPE-004",
-      "severity": "warning"
-    },
-    {
-      "anchor": "sha:ded814b47c213a956c8fa9d84c43a90a3c5c4647ddff80df7ab97b24c981353e",
-      "code": "TYPE-004",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "TYPE-004",
-      "severity": "warning"
-    },
-    {
-      "anchor": "sha:fbdac83b073f7a85050b6aef556caa6ef3c1c72fc3b6e814d5db157eaa996d4e",
-      "code": "TYPE-004",
-      "count": 1,
-      "file": "modules/ui/application.py",
-      "message": "TYPE-004",
-      "severity": "warning"
-    },
-    {
-      "anchor": "sha:710bba7469ea6ae0602770ab75eecc06cf97481fee18ae07da8b1b75b4043e9e",
-      "code": "TYPE-001",
-      "count": 1,
-      "file": "modules/ui/events.py",
-      "message": "TYPE-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:710bba7469ea6ae0602770ab75eecc06cf97481fee18ae07da8b1b75b4043e9e",
-      "code": "TYPE-003",
-      "count": 1,
-      "file": "modules/ui/events.py",
-      "message": "TYPE-003",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:dbf59bcfddade698740e37f3888e6b6f60db9b4779dc4165618e1965b6f71b25",
-      "code": "COMPLEXITY-001",
-      "count": 1,
-      "file": "modules/ui/presenters.py",
-      "message": "Function approaching complexity 15",
-      "severity": "warning"
-    },
-    {
-      "anchor": "sha:5048f219374bca7edb05defcd31fe1f5f9c83f0c94dd7d69f53bc425f56009a8",
-      "code": "KWARG-001",
-      "count": 1,
-      "file": "modules/ui/presenters.py",
-      "message": "Functions with >1 parameter must use bare * separator",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:dbf59bcfddade698740e37f3888e6b6f60db9b4779dc4165618e1965b6f71b25",
-      "code": "KWARG-001",
-      "count": 1,
-      "file": "modules/ui/presenters.py",
-      "message": "Functions with >1 parameter must use bare * separator",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:dbf59bcfddade698740e37f3888e6b6f60db9b4779dc4165618e1965b6f71b25",
-      "code": "PARAM-001",
-      "count": 1,
-      "file": "modules/ui/presenters.py",
-      "message": "Function approaching 8 parameters",
-      "severity": "warning"
-    },
-    {
-      "anchor": "sha:dbf59bcfddade698740e37f3888e6b6f60db9b4779dc4165618e1965b6f71b25",
-      "code": "SIZE-002",
-      "count": 1,
-      "file": "modules/ui/presenters.py",
-      "message": "Function approaching 80 lines",
+      "file": "tests/application/test_workspace_service.py",
+      "message": "Boolean functions should use is_/has_/can_/should_ prefix",
       "severity": "warning"
     },
     {
@@ -1854,286 +1918,6 @@
       "count": 1,
       "file": "tests/test_answer_grounding.py",
       "message": "AAA-002",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:00a9d32cef7f629e01c519faf7eb80ae324a2a74dcdf6619262444de46b0b4b4",
-      "code": "AAA-001",
-      "count": 1,
-      "file": "tests/test_app.py",
-      "message": "AAA-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:0ff38f073c1ea779d5007206368072c50275a6ce3fc9f1fd3aec1fdeaf9ad4ce",
-      "code": "AAA-001",
-      "count": 1,
-      "file": "tests/test_app.py",
-      "message": "AAA-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:1323d29922581c1088b10e6fb6b20dec5f05a96cf0b80c3eecd718f91457a0ce",
-      "code": "AAA-001",
-      "count": 1,
-      "file": "tests/test_app.py",
-      "message": "AAA-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:36270b59f045b23e14badd9be23c55fe8a9e40cbd5f54b057b36976ed6c55a67",
-      "code": "AAA-001",
-      "count": 1,
-      "file": "tests/test_app.py",
-      "message": "AAA-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:3f0f4bd88b5b9e24c3c2a522b2919a6a6b9590f1e77d87b40fe1de02d9ed34ef",
-      "code": "AAA-001",
-      "count": 1,
-      "file": "tests/test_app.py",
-      "message": "AAA-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:5e36d77ec6d1cc602aa9a1c61a964f8e6c2de01ae65b6c67183f6d9bfc32109b",
-      "code": "AAA-001",
-      "count": 1,
-      "file": "tests/test_app.py",
-      "message": "AAA-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:5ecae939dbd3e4e5571f134d65ff9c4f81fdb09ac8dfbaa9e117658c171d9b64",
-      "code": "AAA-001",
-      "count": 1,
-      "file": "tests/test_app.py",
-      "message": "AAA-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:68767595d2114b71dfc1541ce570f4d577c153ac2796434576dbc9758ff48193",
-      "code": "AAA-001",
-      "count": 1,
-      "file": "tests/test_app.py",
-      "message": "AAA-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:688512b6c05bf981c4486950c427a6ffcb4eb3c51727c6508a6ea88f9f2f7114",
-      "code": "AAA-001",
-      "count": 1,
-      "file": "tests/test_app.py",
-      "message": "AAA-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:68cf8de74dff9ec86fd1b1b0a3c7e2da93444ca216c291f5d77f329ab1b8184c",
-      "code": "AAA-001",
-      "count": 1,
-      "file": "tests/test_app.py",
-      "message": "AAA-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:6c17670603fe1ad2be9b848fa401bb86e72ff6e508bed3c84e8fd6ee4d014831",
-      "code": "AAA-001",
-      "count": 1,
-      "file": "tests/test_app.py",
-      "message": "AAA-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:71925c5ebbc5c1e4b0df2e287a80bf8c269916266463115dde48f7ca3eb1a45b",
-      "code": "AAA-001",
-      "count": 1,
-      "file": "tests/test_app.py",
-      "message": "AAA-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:7af6702129fb0ce5c76b426ea86bc2bf99654449da8983b695543109c4f08378",
-      "code": "AAA-001",
-      "count": 1,
-      "file": "tests/test_app.py",
-      "message": "AAA-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:7b4eecd613f7748fa687fe383d1a3fedea3afb584b80a8b15ca6f254626d2a5c",
-      "code": "AAA-001",
-      "count": 1,
-      "file": "tests/test_app.py",
-      "message": "AAA-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:7de57fae37b3fb14ead182a7d1ec22e5eb414deda3f92e5d61eaba814ab0cfa5",
-      "code": "AAA-001",
-      "count": 1,
-      "file": "tests/test_app.py",
-      "message": "AAA-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:87b11af2eb54a2fee3c18f6084f97fb507be6c8a4574eb41b262d934342b8a78",
-      "code": "AAA-001",
-      "count": 1,
-      "file": "tests/test_app.py",
-      "message": "AAA-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:8fa517a740f11d8f8fd819bb934c993b2a27f7e8179fbdcf381cd75ac75ae570",
-      "code": "AAA-001",
-      "count": 1,
-      "file": "tests/test_app.py",
-      "message": "AAA-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:9e58b49ff2188418601a3d6aa126a765875e3eceef250bbfe79779e2aa763f1f",
-      "code": "AAA-001",
-      "count": 1,
-      "file": "tests/test_app.py",
-      "message": "AAA-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:ab8e4f18c4dd8eb8a91a75fb4db22b91a370742024e95c61be3a8bbe1c779547",
-      "code": "AAA-001",
-      "count": 1,
-      "file": "tests/test_app.py",
-      "message": "AAA-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:ad2d7372957e81b3dc6c91ba490264d8556834468fcfd002e851ff63bc08fa3c",
-      "code": "AAA-001",
-      "count": 1,
-      "file": "tests/test_app.py",
-      "message": "AAA-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:b2dc9eb3e5621c5c17748b3fbd6d2b4cb928c6261248b8b4a3e47a29c8b5cd44",
-      "code": "AAA-001",
-      "count": 1,
-      "file": "tests/test_app.py",
-      "message": "AAA-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:b383f2f12cb7925c56a0b59f2d314be60f1e3d0c34828175034ffd8370d14994",
-      "code": "AAA-001",
-      "count": 1,
-      "file": "tests/test_app.py",
-      "message": "AAA-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:b6afe765b0c71b11cbc1a879eacc0286f5b17795445d50c04afc88ad299644ec",
-      "code": "AAA-001",
-      "count": 1,
-      "file": "tests/test_app.py",
-      "message": "AAA-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:b87f27f648f2c3d88a63fb69991cd43698e5bb01716656d280719839617c6ef1",
-      "code": "AAA-001",
-      "count": 1,
-      "file": "tests/test_app.py",
-      "message": "AAA-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:bcdbad0f4327ee5d29b6afad69074c7189520fba9a9907febc280c06aa2b6eb7",
-      "code": "AAA-001",
-      "count": 1,
-      "file": "tests/test_app.py",
-      "message": "AAA-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:bf37b16df37e148848494ae4655fa85bccba5ee28bcfa658386d53930e2439fb",
-      "code": "AAA-001",
-      "count": 1,
-      "file": "tests/test_app.py",
-      "message": "AAA-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:c7c50628276cbce5f104a0a9de5f1dda777e3a551d137b7ff02342de3b6ff57b",
-      "code": "AAA-001",
-      "count": 1,
-      "file": "tests/test_app.py",
-      "message": "AAA-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:ca8843ac9d1af3ee7a9702a9a10a38964a58c21818f46fd0b85c2c4ab7e45ef1",
-      "code": "AAA-001",
-      "count": 1,
-      "file": "tests/test_app.py",
-      "message": "AAA-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:d409cf574f07425427d81f5a8eec3471ce94fb8d4e2f401156934d4532a3fc89",
-      "code": "AAA-001",
-      "count": 1,
-      "file": "tests/test_app.py",
-      "message": "AAA-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:dd0710f9fefeb065919f2273a6e12ecd36f10cc181b086278f025c142cb49d83",
-      "code": "AAA-001",
-      "count": 1,
-      "file": "tests/test_app.py",
-      "message": "AAA-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:e0850b4a46c7020f92740b2e6eb50c6c90766d0735becba3f63369a879c96c15",
-      "code": "AAA-001",
-      "count": 1,
-      "file": "tests/test_app.py",
-      "message": "AAA-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:e204b8f59e1b513d7744c46ed8dc752882d8485d23ccbc4354276a1e2c876f70",
-      "code": "AAA-001",
-      "count": 1,
-      "file": "tests/test_app.py",
-      "message": "AAA-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:e7dcf5338c6155f54a40b754a07b72e0238b2edab76b560ab429ad8b697308a8",
-      "code": "AAA-001",
-      "count": 1,
-      "file": "tests/test_app.py",
-      "message": "AAA-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:ee14cddb401029fa7946410ec8fe6fdec8e876ec7281ee06bb1a7a7cdc1935e4",
-      "code": "AAA-001",
-      "count": 1,
-      "file": "tests/test_app.py",
-      "message": "AAA-001",
-      "severity": "error"
-    },
-    {
-      "anchor": "sha:ef64e88247cd294a0c3d8b5f436aab71f80fba3768fbc63df7cff980fd7e7f7a",
-      "code": "AAA-001",
-      "count": 1,
-      "file": "tests/test_app.py",
-      "message": "AAA-001",
       "severity": "error"
     },
     {
@@ -2433,6 +2217,22 @@
       "severity": "error"
     },
     {
+      "anchor": "sha:05ee39fea99b86a85026699d9946cf0ef22ddb76d5e90966aab85b529d4d6f16",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/test_vector_db.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:11e5b6ac1a552257c56d83c03225b0f7e49bf9bed7fa28b5c9ae6e53250482d6",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/test_vector_db.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
       "anchor": "sha:1d8533457dc54860e5493834601a0307783887ed2a329c61cdd776a69ac99c20",
       "code": "AAA-001",
       "count": 1,
@@ -2449,7 +2249,39 @@
       "severity": "error"
     },
     {
+      "anchor": "sha:2db119f5b2d2dfaee70dabe577d3948648849fd4f8574b5aa5d638a3543422a3",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/test_vector_db.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:2fada6b5bebf9f0012111ae267bbad280f94429fafc51108469204b10d85280f",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/test_vector_db.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
       "anchor": "sha:30d47279fdafa098046f68e55e9742b6a5c2383722f2520d15417d91b09e4f0b",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/test_vector_db.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:37a83be0cb2c498612c18042b926bb2c1ea0a5e61b67777535c3452044ad4543",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/test_vector_db.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:394ec6e80c4c904be12ab4545540ded5224aee12463a183e91679ebd96083d84",
       "code": "AAA-001",
       "count": 1,
       "file": "tests/test_vector_db.py",
@@ -2465,7 +2297,55 @@
       "severity": "error"
     },
     {
+      "anchor": "sha:43e66f0cc1c44a887585c38e5fde0e4336b9cef8df84a11687c972238feaf375",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/test_vector_db.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:4d5be4e6e5977b0fe79a606d1951c817986a8d41ffa64aa7a533c6ba63d8dad0",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/test_vector_db.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
       "anchor": "sha:5c653ccf6b03c20d94c8828962d7ac347d5ba60de6c40552d54940e5116eaef2",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/test_vector_db.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:5f50100f4cd3e42fdf6b07eadb1a052059898113597e942bc10b53318b28caab",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/test_vector_db.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:5f733f17929be019022bc0ecc3311b83f53f0a11212152984648c2a6054aa5fb",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/test_vector_db.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:6ea443d484f4462843b0e446bee0554bdac7304a2cc154eadad1aa882077ee05",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/test_vector_db.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:7287355c99ec0f9a92e35ffb46d660c700ce5b8755b83959ec17e6ac142c2814",
       "code": "AAA-001",
       "count": 1,
       "file": "tests/test_vector_db.py",
@@ -2481,7 +2361,31 @@
       "severity": "error"
     },
     {
+      "anchor": "sha:7e99f026aa97ca426eba0f3130d7dc7457a980ca7e866d2ce6d64207f776d77e",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/test_vector_db.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
       "anchor": "sha:82285600fbea6582c36bd1d94314285a96610b2a284a5e1bcf570dea7bd64ba8",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/test_vector_db.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:91efd0e2435af90525dea75acee405fe0b3500e843f0ba94f1cebcff3319b78f",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/test_vector_db.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:a12003fcc615588d6cf3199bc5f57bdbf92910ade8b0cf9d034ab08d46afafc0",
       "code": "AAA-001",
       "count": 1,
       "file": "tests/test_vector_db.py",
@@ -2494,6 +2398,46 @@
       "count": 1,
       "file": "tests/test_vector_db.py",
       "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:d5d001403a383c4e0a47003a692e67718f9c0607a6fd89b1dbcee720243a5960",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/test_vector_db.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:db5a7154387852161fcfb78e354ce53493b6292f6fe1771bfcbbe8f222c0651f",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/test_vector_db.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:e0bab1479ad8f44a0c248fc922cdeb4d77a5051e112f33bf70c815b443bfd650",
+      "code": "AAA-001",
+      "count": 1,
+      "file": "tests/test_vector_db.py",
+      "message": "AAA-001",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:4d5be4e6e5977b0fe79a606d1951c817986a8d41ffa64aa7a533c6ba63d8dad0",
+      "code": "AAA-002",
+      "count": 1,
+      "file": "tests/test_vector_db.py",
+      "message": "AAA-002",
+      "severity": "error"
+    },
+    {
+      "anchor": "sha:5f50100f4cd3e42fdf6b07eadb1a052059898113597e942bc10b53318b28caab",
+      "code": "AAA-002",
+      "count": 1,
+      "file": "tests/test_vector_db.py",
+      "message": "AAA-002",
       "severity": "error"
     }
   ],

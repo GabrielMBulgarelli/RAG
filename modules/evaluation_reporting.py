@@ -40,7 +40,7 @@ def write_experiment(
     }
     configuration = experiment.model_dump(mode="json")
     summary_core = {
-        "schema_version": 2,
+        "schema_version": 3,
         "configuration": configuration,
     }
     summary = {

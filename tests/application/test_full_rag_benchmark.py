@@ -101,7 +101,9 @@ def test_executor_runs_exactly_seven_systems_and_builds_presenter_sections() -> 
     result = asyncio.run(executor.execute(uuid4(), reporter, BenchmarkCancellation()))
 
     # Then all seven systems and both benchmark families remain explicit
-    assert [system.id for system in executor.initial_metadata().systems] == list(SYSTEMS)
+    metadata = executor.initial_metadata()
+    assert [system.id for system in metadata.systems] == list(SYSTEMS)
+    assert metadata.reproducibility == {"case_limit": 20}
     assert runtime.calls == [("case-1", system) for system in SYSTEMS]
     assert [section.id for section in result.sections] == [
         "retrieval",

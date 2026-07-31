@@ -323,7 +323,7 @@ class FullRagBenchmarkExecutor:
             embedding_model=self._embedding_model,
             started_at=None,
             completed_at=None,
-            reproducibility={"schema_version": 3, "case_limit": 20},
+            reproducibility={"case_limit": 20},
         )
 
     async def _run_and_publish_case(

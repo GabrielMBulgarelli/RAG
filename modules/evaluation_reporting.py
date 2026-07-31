@@ -40,7 +40,6 @@ def write_experiment(
     }
     configuration = experiment.model_dump(mode="json")
     summary_core = {
-        "schema_version": 3,
         "configuration": configuration,
     }
     summary = {
@@ -50,7 +49,7 @@ def write_experiment(
     }
     (output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     result_label = (
-        "Standard benchmark"
+        "Full RAG Benchmark artifact"
         if summary["result_kind"] == "standard_benchmark"
         else "Custom evaluation"
     )

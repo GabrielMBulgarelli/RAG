@@ -78,7 +78,8 @@ available in limited-readiness mode when Ollama is offline.
 
 The benchmark overlay runs the embedded MultiHopRAG development suite across
 seven systems: three retrieval-only baselines, three fixed single-call RAG
-baselines, and the bounded full RAG workflow. Results use schema v3, retain
+baselines, and the bounded full RAG workflow. Results use the Full RAG Benchmark
+artifact, retain
 explicit not-applicable metric states, persist across restarts, and expose
 case details without replacing the workspace. The same evaluator is available
 from the CLI:
@@ -127,7 +128,7 @@ modules/
 ├── app.py                  # FastAPI/React production launcher
 ├── bootstrap.py            # Production dependency composition
 ├── citations.py            # Answer and citation validation
-├── evaluation.py           # Seven-system schema-v3 benchmark CLI
+├── evaluation.py           # Seven-system Full RAG Benchmark CLI
 ├── rag_graph.py            # Bounded retrieval and answer workflow
 ├── retrieval.py            # Semantic, BM25, fusion, and selection
 ├── vector_db.py            # Ingestion, manifest, and Chroma lifecycle

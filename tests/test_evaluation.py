@@ -52,7 +52,7 @@ def test_evaluation_facade_preserves_decomposed_public_api() -> None:
     assert write_experiment is decomposed_write_experiment
 
 
-def test_schema_v3_has_exact_retrieval_fixed_rag_and_full_rag_system_order() -> None:
+def test_full_rag_benchmark_has_exact_retrieval_fixed_rag_and_full_rag_system_order() -> None:
     # Given / When
     systems = evaluation_models.SYSTEMS
 
@@ -495,7 +495,7 @@ def test_experiment_configuration_serializes(tmp_path: Path) -> None:
     )
 
     summary = json.loads((output / "summary.json").read_text())
-    assert summary["schema_version"] == 3
+    assert set(summary) == {"configuration", "result_kind", "metrics"}
     assert summary["configuration"]["systems"] == ["dense", "full-rag"]
     assert summary["configuration"]["case_timeout_seconds"] == 30.0
     assert summary["metrics"]["full-rag"]["recall_at_5"] == {
@@ -521,14 +521,13 @@ def test_experiment_configuration_serializes(tmp_path: Path) -> None:
         ("regression", "development", list(EXPECTED_SYSTEMS), False),
     ],
 )
-def test_standard_benchmark_contract(
+def test_complete_full_rag_benchmark_artifact(
     dataset_name: str,
     split: str,
     systems: list[str],
     expected: bool,
 ) -> None:
     summary = {
-        "schema_version": 3,
         "configuration": {
             "dataset_name": dataset_name,
             "evaluated_split": split,
@@ -536,7 +535,7 @@ def test_standard_benchmark_contract(
         },
     }
 
-    assert evaluation.is_standard_benchmark_summary(summary) is expected
+    assert evaluation.is_complete_full_rag_benchmark_artifact(summary) is expected
     assert evaluation.evaluation_result_kind(summary) == (
         "standard_benchmark" if expected else "custom_evaluation"
     )

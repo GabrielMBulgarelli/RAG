@@ -357,12 +357,17 @@ def test_diagnostics_cover_runtime_index_and_evaluation_states(tmp_path: Path) -
         graph_factory=lambda _vector_db, _model: FakeGraph(),
         runtime_probe=lambda: RuntimeProbeResult(reachable=False, models=()),
         evaluation_probe=lambda: EvaluationProbeResult(
-            dataset_ready=False, latest_compatible=False
+            dataset_ready=False,
+            latest_complete_full_rag_benchmark_artifact_available=False,
         ),
     )
 
     blocked_snapshot = asyncio.run(blocked.get_diagnostics())
 
+    assert set(EvaluationProbeResult.__dataclass_fields__) == {
+        "dataset_ready",
+        "latest_complete_full_rag_benchmark_artifact_available",
+    }
     assert blocked_snapshot.state == "blocked"
     assert {check.area for check in blocked_snapshot.runtime_checks} == {"runtime"}
     assert any(check.state == "review" for check in blocked_snapshot.index_checks)
@@ -376,7 +381,10 @@ def test_diagnostics_cover_runtime_index_and_evaluation_states(tmp_path: Path) -
             reachable=True,
             models=(settings.llm_model, settings.embedding_model),
         ),
-        evaluation_probe=lambda: EvaluationProbeResult(dataset_ready=True, latest_compatible=True),
+        evaluation_probe=lambda: EvaluationProbeResult(
+            dataset_ready=True,
+            latest_complete_full_rag_benchmark_artifact_available=True,
+        ),
     )
 
     ready_snapshot = asyncio.run(ready.get_diagnostics())
@@ -385,6 +393,12 @@ def test_diagnostics_cover_runtime_index_and_evaluation_states(tmp_path: Path) -
     assert all(check.state in {"ready", "not_loaded"} for check in ready_snapshot.runtime_checks)
     assert all(check.state == "ready" for check in ready_snapshot.index_checks)
     assert all(check.state == "ready" for check in ready_snapshot.evaluation_checks)
+    assert ready_snapshot.evaluation_checks[1].name == (
+        "Latest completed Full RAG Benchmark artifact"
+    )
+    assert ready_snapshot.evaluation_checks[1].detail == (
+        "A complete Full RAG Benchmark artifact is available."
+    )
 
 
 def test_document_upload_delete_mapping_worker_thread_and_busy_guard(

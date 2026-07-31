@@ -123,9 +123,9 @@ La aplicación no debe interpretar el archivo más reciente como el mejor result
 Cambios propuestos:
 
 - Distinguir entre smoke run y benchmark estándar completo.
-- Cargar por defecto el resultado schema v2 completo más reciente y compatible.
+- Cargar por defecto el Full RAG Benchmark artifact completo más reciente.
 - Mostrar claramente split, sistemas incluidos, cantidad de casos y fecha.
-- Regenerar un benchmark completo schema v2 para sustituir los resultados históricos rechazados.
+- Regenerar el Full RAG Benchmark artifact completo cuando se necesite evidencia actualizada.
 - Mantener el benchmark de test como validación final, no como conjunto de ajuste.
 
 ## Orden recomendado
@@ -134,7 +134,7 @@ Cambios propuestos:
 2. Validación tipada, reparación y fuentes exactas.
 3. Reintentos con preservación de evidencia.
 4. Rutas deterministas, concurrencia y temperatura cero.
-5. Benchmark schema v2 completo y comparación con el baseline.
+5. Full RAG Benchmark artifact completo y comparación con el baseline.
 
 ## Criterios de éxito
 

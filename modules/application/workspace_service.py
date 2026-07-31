@@ -64,7 +64,7 @@ class RuntimeProbeResult:
 @dataclass(frozen=True)
 class EvaluationProbeResult:
     dataset_ready: bool
-    latest_compatible: bool
+    latest_complete_full_rag_benchmark_artifact_available: bool
 
 
 class _VectorDB(Protocol):
@@ -332,7 +332,7 @@ class WorkspaceService:
     def _default_evaluation_probe(cls) -> EvaluationProbeResult:
         return EvaluationProbeResult(
             dataset_ready=(PROJECT_ROOT / "evals" / "multihop" / "cases.jsonl").is_file(),
-            latest_compatible=cls._latest_evaluation_exists(),
+            latest_complete_full_rag_benchmark_artifact_available=(cls._latest_evaluation_exists()),
         )
 
     async def get_diagnostics(self) -> DiagnosticsSnapshot:
@@ -396,7 +396,10 @@ class WorkspaceService:
         try:
             evaluation = await asyncio.to_thread(self._evaluation_probe)
         except Exception:
-            evaluation = EvaluationProbeResult(dataset_ready=False, latest_compatible=False)
+            evaluation = EvaluationProbeResult(
+                dataset_ready=False,
+                latest_complete_full_rag_benchmark_artifact_available=False,
+            )
         evaluation_checks = [
             DiagnosticCheck(
                 area="evaluation",
@@ -408,11 +411,15 @@ class WorkspaceService:
             ),
             DiagnosticCheck(
                 area="evaluation",
-                name="Latest compatible evaluation",
-                state="ready" if evaluation.latest_compatible else "not_loaded",
-                detail="A compatible result is available."
-                if evaluation.latest_compatible
-                else "No compatible benchmark result is stored.",
+                name="Latest completed Full RAG Benchmark artifact",
+                state=(
+                    "ready"
+                    if evaluation.latest_complete_full_rag_benchmark_artifact_available
+                    else "not_loaded"
+                ),
+                detail="A complete Full RAG Benchmark artifact is available."
+                if evaluation.latest_complete_full_rag_benchmark_artifact_available
+                else "No complete Full RAG Benchmark artifact is stored.",
             ),
         ]
         all_checks = [*runtime_checks, *index_checks, *evaluation_checks]

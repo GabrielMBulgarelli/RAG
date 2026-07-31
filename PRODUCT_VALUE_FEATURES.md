@@ -113,7 +113,7 @@ La vista de evaluación debe responder rápidamente tres preguntas:
 
 Funcionalidad propuesta:
 
-- Cargar el último benchmark estándar completo y compatible.
+- Cargar el Full RAG Benchmark artifact completo más reciente.
 - Diferenciar benchmark completo de smoke run.
 - Mostrar comparación contra un baseline estable.
 - Resaltar mejora, regresión o resultado sin cambio mediante texto e iconos.
@@ -145,7 +145,7 @@ Elementos recomendados:
 - demostración corta del flujo documento → pregunta → evidencia;
 - diagrama sencillo de ingestión, recuperación y respuesta;
 - explicación de decisiones y compromisos técnicos;
-- benchmark schema v2 reproducible;
+- Full RAG Benchmark artifact reproducible;
 - archivo `LICENSE` explícito;
 - README consistente con los controles disponibles;
 - ejemplos de preguntas simples, multihop, sin respuesta y contradictorias.

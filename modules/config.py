@@ -44,9 +44,8 @@ class Settings(BaseSettings):
     max_subqueries: int = Field(default=4, ge=1, le=4)
     max_retries: int = Field(default=1, ge=0, le=1)
 
-    gradio_host: str = "127.0.0.1"
-    gradio_port: int = Field(default=7860, ge=1, le=65535)
-    gradio_share: bool = False
+    server_host: str = "127.0.0.1"
+    server_port: int = Field(default=7860, ge=1, le=65535)
     log_level: str = "INFO"
 
     app_title: str = "Complete RAG Assistant"

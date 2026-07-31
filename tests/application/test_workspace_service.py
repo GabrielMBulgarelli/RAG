@@ -251,6 +251,36 @@ def test_runtime_capabilities_follow_readiness_and_coordinator(
     }
 
 
+def test_runtime_keeps_benchmark_disabled_when_no_executor_is_configured(
+    tmp_path: Path,
+) -> None:
+    # Given a ready model and indexed corpus without a benchmark executor
+    settings = make_settings(tmp_path)
+    manager = FakeVectorDB()
+    manager.index_upload_batch(
+        (UploadedFile(filename="guide.txt", content_type="text/plain", content=b"guide"),)
+    )
+    service = WorkspaceService(
+        settings=settings,
+        benchmark_available=False,
+        vector_db_factory=lambda: manager,
+        graph_factory=lambda _vector_db, _model: FakeGraph(),
+        runtime_probe=lambda: RuntimeProbeResult(
+            reachable=True,
+            models=(settings.llm_model, settings.embedding_model),
+        ),
+    )
+
+    # When runtime capability is evaluated
+    asyncio.run(service.load_model(ModelLoadRequest(chat_model=settings.llm_model)))
+    runtime = asyncio.run(service.get_runtime())
+
+    # Then querying remains available while benchmarking does not
+    assert runtime.state == "ready"
+    assert runtime.capabilities.can_query is True
+    assert runtime.capabilities.can_run_benchmark is False
+
+
 def test_model_load_publishes_only_after_full_success(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     managers = [

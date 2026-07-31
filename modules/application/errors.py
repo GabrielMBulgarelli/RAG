@@ -86,3 +86,12 @@ class BenchmarkManagerClosedError(ApplicationError):
             message="The benchmark manager has been closed.",
             details={},
         )
+
+
+class BenchmarkUnavailableError(ApplicationError):
+    def __init__(self) -> None:
+        super().__init__(
+            code="benchmark_unavailable",
+            message="Benchmark execution is not configured.",
+            details={},
+        )

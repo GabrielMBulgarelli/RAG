@@ -60,12 +60,18 @@ class BenchmarkManager(Protocol):
 
     async def get_case(
         self,
+        *,
         run_id: UUID,
         case_id: str,
         system_id: str,
     ) -> BenchmarkCaseDetail: ...
 
-    async def stream_events(self, run_id: UUID, last_event_id: int | None) -> Response: ...
+    async def stream_events(
+        self,
+        *,
+        run_id: UUID,
+        last_event_id: int | None,
+    ) -> Response: ...
 
     async def cancel_benchmark(self, run_id: UUID) -> BenchmarkRun: ...
 

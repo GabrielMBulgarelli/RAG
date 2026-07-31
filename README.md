@@ -1,50 +1,49 @@
 # Local Document RAG
 
-A local-first Retrieval-Augmented Generation application for asking questions about PDF and TXT documents with inspectable evidence. It combines hybrid retrieval, bounded multi-step reasoning, citation validation, and standard benchmark execution while keeping documents and model inference on the user's machine.
+A local-first Retrieval-Augmented Generation workbench for asking questions
+about PDF and TXT documents with inspectable evidence. The application combines
+hybrid retrieval, bounded multi-step reasoning, citation validation, and local
+model inference.
 
 ## Interface
 
-![Grounded conversation and evidence inspector](docs/assets/dashboard/ask-documents.png)
+![Single-workspace document RAG interface](docs/assets/dashboard/ask-documents.png)
 
-The interface opens directly to **Ask Documents** at `/`:
+The React interface is one continuous workspace:
 
-- **Ask Documents** (`/`) contains the grounded conversation, Indexed Documents management, cited sources, retrieval scores, public trace, diagnostics, and privacy-safe export.
+- A compact sidebar owns upload, indexed-document management, runtime state,
+  and secondary actions.
+- The conversation remains the dominant surface, with its composer, citations,
+  clear action, and export action always available.
+- A collapsible inspector shows sources and detailed retrieval, query, and
+  trace information.
+- Benchmark results, case details, diagnostics, and confirmations use overlays
+  rather than route-level pages.
 
-The sidebar includes a multi-file PDF/TXT uploader. Selecting files starts indexing automatically and reports successful or partial results without a separate action button. Chat and embedding model names and corpus totals remain visible in the persistent desktop sidebar; on mobile, the sidebar remains collapsible.
+The FastAPI process owns the workspace services, exposes the typed `/api`
+contract, and serves the built React application from `/`.
 
 ## Highlights
 
-- **Local document workflow** — upload, index, inspect, update, and delete PDF or TXT sources from the Gradio interface.
-- **Hybrid retrieval** — combines semantic search and BM25 with Reciprocal Rank Fusion, deterministic diversity selection, and stable chunk provenance.
-- **Bounded RAG orchestration** — routes simple questions directly, decomposes genuinely multi-hop questions, searches independent subqueries concurrently, and permits at most one targeted retry.
-- **Evidence-aware answers** — grades support per subquery, filters irrelevant context, validates citations, and returns a limited answer or abstains when evidence is insufficient.
-- **Inspectable results** — exposes cited excerpts, source pages, retrieval scores, public traces, and a downloadable conversation export without revealing private reasoning.
-- **Schema v2 evaluation** — compares Dense, BM25, Hybrid, and Agentic systems on MultiHopRAG using retrieval, grounding, answer-quality, and workflow-cost metrics.
-- **Graceful local startup** — the interface can open without Ollama; required models are initialized manually when the user is ready.
-
-## How it works
-
-```mermaid
-flowchart TB
-    A[PDF or TXT] --> B[Parse and chunk]
-    B --> C[Chroma embeddings]
-    B --> D[BM25 index]
-    Q[Question] --> E[Deterministic routing]
-    E --> F[Hybrid retrieval]
-    C --> F
-    D --> F
-    F --> G[Evidence grading]
-    G --> H[Answer generation]
-    H --> I[Citation validation]
-    I --> J[Answer and cited sources]
-```
-
-Documents are assigned stable identifiers and stored in a local manifest. At query time, semantic and sparse candidates are fused and selected using score, subquery coverage, document diversity, and redundancy penalties. The application then checks whether every required part of the question is supported before generating and validating the final answer.
+- **Local document workflow:** upload, index, inspect, update, and delete PDF
+  or TXT sources.
+- **Hybrid retrieval:** combines semantic search and BM25 with Reciprocal Rank
+  Fusion, deterministic diversity selection, and stable chunk provenance.
+- **Bounded RAG orchestration:** routes simple questions directly, decomposes
+  multi-hop questions, searches independent subqueries concurrently, and
+  permits at most one targeted retry.
+- **Evidence-aware answers:** grades support, filters irrelevant context,
+  validates citations, and abstains when evidence is insufficient.
+- **Inspectable results:** exposes cited excerpts, source pages, retrieval
+  scores, public traces, and privacy-safe conversation exports.
+- **Graceful local startup:** the workspace opens without Ollama and reports
+  limited readiness until the configured models are available.
 
 ## Requirements
 
 - Python 3.12
 - [uv](https://docs.astral.sh/uv/)
+- Node.js 22
 - [Ollama](https://ollama.com/)
 - `qwen3.5:9b`
 - `nomic-embed-text`
@@ -58,39 +57,37 @@ cd RAG
 uv python install 3.12
 uv sync
 
+cd frontend
+npm ci
+npm run build
+cd ..
+
 ollama pull qwen3.5:9b
 ollama pull nomic-embed-text
 ollama serve
 ```
 
-Start the interface:
+Start the application:
 
 ```bash
 uv run python -m modules.run
 ```
 
-Open [http://127.0.0.1:7860](http://127.0.0.1:7860). **Ask Documents** is the landing page. Select PDF or TXT files in the sidebar to index them automatically, then inspect or delete indexed files from **Inspector → Indexed Documents**. Load the AI models when you are ready to query the corpus. The UI remains available in limited-readiness mode if Ollama is not running.
+Open [http://127.0.0.1:7860](http://127.0.0.1:7860). The workspace remains
+available in limited-readiness mode when Ollama is offline.
 
-## Evaluation
-
-Run the standard schema v2 benchmark on the MultiHopRAG development split:
+During the Task 7 production cutover, embedded benchmark execution is
+intentionally unavailable rather than emulating the old four-system
+evaluation. Task 8 will connect the benchmark overlays to the full RAG
+executor. The legacy schema-v2 benchmark remains available from the CLI:
 
 ```bash
 uv run python -m modules.evaluation \
   --systems all \
   --split development \
   --dataset multihop \
-  --model qwen3.5:9b \
-  --case-timeout-seconds 30
+  --model qwen3.5:9b
 ```
-
-`--model` selects one installed Ollama chat model for that evaluation run and defaults to `RAG_LLM_MODEL`. It does not change the model used by the normal document-question runtime.
-`--case-timeout-seconds` is a hard wall-clock limit for each agentic case; timeouts
-are recorded as case-level runtime failures so one stalled model response cannot
-prevent the benchmark from producing an artifact. The 30-second default bounds
-the 20-case development split's agentic portion to 10 minutes.
-
-The **Run evaluation** action in the Ask Documents header runs the standard development benchmark and reports whether the result was saved. Partial system comparisons started from the CLI remain identifiable as custom evaluations and cannot replace the standard benchmark.
 
 ## Quality checks
 
@@ -98,40 +95,47 @@ The **Run evaluation** action in the Ask Documents header runs the standard deve
 ./scripts/verify.sh
 ```
 
-The verification gate runs Ruff, Pyright, and the complete offline test suite. Tests do not require Ollama unless explicitly marked for live-model integration.
+The gate installs locked backend and frontend dependencies, runs frontend
+tests/typechecking/build/audit, checks Python formatting and types, runs the
+offline backend suite, and verifies offline diagnostics.
 
 ## Configuration
 
-Settings use the `RAG_` prefix and can be placed in `.env`. Common options include:
+Settings use the `RAG_` prefix and can be placed in `.env`:
 
 ```dotenv
 RAG_OLLAMA_BASE_URL=http://localhost:11434
 RAG_LLM_MODEL=qwen3.5:9b
 RAG_EMBEDDING_MODEL=nomic-embed-text
-RAG_GRADIO_HOST=127.0.0.1
-RAG_GRADIO_PORT=7860
+RAG_SERVER_HOST=127.0.0.1
+RAG_SERVER_PORT=7860
 ```
 
-Configuration is validated before Ollama or Chroma clients are constructed. Retrieval budgets, chunking, retry limits, paths, and UI settings are also configurable in [`modules/config.py`](modules/config.py).
+Retrieval budgets, chunking, retry limits, paths, and server settings are
+validated in [`modules/config.py`](modules/config.py) before runtime clients
+are constructed.
 
 ## Project structure
 
 ```text
+frontend/                   # React single-workspace interface
 modules/
-├── app.py          # Application ownership and Gradio launch entrypoint
-├── citations.py    # Deterministic answer and citation validation
-├── evaluation.py   # Schema v2 benchmark runner and metrics
-├── rag_graph.py    # Bounded retrieval and answer workflow
-├── retrieval.py    # Semantic, BM25, fusion, and final selection
-├── ui/             # Routed dashboard shell, pages, presenters, and assets
-├── vector_db.py    # Ingestion, manifest, and Chroma lifecycle
-└── run.py          # Package-safe local entrypoint
+├── api/                    # FastAPI routes, lifecycle, and error mapping
+├── application/            # Presentation-neutral workspace services
+├── app.py                  # FastAPI/React production launcher
+├── bootstrap.py            # Production dependency composition
+├── citations.py            # Answer and citation validation
+├── evaluation.py           # Legacy schema-v2 benchmark CLI
+├── rag_graph.py            # Bounded retrieval and answer workflow
+├── retrieval.py            # Semantic, BM25, fusion, and selection
+├── vector_db.py            # Ingestion, manifest, and Chroma lifecycle
+└── run.py                  # Package-safe local entry point
 
 scripts/
 ├── prepare_multihop_eval.py
 └── verify.sh
 
-tests/              # Offline unit and integration coverage
+tests/                      # Offline unit and integration coverage
 ```
 
 ## What this project demonstrates
@@ -144,4 +148,8 @@ tests/              # Offline unit and integration coverage
 
 ## Acknowledgments
 
-The project began from the [AI Workshop 2025 GenAI Session](https://github.com/Antonio-Tresol/ai_workshop_2025_gen_ai_session) and has since been expanded with document lifecycle management, hybrid retrieval, bounded orchestration, citation validation, evaluation, and a redesigned local interface.
+The project began from the
+[AI Workshop 2025 GenAI Session](https://github.com/Antonio-Tresol/ai_workshop_2025_gen_ai_session)
+and has since expanded with document lifecycle management, hybrid retrieval,
+bounded orchestration, citation validation, evaluation, and a redesigned local
+interface.

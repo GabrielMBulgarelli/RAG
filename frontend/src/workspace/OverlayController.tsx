@@ -1,12 +1,20 @@
 import { useEffect, useRef, type ReactNode } from "react";
 
 import type { DiagnosticCheck, DocumentRecord } from "../api/types";
+import { BenchmarkProgress } from "../benchmark/BenchmarkProgress";
+import {
+  BenchmarkResults,
+  type BenchmarkCaseRef,
+} from "../benchmark/BenchmarkResults";
+import type { BenchmarkController } from "../benchmark/useBenchmark";
 import type { WorkspaceController } from "./useWorkspace";
 
 export type OverlayState =
   | { kind: "diagnostics" }
   | { kind: "document-details"; document: DocumentRecord }
   | { kind: "delete-confirm"; document: DocumentRecord }
+  | { kind: "benchmark-progress" }
+  | { kind: "benchmark-results"; caseRef?: BenchmarkCaseRef }
   | null;
 
 interface DialogFrameProps {
@@ -59,8 +67,10 @@ function DialogFrame({
 interface OverlayControllerProps {
   overlay: OverlayState;
   workspace: WorkspaceController;
+  benchmark: BenchmarkController;
   onClose: () => void;
   onRequestDelete: (document: DocumentRecord) => void;
+  onCaseRefChange: (caseRef: BenchmarkCaseRef | undefined) => void;
 }
 
 function CheckGroup({
@@ -92,11 +102,28 @@ function CheckGroup({
 export function OverlayController({
   overlay,
   workspace,
+  benchmark,
   onClose,
   onRequestDelete,
+  onCaseRefChange,
 }: OverlayControllerProps) {
   if (!overlay) {
     return null;
+  }
+
+  if (overlay.kind === "benchmark-progress") {
+    return <BenchmarkProgress benchmark={benchmark} onClose={onClose} />;
+  }
+
+  if (overlay.kind === "benchmark-results") {
+    return (
+      <BenchmarkResults
+        benchmark={benchmark}
+        caseRef={overlay.caseRef}
+        onCaseRefChange={onCaseRefChange}
+        onClose={onClose}
+      />
+    );
   }
 
   if (overlay.kind === "diagnostics") {

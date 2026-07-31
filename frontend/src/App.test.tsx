@@ -3,10 +3,12 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
-import { ApiClientError } from "./api/client";
+import { ApiClientError, type WorkspaceApi } from "./api/client";
 import type { QueryResponse } from "./api/types";
 import {
   createMockApi,
+  benchmarkRun,
+  benchmarkStart,
   diagnostics,
   documentList,
   queryResponse,
@@ -351,7 +353,7 @@ describe("single workspace", () => {
     expect(screen.queryByText("The policy changed in July.")).not.toBeInTheDocument();
   });
 
-  it("disables conflicting controls and explains the unconnected benchmark boundary", async () => {
+  it("disables the connected benchmark action while another operation is active", async () => {
     const busyRuntime = {
       ...runtimeReady,
       active_operation: {
@@ -375,7 +377,8 @@ describe("single workspace", () => {
     expect(screen.getByLabelText("Upload documents")).toBeDisabled();
     const benchmark = screen.getByRole("button", { name: "Run benchmark" });
     expect(benchmark).toBeDisabled();
-    expect(screen.getByText(/benchmark workflow is not connected/i)).toBeVisible();
+    expect(screen.getByText(/wait for the active workspace operation/i)).toBeVisible();
+    expect(screen.queryByText(/workflow is not connected/i)).not.toBeInTheDocument();
   });
 
   it("disables conflicting controls immediately while a local query is in flight", async () => {
@@ -410,6 +413,99 @@ describe("single workspace", () => {
     await user.click(await screen.findByRole("button", { name: "Run benchmark" }));
 
     expect(onRunBenchmark).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens durable benchmark progress immediately without unmounting the workspace", async () => {
+    const start = deferred<Awaited<ReturnType<WorkspaceApi["startBenchmark"]>>>();
+    const api = createMockApi({
+      startBenchmark: vi.fn().mockReturnValue(start.promise),
+      getDocuments: vi.fn().mockResolvedValue(documentList),
+    });
+    const user = userEvent.setup();
+    render(<App api={api} />);
+    await screen.findByText("alpha.pdf");
+
+    await user.click(screen.getByRole("button", { name: "Run benchmark" }));
+
+    expect(api.startBenchmark).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("dialog", { name: "Running RAG benchmark" })).toBeVisible();
+    expect(screen.getByText("Ask the corpus")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Send question" })).toBeDisabled();
+    expect(screen.getByLabelText("Upload documents")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Run benchmark" })).toBeDisabled();
+
+    await act(async () => {
+      start.resolve(benchmarkStart);
+      await start.promise;
+    });
+  });
+
+  it("transitions App-owned progress to results only from a completed durable run", async () => {
+    const user = userEvent.setup();
+    const api = createMockApi();
+    render(<App api={api} />);
+
+    await user.click(await screen.findByRole("button", { name: "Run benchmark" }));
+
+    expect(await screen.findByRole("dialog", { name: "RAG Benchmark" })).toBeVisible();
+    expect(screen.queryByRole("dialog", { name: "Running RAG benchmark" }))
+      .not.toBeInTheDocument();
+    expect(screen.getByText("Ask the corpus")).toBeVisible();
+  });
+
+  it("restores benchmark progress or results after temporary diagnostics", async () => {
+    let publishEvent: Parameters<WorkspaceApi["streamBenchmarkEvents"]>[3] | undefined;
+    const running = {
+      ...benchmarkRun,
+      status: "running" as const,
+      metadata: { ...benchmarkRun.metadata, completed_at: null },
+    };
+    const api = createMockApi({
+      getBenchmark: vi.fn()
+        .mockResolvedValueOnce(running)
+        .mockResolvedValueOnce(benchmarkRun),
+      streamBenchmarkEvents: vi.fn((
+        _runId,
+        _lastEventId,
+        signal,
+        onEvent,
+      ) => {
+        publishEvent = onEvent;
+        return new Promise<void>((_, reject) => {
+          signal.addEventListener("abort", () => {
+            reject(new DOMException("Aborted", "AbortError"));
+          }, { once: true });
+        });
+      }),
+    });
+    const user = userEvent.setup();
+    render(<App api={api} />);
+
+    await user.click(await screen.findByRole("button", { name: "Run benchmark" }));
+    expect(await screen.findByRole("dialog", { name: "Running RAG benchmark" })).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "System diagnostics" }));
+    const firstDiagnostics = await screen.findByRole("dialog", { name: "System diagnostics" });
+    await user.click(within(firstDiagnostics).getByRole("button", { name: "Close" }));
+    expect(screen.getByRole("dialog", { name: "Running RAG benchmark" })).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "System diagnostics" }));
+    const secondDiagnostics = await screen.findByRole("dialog", { name: "System diagnostics" });
+    act(() => {
+      publishEvent?.({
+        event_id: 1,
+        run_id: benchmarkRun.run_id,
+        type: "benchmark.completed",
+        timestamp: "2026-07-29T15:31:00Z",
+        data: {},
+      });
+    });
+    await waitFor(() => expect(api.getBenchmark).toHaveBeenCalledTimes(2));
+    await user.click(within(secondDiagnostics).getByRole("button", { name: "Close" }));
+
+    expect(await screen.findByRole("dialog", { name: "RAG Benchmark" })).toBeVisible();
+    expect(screen.queryByRole("dialog", { name: "Running RAG benchmark" }))
+      .not.toBeInTheDocument();
   });
 
   it("explains when runtime capability disables a connected benchmark boundary", async () => {

@@ -106,6 +106,44 @@ describe("workspace operation coordination", () => {
     expect(api.uploadDocuments).not.toHaveBeenCalled();
   });
 
+  it("atomically blocks every workspace mutation for an external benchmark", async () => {
+    const api = createMockApi();
+    const hook = renderHook(
+      ({ externalBusy }: { externalBusy: "benchmark" | null }) => (
+        useWorkspace(api, externalBusy)
+      ),
+      { initialProps: { externalBusy: "benchmark" as "benchmark" | null } },
+    );
+    await waitFor(() => expect(hook.result.current.loadingWorkspace).toBe(false));
+
+    await act(async () => {
+      await hook.result.current.submitQuestion("Blocked by benchmark");
+      await hook.result.current.uploadDocuments([
+        new File(["text"], "notes.txt", { type: "text/plain" }),
+      ]);
+      await hook.result.current.deleteDocument("doc/alpha");
+      await hook.result.current.loadModel("gemma3:4b");
+      await hook.result.current.clearConversation();
+      await hook.result.current.exportConversation();
+    });
+
+    expect(hook.result.current.busy).toBe(true);
+    expect(hook.result.current.busyKind).toBe("benchmark");
+    expect(api.query).not.toHaveBeenCalled();
+    expect(api.uploadDocuments).not.toHaveBeenCalled();
+    expect(api.deleteDocument).not.toHaveBeenCalled();
+    expect(api.loadModel).not.toHaveBeenCalled();
+    expect(api.clearConversation).not.toHaveBeenCalled();
+    expect(api.exportConversation).not.toHaveBeenCalled();
+
+    hook.rerender({ externalBusy: null });
+    await waitFor(() => expect(hook.result.current.busy).toBe(false));
+    await act(async () => {
+      await hook.result.current.submitQuestion("Allowed now");
+    });
+    expect(api.query).toHaveBeenCalledTimes(1);
+  });
+
   it("does not refresh or download after unmount", async () => {
     const exported = deferred<Awaited<ReturnType<WorkspaceApi["exportConversation"]>>>();
     const api = createMockApi({

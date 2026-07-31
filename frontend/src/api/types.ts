@@ -158,3 +158,137 @@ export interface ApiProblem {
   message: string;
   details: Record<string, unknown>;
 }
+
+export type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+export type BenchmarkRunStatus =
+  | "queued"
+  | "running"
+  | "cancellation_requested"
+  | "cancelled"
+  | "completed"
+  | "failed";
+
+export interface BenchmarkLinks {
+  run: string;
+  events: string;
+  download: string;
+}
+
+export interface BenchmarkStartResponse {
+  run_id: string;
+  status: BenchmarkRunStatus;
+  links: BenchmarkLinks;
+}
+
+export type BenchmarkMetricStatus =
+  | "measured"
+  | "not_applicable"
+  | "no_eligible_cases";
+
+export interface BenchmarkMetricObservation {
+  system: string;
+  value: number | null;
+  status: BenchmarkMetricStatus;
+  sample_count: number;
+  note: string | null;
+}
+
+export interface BenchmarkMetric {
+  name: string;
+  label: string;
+  observations: BenchmarkMetricObservation[];
+}
+
+export interface BenchmarkSystem {
+  id: string;
+  label: string;
+}
+
+export interface BenchmarkSection {
+  id: string;
+  title: string;
+  system_ids: string[];
+  metrics: BenchmarkMetric[];
+  detail: string | null;
+}
+
+export interface BenchmarkFailure {
+  case_id: string;
+  system: string;
+  classification: string;
+  detail: string;
+}
+
+export interface BenchmarkProgress {
+  completed_cases: number;
+  total_cases: number;
+  current_system: string | null;
+  current_system_index: number | null;
+  total_systems: number;
+  current_case_id: string | null;
+  current_case_index: number | null;
+}
+
+export interface BenchmarkMetadata {
+  dataset: string;
+  split: string;
+  systems: BenchmarkSystem[];
+  chat_model: string;
+  embedding_model: string;
+  started_at: string | null;
+  completed_at: string | null;
+  reproducibility: Record<string, JsonValue>;
+}
+
+export interface BenchmarkRun {
+  run_id: string;
+  status: BenchmarkRunStatus;
+  progress: BenchmarkProgress;
+  metadata: BenchmarkMetadata;
+  sections: BenchmarkSection[];
+  failures: BenchmarkFailure[];
+  links: BenchmarkLinks;
+  error: ApiProblem | null;
+}
+
+export type BenchmarkEventType =
+  | "benchmark.started"
+  | "system.started"
+  | "case.started"
+  | "case.completed"
+  | "case.failed"
+  | "system.completed"
+  | "benchmark.cancellation_requested"
+  | "benchmark.cancelled"
+  | "benchmark.completed"
+  | "benchmark.failed"
+  | "heartbeat";
+
+export interface BenchmarkEvent {
+  event_id: number;
+  run_id: string;
+  type: BenchmarkEventType;
+  timestamp: string;
+  data: Record<string, JsonValue>;
+}
+
+export interface BenchmarkCaseDetail {
+  case_id: string;
+  system: string;
+  question: string;
+  expected_answer: string | null;
+  generated_answer: string | null;
+  expected_evidence: Array<Record<string, JsonValue>>;
+  retrieved_evidence: Array<Record<string, JsonValue>>;
+  metric_observations: BenchmarkMetricObservation[];
+  failure_classification: string | null;
+  public_trace: TraceEvent[];
+  sanitized_raw_result: Record<string, JsonValue> | null;
+}

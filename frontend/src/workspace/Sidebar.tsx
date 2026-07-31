@@ -54,14 +54,14 @@ export function Sidebar({
     upload(event.dataTransfer.files);
   };
 
-  const benchmarkReason = !onRunBenchmark
-    ? "Benchmark workflow is not connected in this workspace."
-    : !runtime
+  const benchmarkReason = !runtime
       ? "Checking whether the runtime can run a benchmark."
       : !runtime.capabilities.can_run_benchmark
         ? "The runtime does not currently allow a benchmark."
         : busy
           ? "Wait for the active workspace operation before running a benchmark."
+          : !onRunBenchmark
+            ? "The benchmark API is not available."
           : null;
   const benchmarkAvailable = benchmarkReason === null;
   const indexedLabel = `${documents.length} indexed document${documents.length === 1 ? "" : "s"}`;

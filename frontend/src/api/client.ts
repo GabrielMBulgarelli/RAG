@@ -1,5 +1,10 @@
 import type {
   ApiProblem,
+  BenchmarkCaseDetail,
+  BenchmarkEvent,
+  BenchmarkEventType,
+  BenchmarkRun,
+  BenchmarkStartResponse,
   DiagnosticsSnapshot,
   DocumentList,
   QueryResponse,
@@ -17,6 +22,22 @@ export interface WorkspaceApi {
   query(sessionId: string, question: string): Promise<QueryResponse>;
   clearConversation(sessionId: string): Promise<void>;
   exportConversation(sessionId: string): Promise<DownloadFile>;
+  startBenchmark(): Promise<BenchmarkStartResponse>;
+  getBenchmark(runId: string): Promise<BenchmarkRun>;
+  getLatestBenchmark(): Promise<BenchmarkRun>;
+  getBenchmarkCase(
+    runId: string,
+    caseId: string,
+    systemId: string,
+  ): Promise<BenchmarkCaseDetail>;
+  cancelBenchmark(runId: string): Promise<BenchmarkRun>;
+  downloadBenchmark(runId: string): Promise<DownloadFile>;
+  streamBenchmarkEvents(
+    runId: string,
+    lastEventId: number,
+    signal: AbortSignal,
+    onEvent: (event: BenchmarkEvent) => void,
+  ): Promise<void>;
 }
 
 export interface DownloadFile {
@@ -84,7 +105,7 @@ function jsonInit(method: "POST", body: unknown): RequestInit {
   };
 }
 
-function exportFilename(disposition: string | null): string {
+function exportFilename(disposition: string | null, fallback: string): string {
   const encoded = disposition?.match(/filename\*\s*=\s*(?:UTF-8'')?([^;]+)/i)?.[1];
   const regular = disposition?.match(/filename\s*=\s*(?:"([^"]+)"|([^;]+))/i);
   let candidate = encoded ?? regular?.[1] ?? regular?.[2] ?? "";
@@ -97,7 +118,144 @@ function exportFilename(disposition: string | null): string {
     }
   }
   const leaf = candidate.split(/[\\/]/).at(-1)?.replace(/[\u0000-\u001f\u007f]/g, "").trim();
-  return leaf && leaf !== "." && leaf !== ".." ? leaf : "conversation.json";
+  return leaf && leaf !== "." && leaf !== ".." ? leaf : fallback;
+}
+
+const BENCHMARK_EVENT_TYPES = new Set<BenchmarkEventType>([
+  "benchmark.started",
+  "system.started",
+  "case.started",
+  "case.completed",
+  "case.failed",
+  "system.completed",
+  "benchmark.cancellation_requested",
+  "benchmark.cancelled",
+  "benchmark.completed",
+  "benchmark.failed",
+  "heartbeat",
+]);
+const UUID_PATTERN = (
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function benchmarkEvent(
+  value: unknown,
+  sseId: string,
+  sseType: string,
+): BenchmarkEvent {
+  if (!isRecord(value)) {
+    throw new Error("The benchmark event stream returned a malformed benchmark event.");
+  }
+  const type = value.type;
+  const valid = (
+    Number.isInteger(value.event_id)
+    && Number(value.event_id) >= 1
+    && typeof value.run_id === "string"
+    && UUID_PATTERN.test(value.run_id)
+    && typeof type === "string"
+    && BENCHMARK_EVENT_TYPES.has(type as BenchmarkEventType)
+    && typeof value.timestamp === "string"
+    && isRecord(value.data)
+    && sseId === String(value.event_id)
+    && sseType === type
+  );
+  if (!valid) {
+    throw new Error("The benchmark event stream returned a malformed benchmark event.");
+  }
+  return value as unknown as BenchmarkEvent;
+}
+
+function parseEventBlock(block: string): BenchmarkEvent | null {
+  let id = "";
+  let type = "";
+  const data: string[] = [];
+  for (const line of block.split(/\r?\n/)) {
+    if (!line || line.startsWith(":")) {
+      continue;
+    }
+    const separator = line.indexOf(":");
+    const field = separator < 0 ? line : line.slice(0, separator);
+    let fieldValue = separator < 0 ? "" : line.slice(separator + 1);
+    if (fieldValue.startsWith(" ")) {
+      fieldValue = fieldValue.slice(1);
+    }
+    if (field === "id") {
+      id = fieldValue;
+    } else if (field === "event") {
+      type = fieldValue;
+    } else if (field === "data") {
+      data.push(fieldValue);
+    }
+  }
+  if (data.length === 0) {
+    return null;
+  }
+  try {
+    return benchmarkEvent(JSON.parse(data.join("\n")), id, type);
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw new Error(
+        "The benchmark event stream returned a malformed benchmark event.",
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+}
+
+async function readBenchmarkEvents(
+  response: Response,
+  signal: AbortSignal,
+  onEvent: (event: BenchmarkEvent) => void,
+): Promise<void> {
+  if (!response.body) {
+    throw new Error("The benchmark event stream returned no response body.");
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  if (signal.aborted) {
+    await reader.cancel(signal.reason);
+    throw new DOMException("The benchmark event stream was aborted.", "AbortError");
+  }
+  const cancel = () => {
+    void reader.cancel(signal.reason);
+  };
+  signal.addEventListener("abort", cancel, { once: true });
+  try {
+    while (!signal.aborted) {
+      const { done, value } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+      let boundary = buffer.match(/\r?\n\r?\n/);
+      while (boundary?.index !== undefined) {
+        const event = parseEventBlock(buffer.slice(0, boundary.index));
+        buffer = buffer.slice(boundary.index + boundary[0].length);
+        if (event) {
+          onEvent(event);
+        }
+        boundary = buffer.match(/\r?\n\r?\n/);
+      }
+      if (done) {
+        if (buffer.trim()) {
+          const event = parseEventBlock(buffer);
+          if (event) {
+            onEvent(event);
+          }
+        }
+        break;
+      }
+    }
+    if (signal.aborted) {
+      throw new DOMException("The benchmark event stream was aborted.", "AbortError");
+    }
+  } finally {
+    signal.removeEventListener("abort", cancel);
+    reader.releaseLock();
+  }
 }
 
 export function createApiClient(baseUrl = ""): WorkspaceApi {
@@ -147,8 +305,53 @@ export function createApiClient(baseUrl = ""): WorkspaceApi {
       ));
       return {
         blob: await response.blob(),
-        filename: exportFilename(response.headers.get("Content-Disposition")),
+        filename: exportFilename(
+          response.headers.get("Content-Disposition"),
+          "conversation.json",
+        ),
       };
+    },
+    startBenchmark: () => json<BenchmarkStartResponse>(
+      "/api/benchmarks",
+      { method: "POST" },
+    ),
+    getBenchmark: (runId) => json<BenchmarkRun>(
+      `/api/benchmarks/${encodeURIComponent(runId)}`,
+    ),
+    getLatestBenchmark: () => json<BenchmarkRun>("/api/benchmarks/latest"),
+    getBenchmarkCase: (runId, caseId, systemId) => json<BenchmarkCaseDetail>(
+      `/api/benchmarks/${encodeURIComponent(runId)}`
+      + `/cases/${encodeURIComponent(caseId)}/systems/${encodeURIComponent(systemId)}`,
+    ),
+    cancelBenchmark: (runId) => json<BenchmarkRun>(
+      `/api/benchmarks/${encodeURIComponent(runId)}/cancel`,
+      { method: "POST" },
+    ),
+    downloadBenchmark: async (runId) => {
+      const response = await ensureSuccess(await fetch(
+        endpoint(`/api/benchmarks/${encodeURIComponent(runId)}/download`),
+        { headers: { Accept: "application/zip" } },
+      ));
+      return {
+        blob: await response.blob(),
+        filename: exportFilename(
+          response.headers.get("Content-Disposition"),
+          "benchmark.zip",
+        ),
+      };
+    },
+    streamBenchmarkEvents: async (runId, lastEventId, signal, onEvent) => {
+      const response = await ensureSuccess(await fetch(
+        endpoint(`/api/benchmarks/${encodeURIComponent(runId)}/events`),
+        {
+          headers: {
+            Accept: "text/event-stream",
+            "Last-Event-ID": String(lastEventId),
+          },
+          signal,
+        },
+      ));
+      await readBenchmarkEvents(response, signal, onEvent);
     },
   };
 }

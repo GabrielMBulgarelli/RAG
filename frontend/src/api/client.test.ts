@@ -186,4 +186,90 @@ describe("workspace API client", () => {
       },
     });
   });
+
+  it("uses exact benchmark resource paths, encoding, cancel, and download filename", async () => {
+    const runId = "4cbdbcb9-5a57-4514-a392-2dce907456d5";
+    const start = {
+      run_id: runId,
+      status: "queued",
+      links: {
+        run: `/api/benchmarks/${runId}`,
+        events: `/api/benchmarks/${runId}/events`,
+        download: `/api/benchmarks/${runId}/download`,
+      },
+    };
+    const run = {
+      ...start,
+      progress: { completed_cases: 0, total_cases: 0, total_systems: 0 },
+      metadata: {
+        dataset: "multihop",
+        split: "development",
+        systems: [],
+        chat_model: "qwen3:8b",
+        embedding_model: "nomic-embed-text",
+        started_at: null,
+        completed_at: null,
+        reproducibility: {},
+      },
+      sections: [],
+      failures: [],
+      error: null,
+    };
+    fetchMock
+      .mockResolvedValueOnce(Response.json(start, { status: 202 }))
+      .mockResolvedValueOnce(Response.json(run))
+      .mockResolvedValueOnce(Response.json(run))
+      .mockResolvedValueOnce(Response.json({
+        case_id: "case / 1",
+        system: "dense + rerank",
+        question: "Question",
+        expected_answer: null,
+        generated_answer: null,
+        expected_evidence: [],
+        retrieved_evidence: [],
+        metric_observations: [],
+        failure_classification: null,
+        public_trace: [],
+        sanitized_raw_result: null,
+      }))
+      .mockResolvedValueOnce(Response.json({ ...run, status: "cancellation_requested" }, {
+        status: 202,
+      }))
+      .mockResolvedValueOnce(new Response('{"run_id":"download"}', {
+        headers: {
+          "Content-Type": "application/zip",
+          "Content-Disposition": 'attachment; filename="../benchmark-safe.json"',
+        },
+      }))
+      .mockResolvedValueOnce(new Response("zip bytes", {
+        headers: { "Content-Type": "application/zip" },
+      }));
+    const api = createApiClient();
+
+    await api.startBenchmark();
+    await api.getBenchmark(runId);
+    await api.getLatestBenchmark();
+    await api.getBenchmarkCase(runId, "case / 1", "dense + rerank");
+    await api.cancelBenchmark(runId);
+    const download = await api.downloadBenchmark(runId);
+    const fallbackDownload = await api.downloadBenchmark(runId);
+
+    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
+      "/api/benchmarks",
+      `/api/benchmarks/${runId}`,
+      "/api/benchmarks/latest",
+      `/api/benchmarks/${runId}/cases/case%20%2F%201/systems/dense%20%2B%20rerank`,
+      `/api/benchmarks/${runId}/cancel`,
+      `/api/benchmarks/${runId}/download`,
+      `/api/benchmarks/${runId}/download`,
+    ]);
+    expect(fetchMock.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ method: "POST" }));
+    expect(fetchMock.mock.calls[4]?.[1]).toEqual(expect.objectContaining({ method: "POST" }));
+    expect(download.filename).toBe("benchmark-safe.json");
+    expect(await download.blob.text()).toBe('{"run_id":"download"}');
+    expect(fallbackDownload.filename).toBe("benchmark.zip");
+    expect(fetchMock.mock.calls[5]?.[1]).toEqual(expect.objectContaining({
+      headers: { Accept: "application/zip" },
+    }));
+  });
 });

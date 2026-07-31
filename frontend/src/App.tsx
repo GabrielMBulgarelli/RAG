@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { createApiClient, type WorkspaceApi } from "./api/client";
 import type { DocumentRecord } from "./api/types";
+import { useBenchmark } from "./benchmark/useBenchmark";
 import { ConversationPanel } from "./workspace/ConversationPanel";
 import { InspectorPanel } from "./workspace/InspectorPanel";
 import {
@@ -36,10 +37,12 @@ function useCompactWorkspace(): boolean {
 }
 
 export function App({ api = defaultApi, onRunBenchmark }: AppProps) {
-  const workspace = useWorkspace(api);
+  const benchmark = useBenchmark(api);
+  const workspace = useWorkspace(api, benchmark.busy ? "benchmark" : null);
   const [overlay, setOverlay] = useState<OverlayState>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
+  const overlayBeforeDiagnosticsRef = useRef<OverlayState>(null);
   const sidebarOpenerRef = useRef<HTMLButtonElement>(null);
   const sidebarCloseRef = useRef<HTMLButtonElement>(null);
   const sidebarWasOpenRef = useRef(false);
@@ -49,13 +52,51 @@ export function App({ api = defaultApi, onRunBenchmark }: AppProps) {
   const readiness = workspace.runtime?.active_chat_model ?? "Runtime not loaded";
 
   const openDiagnostics = () => {
-    setOverlay({ kind: "diagnostics" });
+    setOverlay((current) => {
+      overlayBeforeDiagnosticsRef.current = current?.kind === "benchmark-progress"
+        ? current
+        : null;
+      return { kind: "diagnostics" };
+    });
     void workspace.refreshDiagnostics();
+  };
+
+  const closeOverlay = () => {
+    setOverlay((current) => {
+      const previous = current?.kind === "diagnostics"
+        ? overlayBeforeDiagnosticsRef.current
+        : null;
+      overlayBeforeDiagnosticsRef.current = null;
+      if (previous?.kind === "benchmark-progress") {
+        return benchmark.run?.status === "completed"
+          ? { kind: "benchmark-results" }
+          : previous;
+      }
+      return null;
+    });
   };
 
   const openDocumentDetails = (document: DocumentRecord) => {
     setOverlay({ kind: "document-details", document });
   };
+
+  const runBenchmark = () => {
+    if (onRunBenchmark) {
+      onRunBenchmark();
+      return;
+    }
+    setOverlay({ kind: "benchmark-progress" });
+    void benchmark.start();
+  };
+
+  useEffect(() => {
+    if (
+      benchmark.run?.status === "completed"
+      && overlay?.kind === "benchmark-progress"
+    ) {
+      setOverlay({ kind: "benchmark-results" });
+    }
+  }, [benchmark.run?.status, overlay?.kind]);
 
   useEffect(() => {
     if (!drawerOpen) {
@@ -126,7 +167,7 @@ export function App({ api = defaultApi, onRunBenchmark }: AppProps) {
           onClose={() => setSidebarOpen(false)}
           onDocumentDetails={openDocumentDetails}
           onDiagnostics={openDiagnostics}
-          onRunBenchmark={onRunBenchmark}
+          onRunBenchmark={runBenchmark}
         />
         {drawerOpen ? (
           <button
@@ -153,8 +194,16 @@ export function App({ api = defaultApi, onRunBenchmark }: AppProps) {
       <OverlayController
         overlay={overlay}
         workspace={workspace}
-        onClose={() => setOverlay(null)}
+        benchmark={benchmark}
+        onClose={closeOverlay}
         onRequestDelete={(document) => setOverlay({ kind: "delete-confirm", document })}
+        onCaseRefChange={(caseRef) => {
+          setOverlay((current) => (
+            current?.kind === "benchmark-results"
+              ? { kind: "benchmark-results", caseRef }
+              : current
+          ));
+        }}
       />
     </div>
   );

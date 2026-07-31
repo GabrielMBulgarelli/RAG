@@ -30,6 +30,7 @@ export type WorkspaceOperationKind =
   | OperationKind
   | "clear_conversation"
   | "export_conversation";
+export type ExternalWorkspaceBusyKind = "benchmark";
 
 interface OperationToken {
   id: symbol;
@@ -60,7 +61,10 @@ function downloadFile({ blob, filename }: DownloadFile): void {
   URL.revokeObjectURL(url);
 }
 
-export function useWorkspace(api: WorkspaceApi) {
+export function useWorkspace(
+  api: WorkspaceApi,
+  externalBusyKind: ExternalWorkspaceBusyKind | null = null,
+) {
   const [runtime, setRuntime] = useState<RuntimeSnapshot | null>(null);
   const [documentList, setDocumentList] = useState<DocumentList | null>(null);
   const [diagnostics, setDiagnostics] = useState<DiagnosticsSnapshot | null>(null);
@@ -80,6 +84,8 @@ export function useWorkspace(api: WorkspaceApi) {
   const operationRef = useRef<OperationToken | null>(null);
   const diagnosticsRef = useRef<DiagnosticsToken | null>(null);
   const serverOperationRef = useRef<ActiveOperation | null>(null);
+  const externalBusyRef = useRef(externalBusyKind);
+  externalBusyRef.current = externalBusyKind;
 
   if (apiRef.current !== api) {
     apiRef.current = api;
@@ -166,7 +172,12 @@ export function useWorkspace(api: WorkspaceApi) {
   }, [api, isCurrent]);
 
   const beginOperation = useCallback((kind: WorkspaceOperationKind): OperationToken | null => {
-    if (!mountedRef.current || operationRef.current || serverOperationRef.current) {
+    if (
+      !mountedRef.current
+      || operationRef.current
+      || serverOperationRef.current
+      || externalBusyRef.current
+    ) {
       return null;
     }
     const token = {
@@ -436,7 +447,7 @@ export function useWorkspace(api: WorkspaceApi) {
   const selectedExchange = exchanges.find(
     (exchange) => exchange.id === selectedExchangeId,
   ) ?? [...exchanges].reverse().find((exchange) => exchange.response) ?? null;
-  const busyKind = localOperation ?? serverOperation?.kind ?? null;
+  const busyKind = externalBusyKind ?? localOperation ?? serverOperation?.kind ?? null;
 
   return {
     runtime,

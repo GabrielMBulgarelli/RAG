@@ -54,7 +54,7 @@ from modules.evaluation_models import (
     Split,
     SystemName,
     evaluation_result_kind,
-    is_standard_benchmark_summary,
+    is_complete_full_rag_benchmark_artifact,
 )
 from modules.evaluation_reporting import _git_commit, write_experiment
 from modules.models import RetrievalHit
@@ -82,7 +82,7 @@ __all__ = [
     "failure_labels",
     "filter_cases",
     "gold_citation_coverage",
-    "is_standard_benchmark_summary",
+    "is_complete_full_rag_benchmark_artifact",
     "mrr_at_k",
     "ndcg_at_k",
     "normalized_exact_match",

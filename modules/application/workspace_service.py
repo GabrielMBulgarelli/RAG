@@ -45,7 +45,7 @@ from modules.application.models import (
 )
 from modules.application.operation_coordinator import WorkspaceOperationCoordinator
 from modules.config import PROJECT_ROOT, Settings, config
-from modules.evaluation_models import is_standard_benchmark_summary
+from modules.evaluation_models import is_complete_full_rag_benchmark_artifact
 from modules.models import IngestionManifest, ManifestDocument, ReconciliationResult
 from modules.rag_graph import RAGGraph, make_chat_model
 from modules.vector_db import VectorDBManager
@@ -320,7 +320,7 @@ class WorkspaceService:
             try:
                 summary = json.loads(summary_path.read_text(encoding="utf-8"))
                 if (
-                    is_standard_benchmark_summary(summary)
+                    is_complete_full_rag_benchmark_artifact(summary)
                     and (summary_path.parent / "cases.jsonl").is_file()
                 ):
                     return True

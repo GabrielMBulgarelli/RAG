@@ -44,10 +44,8 @@ FAILURE_ORDER = (
 MULTIHOP_ROOT = PROJECT_ROOT / "evals" / "multihop"
 
 
-def is_standard_benchmark_summary(summary: dict[str, Any]) -> bool:
-    """Return whether a schema-v3 result satisfies the canonical benchmark contract."""
-    if summary.get("schema_version") != 3:
-        return False
+def is_complete_full_rag_benchmark_artifact(summary: dict[str, Any]) -> bool:
+    """Return whether an artifact contains the complete Full RAG Benchmark."""
     configuration = summary.get("configuration")
     if not isinstance(configuration, dict):
         return False
@@ -63,8 +61,12 @@ def is_standard_benchmark_summary(summary: dict[str, Any]) -> bool:
 
 
 def evaluation_result_kind(summary: dict[str, Any]) -> EvaluationResultKind:
-    """Classify compatible results without presenting partial runs as benchmarks."""
-    return "standard_benchmark" if is_standard_benchmark_summary(summary) else "custom_evaluation"
+    """Classify complete Full RAG Benchmark artifacts and custom evaluations."""
+    return (
+        "standard_benchmark"
+        if is_complete_full_rag_benchmark_artifact(summary)
+        else "custom_evaluation"
+    )
 
 
 class BenchmarkEvidence(BaseModel):

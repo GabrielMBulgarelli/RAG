@@ -9,6 +9,7 @@ from starlette.responses import Response
 
 from modules.application.models import (
     BenchmarkCaseDetail,
+    BenchmarkCaseSummary,
     BenchmarkRun,
     BenchmarkStartResponse,
     ConversationExportRequest,
@@ -57,6 +58,8 @@ class BenchmarkManager(Protocol):
     async def latest_benchmark(self) -> BenchmarkRun: ...
 
     async def get_benchmark(self, run_id: UUID) -> BenchmarkRun: ...
+
+    async def list_cases(self, run_id: UUID) -> list[BenchmarkCaseSummary]: ...
 
     async def get_case(
         self,

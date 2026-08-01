@@ -27,12 +27,14 @@ interface BenchmarkResultsProps {
   onClose: () => void;
 }
 
-type TabId = "summary" | "retrieval" | "grounding" | "failures";
+type TabId = "summary" | "retrieval" | "grounding" | "execution" | "cases" | "failures";
 
 const TABS: Array<{ id: TabId; label: string }> = [
   { id: "summary", label: "Summary" },
   { id: "retrieval", label: "Retrieval" },
   { id: "grounding", label: "Grounding" },
+  { id: "execution", label: "Execution" },
+  { id: "cases", label: "Cases" },
   { id: "failures", label: "Failures" },
 ];
 
@@ -43,15 +45,10 @@ const SUMMARY_METRICS = new Set([
   "answer_token_f1",
   "citation_precision",
   "abstention_accuracy",
+  "p95_latency_seconds",
+  "runtime_error_count",
+  "runtime_error_rate",
 ]);
-const RETRIEVAL_PATTERN = /retriev|recall|mrr|ndcg|dense|bm25|hybrid/i;
-const GROUNDING_PATTERN = /answer|citation|evidence|abstention|conflict|ground|end.?to.?end/i;
-
-function isSummaryMetric(name: string): boolean {
-  return SUMMARY_METRICS.has(name)
-    || (/latency/i.test(name) && /p95/i.test(name))
-    || (/runtime/i.test(name) && /(failure|count)/i.test(name));
-}
 
 function systemLabel(run: BenchmarkRun, systemId: string): string {
   return run.metadata.systems.find((system) => system.id === systemId)?.label ?? systemId;
@@ -110,46 +107,51 @@ function MetricTable({
   sections: BenchmarkSection[];
   empty: string;
 }) {
-  const rows = sections.flatMap((section) => (
-    section.metrics.map((metric) => ({ section, metric }))
-  ));
-  if (rows.length === 0) {
+  const populated = sections.filter((section) => section.metrics.length > 0);
+  if (populated.length === 0) {
     return <p className="benchmark-empty">{empty}</p>;
   }
   return (
-    <div className="benchmark-matrix" tabIndex={0} aria-label="Benchmark metric comparison">
-      <table>
-        <thead>
-          <tr>
-            <th scope="col">Metric</th>
-            {run.metadata.systems.map((system) => (
-              <th key={system.id} scope="col">{system.label}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map(({ section, metric }) => (
-            <tr key={`${section.id}:${metric.name}`}>
-              <th scope="row">
-                <span>{metric.label}</span>
-                <small>{section.title}</small>
-              </th>
-              {run.metadata.systems.map((system) => (
-                <td key={system.id}>
-                  <MetricValue
-                    metric={metric}
-                    observation={metric.observations.find(
-                      (observation) => observation.system === system.id,
-                    )}
-                  />
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <>
+      {populated.map((section) => {
+        const systems = section.system_ids.map((systemId) => ({
+          id: systemId,
+          label: systemLabel(run, systemId),
+        }));
+        return (
+          <div
+            className="benchmark-matrix"
+            tabIndex={0}
+            aria-label={`${section.title} metric comparison`}
+            key={section.id}
+          >
+            <table>
+              <thead><tr><th scope="col">Metric</th>{systems.map((system) => (
+                <th key={system.id} scope="col">{system.label}</th>
+              ))}</tr></thead>
+              <tbody>{section.metrics.map((metric) => (
+                <tr key={`${section.id}:${metric.name}`}>
+                  <th scope="row"><span>{metric.label}</span><small>{section.title}</small></th>
+                  {systems.map((system) => (
+                    <td key={system.id}><MetricValue
+                      metric={metric}
+                      observation={metric.observations.find(
+                        (observation) => observation.system === system.id,
+                      )}
+                    /></td>
+                  ))}
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        );
+      })}
+    </>
   );
+}
+
+function outcomeLabel(outcome: "successful" | "expectation_failure" | "runtime_failure") {
+  return outcome.replace("_", " ").replace(/^./, (letter) => letter.toUpperCase());
 }
 
 function jsonText(value: unknown): string {
@@ -333,28 +335,15 @@ export function BenchmarkResults({
 
   const summarySections = run.sections.map((section) => ({
     ...section,
-    metrics: section.metrics.filter((metric) => isSummaryMetric(metric.name)),
+    metrics: section.metrics.filter((metric) => SUMMARY_METRICS.has(metric.name)),
   }));
-  const retrievalSections = run.sections.filter((section) => (
-    RETRIEVAL_PATTERN.test(`${section.id} ${section.title}`)
-  )).map((section) => ({
-    ...section,
-    metrics: section.metrics.filter((metric) => (
-      RETRIEVAL_PATTERN.test(`${metric.name} ${metric.label}`)
-    )),
-  }));
-  const groundingSections = run.sections.filter((section) => (
-    GROUNDING_PATTERN.test(`${section.id} ${section.title}`)
-  )).map((section) => ({
-    ...section,
-    metrics: section.metrics.filter((metric) => (
-      GROUNDING_PATTERN.test(`${metric.name} ${metric.label}`)
-      || /latency/i.test(metric.name)
-    )),
-  }));
+  const sectionsById = (id: string) => run.sections.filter((section) => section.id === id);
 
   const selectTab = (tab: TabId) => {
     setActiveTab(tab);
+    if (tab === "cases") {
+      void benchmark.loadCases(run.run_id);
+    }
     document.getElementById(`${idPrefix}-tab-${tab}`)?.focus();
   };
   const onTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
@@ -407,7 +396,7 @@ export function BenchmarkResults({
             aria-selected={activeTab === tab.id}
             aria-controls={`${idPrefix}-panel-${tab.id}`}
             tabIndex={activeTab === tab.id ? 0 : -1}
-            onClick={() => setActiveTab(tab.id)}
+            onClick={() => selectTab(tab.id)}
             onKeyDown={onTabKeyDown}
           >
             {tab.label}
@@ -438,7 +427,7 @@ export function BenchmarkResults({
         >
           <MetricTable
             run={run}
-            sections={retrievalSections}
+            sections={sectionsById("retrieval")}
             empty="No retrieval metrics were reported."
           />
         </section>
@@ -451,9 +440,55 @@ export function BenchmarkResults({
         >
           <MetricTable
             run={run}
-            sections={groundingSections}
+            sections={sectionsById("grounding")}
             empty="No grounding metrics were reported."
           />
+        </section>
+        <section
+          id={`${idPrefix}-panel-execution`}
+          role="tabpanel"
+          aria-labelledby={`${idPrefix}-tab-execution`}
+          aria-label="Execution"
+          hidden={activeTab !== "execution"}
+        >
+          <MetricTable
+            run={run}
+            sections={sectionsById("execution")}
+            empty="No execution metrics were reported."
+          />
+        </section>
+        <section
+          id={`${idPrefix}-panel-cases`}
+          role="tabpanel"
+          aria-labelledby={`${idPrefix}-tab-cases`}
+          aria-label="Cases"
+          hidden={activeTab !== "cases"}
+        >
+          {benchmark.casesLoading ? <p role="status">Loading cases…</p>
+            : benchmark.casesError ? <p className="inline-error" role="alert">{benchmark.casesError}</p>
+              : benchmark.cases.length ? (
+                <div className="benchmark-matrix"><table>
+                  <thead><tr><th>Case</th><th>System</th><th>Question</th><th>Outcome</th><th>Inspect</th></tr></thead>
+                  <tbody>{benchmark.cases.map((item) => (
+                    <tr key={`${item.case_id}:${item.system}`}>
+                      <td>{item.case_id}</td>
+                      <td>{systemLabel(run, item.system)}</td>
+                      <td>{item.question}</td>
+                      <td><strong>{outcomeLabel(item.outcome)}</strong>{item.failure_classification
+                        ? <small>{item.failure_classification}</small> : null}</td>
+                      <td><button
+                        className="button button--quiet"
+                        type="button"
+                        aria-label={`Inspect ${item.case_id} for ${systemLabel(run, item.system)}`}
+                        onClick={(event) => {
+                          lastInspectRef.current = event.currentTarget;
+                          onCaseRefChange({ caseId: item.case_id, systemId: item.system });
+                        }}
+                      >Inspect</button></td>
+                    </tr>
+                  ))}</tbody>
+                </table></div>
+              ) : <p className="benchmark-empty">No benchmark cases were stored.</p>}
         </section>
         <section
           id={`${idPrefix}-panel-failures`}

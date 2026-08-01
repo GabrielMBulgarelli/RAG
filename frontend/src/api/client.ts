@@ -1,6 +1,7 @@
 import type {
   ApiProblem,
   BenchmarkCaseDetail,
+  BenchmarkCaseSummary,
   BenchmarkEvent,
   BenchmarkEventType,
   BenchmarkRun,
@@ -25,6 +26,7 @@ export interface WorkspaceApi {
   startBenchmark(): Promise<BenchmarkStartResponse>;
   getBenchmark(runId: string): Promise<BenchmarkRun>;
   getLatestBenchmark(): Promise<BenchmarkRun>;
+  getBenchmarkCases(runId: string): Promise<BenchmarkCaseSummary[]>;
   getBenchmarkCase(
     runId: string,
     caseId: string,
@@ -319,6 +321,9 @@ export function createApiClient(baseUrl = ""): WorkspaceApi {
       `/api/benchmarks/${encodeURIComponent(runId)}`,
     ),
     getLatestBenchmark: () => json<BenchmarkRun>("/api/benchmarks/latest"),
+    getBenchmarkCases: (runId) => json<BenchmarkCaseSummary[]>(
+      `/api/benchmarks/${encodeURIComponent(runId)}/cases`,
+    ),
     getBenchmarkCase: (runId, caseId, systemId) => json<BenchmarkCaseDetail>(
       `/api/benchmarks/${encodeURIComponent(runId)}`
       + `/cases/${encodeURIComponent(caseId)}/systems/${encodeURIComponent(systemId)}`,

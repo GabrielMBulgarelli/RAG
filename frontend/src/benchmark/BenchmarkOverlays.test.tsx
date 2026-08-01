@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { BenchmarkRun } from "../api/types";
 import {
   benchmarkCase,
+  benchmarkCases,
   benchmarkRun,
   benchmarkRunId,
 } from "../test/fixtures";
@@ -29,6 +30,9 @@ function controller(
     downloadError: null,
     downloadInFlight: false,
     caseDetail: null,
+    cases: benchmarkCases,
+    casesLoading: false,
+    casesError: null,
     caseLoading: false,
     caseError: null,
     busy: false,
@@ -36,6 +40,7 @@ function controller(
     retryConnection: vi.fn(),
     cancel: vi.fn().mockResolvedValue(true),
     openCase: vi.fn().mockResolvedValue(true),
+    loadCases: vi.fn().mockResolvedValue(true),
     closeCase: vi.fn(),
     download: vi.fn().mockResolvedValue(true),
     ...overrides,
@@ -111,7 +116,8 @@ describe("benchmark overlays", () => {
     expect(screen.getByRole("button", { name: "Close benchmark progress" })).toBeEnabled();
   });
 
-  it("renders seven systems in schema order and preserves metric status semantics", () => {
+  it("renders six result tabs and respects each section's system IDs", async () => {
+    const user = userEvent.setup();
     render(
       <BenchmarkResults
         benchmark={controller()}
@@ -124,14 +130,24 @@ describe("benchmark overlays", () => {
     const dialog = screen.getByRole("dialog", { name: "RAG Benchmark" });
     expect(within(dialog).getByText("MultiHopRAG")).toBeVisible();
     expect(within(dialog).getByText("development")).toBeVisible();
-    const headers = within(dialog).getAllByRole("columnheader").map((cell) => cell.textContent);
-    expect(headers.slice(1)).toEqual([
-      "Dense", "BM25", "Hybrid", "Dense RAG", "BM25 RAG", "Hybrid RAG", "Full RAG",
+    expect(within(dialog).getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      "Summary", "Retrieval", "Grounding", "Execution", "Cases", "Failures",
     ]);
     const summary = within(dialog).getByRole("tabpanel", { name: "Summary" });
     expect(within(summary).getAllByText("0", { selector: ".metric-value" })[0]).toBeVisible();
     expect(within(summary).getAllByText("Not scored for this fixture.")[0]).toBeVisible();
     expect(within(summary).getAllByText("No eligible cases")[0]).toBeVisible();
+    expect(within(summary).getByText("Runtime error count")).toBeVisible();
+    expect(within(summary).getByText("Runtime error rate")).toBeVisible();
+
+    await user.click(screen.getByRole("tab", { name: "Retrieval" }));
+    const retrieval = screen.getByRole("tabpanel", { name: "Retrieval" });
+    expect(within(retrieval).getAllByRole("columnheader").map((cell) => cell.textContent))
+      .toEqual(["Metric", "Dense", "BM25", "Hybrid"]);
+    await user.click(screen.getByRole("tab", { name: "Grounding" }));
+    const grounding = screen.getByRole("tabpanel", { name: "Grounding" });
+    expect(within(grounding).getAllByRole("columnheader").map((cell) => cell.textContent))
+      .toEqual(["Metric", "Dense RAG", "BM25 RAG", "Hybrid RAG", "Full RAG"]);
   });
 
   it("implements owned keyboard tabs and schema-driven section filtering", async () => {
@@ -159,6 +175,44 @@ describe("benchmark overlays", () => {
     const grounding = screen.getByRole("tabpanel", { name: "Grounding" });
     expect(grounding).toHaveTextContent("Answer token F1");
     expect(grounding).not.toHaveTextContent("Recall at 5");
+    await user.click(screen.getByRole("tab", { name: "Execution" }));
+    expect(screen.getByRole("tabpanel", { name: "Execution" })).toHaveTextContent("P95 latency");
+  });
+
+  it("lists successful and failed cases and opens either in the existing drawer", async () => {
+    const user = userEvent.setup();
+    const openCase = vi.fn().mockResolvedValue(true);
+    const loadCases = vi.fn().mockResolvedValue(true);
+    const onCaseRefChange = vi.fn();
+    render(
+      <BenchmarkResults
+        benchmark={controller(benchmarkRun, { openCase, loadCases })}
+        caseRef={undefined}
+        onCaseRefChange={onCaseRefChange}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("tab", { name: "Cases" }));
+    expect(loadCases).toHaveBeenCalledWith(benchmarkRunId);
+    const cases = screen.getByRole("tabpanel", { name: "Cases" });
+    expect(within(cases).getByText("Successful")).toBeVisible();
+    expect(within(cases).getByText("Expectation failure")).toBeVisible();
+    expect(within(cases).getByText("Runtime failure")).toBeVisible();
+    await user.click(within(cases).getByRole("button", {
+      name: "Inspect case-success for Dense",
+    }));
+    expect(onCaseRefChange).toHaveBeenLastCalledWith({
+      caseId: "case-success",
+      systemId: "dense",
+    });
+    await user.click(within(cases).getByRole("button", {
+      name: "Inspect case-runtime for Full RAG",
+    }));
+    expect(onCaseRefChange).toHaveBeenLastCalledWith({
+      caseId: "case-runtime",
+      systemId: "full-rag",
+    });
   });
 
   it("derives latency units and preserves readable ratio precision", () => {
@@ -167,22 +221,19 @@ describe("benchmark overlays", () => {
       sections: [{
         ...benchmarkRun.sections[1],
         metrics: [{
-          name: "latency_p95_seconds",
-          label: "Latency seconds",
-          observations: [{
-            system: "full-rag", value: 1.25, status: "measured", sample_count: 1, note: null,
-          }],
-        }, {
-          name: "latency_p95",
-          label: "Latency unspecified",
-          observations: [{
-            system: "full-rag", value: 1.25, status: "measured", sample_count: 1, note: null,
-          }],
-        }, {
           name: "answer_token_f1",
           label: "Answer token F1",
           observations: [{
             system: "full-rag", value: 0.712345, status: "measured", sample_count: 1, note: null,
+          }],
+        }],
+      }, {
+        ...benchmarkRun.sections[2],
+        metrics: [{
+          name: "p95_latency_seconds",
+          label: "P95 latency",
+          observations: [{
+            system: "full-rag", value: 1.25, status: "measured", sample_count: 1, note: null,
           }],
         }],
       }],
@@ -198,7 +249,6 @@ describe("benchmark overlays", () => {
 
     const summary = screen.getByRole("tabpanel", { name: "Summary" });
     expect(within(summary).getByText("1.25 s")).toBeVisible();
-    expect(within(summary).getAllByText("1.25", { selector: ".metric-value" })).toHaveLength(1);
     expect(within(summary).queryByText("1.25 ms")).not.toBeInTheDocument();
     expect(within(summary).getByText("0.712345")).toBeVisible();
   });

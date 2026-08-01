@@ -219,6 +219,7 @@ describe("workspace API client", () => {
       .mockResolvedValueOnce(Response.json(start, { status: 202 }))
       .mockResolvedValueOnce(Response.json(run))
       .mockResolvedValueOnce(Response.json(run))
+      .mockResolvedValueOnce(Response.json([]))
       .mockResolvedValueOnce(Response.json({
         case_id: "case / 1",
         system: "dense + rerank",
@@ -249,6 +250,7 @@ describe("workspace API client", () => {
     await api.startBenchmark();
     await api.getBenchmark(runId);
     await api.getLatestBenchmark();
+    await api.getBenchmarkCases(runId);
     await api.getBenchmarkCase(runId, "case / 1", "dense + rerank");
     await api.cancelBenchmark(runId);
     const download = await api.downloadBenchmark(runId);
@@ -258,17 +260,18 @@ describe("workspace API client", () => {
       "/api/benchmarks",
       `/api/benchmarks/${runId}`,
       "/api/benchmarks/latest",
+      `/api/benchmarks/${runId}/cases`,
       `/api/benchmarks/${runId}/cases/case%20%2F%201/systems/dense%20%2B%20rerank`,
       `/api/benchmarks/${runId}/cancel`,
       `/api/benchmarks/${runId}/download`,
       `/api/benchmarks/${runId}/download`,
     ]);
     expect(fetchMock.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ method: "POST" }));
-    expect(fetchMock.mock.calls[4]?.[1]).toEqual(expect.objectContaining({ method: "POST" }));
+    expect(fetchMock.mock.calls[5]?.[1]).toEqual(expect.objectContaining({ method: "POST" }));
     expect(download.filename).toBe("benchmark-safe.json");
     expect(await download.blob.text()).toBe('{"run_id":"download"}');
     expect(fallbackDownload.filename).toBe("benchmark.zip");
-    expect(fetchMock.mock.calls[5]?.[1]).toEqual(expect.objectContaining({
+    expect(fetchMock.mock.calls[6]?.[1]).toEqual(expect.objectContaining({
       headers: { Accept: "application/zip" },
     }));
   });

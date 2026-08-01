@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiClientError, type DownloadFile, type WorkspaceApi } from "../api/client";
 import type {
   BenchmarkCaseDetail,
+  BenchmarkCaseSummary,
   BenchmarkEvent,
   BenchmarkRun,
 } from "../api/types";
@@ -69,6 +70,9 @@ export function useBenchmark(api: WorkspaceApi) {
   const [cancelError, setCancelError] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const [caseDetail, setCaseDetail] = useState<BenchmarkCaseDetail | null>(null);
+  const [cases, setCases] = useState<BenchmarkCaseSummary[]>([]);
+  const [casesLoading, setCasesLoading] = useState(false);
+  const [casesError, setCasesError] = useState<string | null>(null);
   const [caseLoading, setCaseLoading] = useState(false);
   const [caseError, setCaseError] = useState<string | null>(null);
   const [latestLoading, setLatestLoading] = useState(false);
@@ -85,6 +89,7 @@ export function useBenchmark(api: WorkspaceApi) {
   const lastEventIdRef = useRef(0);
   const refreshRef = useRef<RefreshState | null>(null);
   const caseTokenRef = useRef<symbol | null>(null);
+  const casesTokenRef = useRef<symbol | null>(null);
   const downloadTokenRef = useRef<symbol | null>(null);
   const downloadInFlightRef = useRef(false);
   const latestTokenRef = useRef<symbol | null>(null);
@@ -225,6 +230,7 @@ export function useBenchmark(api: WorkspaceApi) {
       mountedRef.current = false;
       streamAbortRef.current?.abort();
       caseTokenRef.current = null;
+      casesTokenRef.current = null;
       downloadTokenRef.current = null;
       downloadInFlightRef.current = false;
       latestTokenRef.current = null;
@@ -243,6 +249,7 @@ export function useBenchmark(api: WorkspaceApi) {
     lastEventIdRef.current = 0;
     runRef.current = null;
     caseTokenRef.current = null;
+    casesTokenRef.current = null;
     downloadTokenRef.current = null;
     downloadInFlightRef.current = false;
     latestTokenRef.current = null;
@@ -257,6 +264,9 @@ export function useBenchmark(api: WorkspaceApi) {
     setCancelError(null);
     setDownloadError(null);
     setCaseDetail(null);
+    setCases([]);
+    setCasesLoading(false);
+    setCasesError(null);
     setCaseLoading(false);
     setCaseError(null);
     setLatestLoading(false);
@@ -284,6 +294,10 @@ export function useBenchmark(api: WorkspaceApi) {
     tokenRef.current = null;
     refreshRef.current = null;
     caseTokenRef.current = null;
+    casesTokenRef.current = null;
+    setCases([]);
+    setCasesLoading(false);
+    setCasesError(null);
     setCaseDetail(null);
     setCaseLoading(false);
     setCaseError(null);
@@ -367,6 +381,10 @@ export function useBenchmark(api: WorkspaceApi) {
     tokenRef.current = null;
     refreshRef.current = null;
     caseTokenRef.current = null;
+    casesTokenRef.current = null;
+    setCases([]);
+    setCasesLoading(false);
+    setCasesError(null);
     setCaseDetail(null);
     setCaseLoading(false);
     setCaseError(null);
@@ -484,6 +502,47 @@ export function useBenchmark(api: WorkspaceApi) {
     }
   }, [api]);
 
+  const loadCases = useCallback(async (runId: string): Promise<boolean> => {
+    const token = Symbol(`cases:${runId}`);
+    const generation = generationRef.current;
+    const requestApi = api;
+    casesTokenRef.current = token;
+    setCasesError(null);
+    setCasesLoading(true);
+    try {
+      const summaries = await requestApi.getBenchmarkCases(runId);
+      if (
+        !mountedRef.current
+        || generationRef.current !== generation
+        || apiRef.current !== requestApi
+        || casesTokenRef.current !== token
+      ) {
+        return false;
+      }
+      setCases(summaries);
+      return true;
+    } catch (error) {
+      if (
+        mountedRef.current
+        && generationRef.current === generation
+        && apiRef.current === requestApi
+        && casesTokenRef.current === token
+      ) {
+        setCasesError(errorMessage(error));
+      }
+      return false;
+    } finally {
+      if (
+        mountedRef.current
+        && generationRef.current === generation
+        && apiRef.current === requestApi
+        && casesTokenRef.current === token
+      ) {
+        setCasesLoading(false);
+      }
+    }
+  }, [api]);
+
   const closeCase = useCallback(() => {
     caseTokenRef.current = null;
     setCaseDetail(null);
@@ -555,6 +614,9 @@ export function useBenchmark(api: WorkspaceApi) {
     downloadError,
     downloadInFlight,
     caseDetail,
+    cases,
+    casesLoading,
+    casesError,
     caseLoading,
     caseError,
     latestLoading,
@@ -565,6 +627,7 @@ export function useBenchmark(api: WorkspaceApi) {
     retryConnection,
     cancel,
     openCase,
+    loadCases,
     closeCase,
     download,
   };

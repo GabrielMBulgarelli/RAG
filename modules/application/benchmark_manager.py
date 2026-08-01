@@ -26,6 +26,8 @@ from modules.application.errors import (
 from modules.application.models import (
     ApiProblem,
     BenchmarkCaseDetail,
+    BenchmarkCaseOutcome,
+    BenchmarkCaseSummary,
     BenchmarkEvent,
     BenchmarkEventType,
     BenchmarkFailure,
@@ -893,6 +895,45 @@ class BenchmarkManager:
             return found
 
         return (await asyncio.to_thread(load)).model_copy(deep=True)
+
+    async def list_cases(self, run_id: UUID) -> list[BenchmarkCaseSummary]:
+        def load() -> list[BenchmarkCaseSummary]:
+            run = self._read_run_snapshot(run_id)
+            self._read_events(run_id)
+            cases = self._read_cases(run_id)
+            self._validate_summary(run, cases)
+            summaries: list[BenchmarkCaseSummary] = []
+            for case in cases:
+                raw_failure_labels = (
+                    case.sanitized_raw_result.get("failure_labels", [])
+                    if case.sanitized_raw_result
+                    else []
+                )
+                raw_labels = raw_failure_labels if isinstance(raw_failure_labels, list) else []
+                labels = {
+                    label for label in raw_labels if isinstance(label, str)
+                } or {
+                    label.strip()
+                    for label in (case.failure_classification or "").split(",")
+                    if label.strip()
+                }
+                outcome = (
+                    BenchmarkCaseOutcome.RUNTIME_FAILURE
+                    if "runtime_error" in labels
+                    else BenchmarkCaseOutcome.EXPECTATION_FAILURE
+                    if case.failure_classification
+                    else BenchmarkCaseOutcome.SUCCESSFUL
+                )
+                summaries.append(BenchmarkCaseSummary(
+                    case_id=case.case_id,
+                    system=case.system,
+                    question=case.question,
+                    outcome=outcome,
+                    failure_classification=case.failure_classification,
+                ))
+            return summaries
+
+        return await asyncio.to_thread(load)
 
     async def download_benchmark(self, run_id: UUID) -> Response:
         await asyncio.to_thread(self._read_run, run_id)

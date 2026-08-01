@@ -267,6 +267,20 @@ class BenchmarkCaseMetricObservation(BenchmarkMetricObservation):
     label: str
 
 
+class BenchmarkCaseOutcome(str, Enum):
+    SUCCESSFUL = "successful"
+    EXPECTATION_FAILURE = "expectation_failure"
+    RUNTIME_FAILURE = "runtime_failure"
+
+
+class BenchmarkCaseSummary(BaseModel):
+    case_id: str
+    system: str
+    question: str
+    outcome: BenchmarkCaseOutcome
+    failure_classification: str | None
+
+
 class BenchmarkMetric(BaseModel):
     name: str
     label: str

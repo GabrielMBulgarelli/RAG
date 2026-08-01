@@ -297,3 +297,16 @@ export interface BenchmarkCaseDetail {
   public_trace: TraceEvent[];
   sanitized_raw_result: Record<string, JsonValue> | null;
 }
+
+export type BenchmarkCaseOutcome =
+  | "successful"
+  | "expectation_failure"
+  | "runtime_failure";
+
+export interface BenchmarkCaseSummary {
+  case_id: string;
+  system: string;
+  question: string;
+  outcome: BenchmarkCaseOutcome;
+  failure_classification: string | null;
+}

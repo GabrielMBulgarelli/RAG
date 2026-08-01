@@ -14,6 +14,7 @@ from modules.api.dependencies import (
 )
 from modules.application.models import (
     BenchmarkCaseDetail,
+    BenchmarkCaseSummary,
     BenchmarkRun,
     BenchmarkStartResponse,
     ConversationExportRequest,
@@ -119,6 +120,14 @@ async def latest_benchmark(benchmarks: BenchmarkDependency) -> BenchmarkRun:
 @router.get("/benchmarks/{run_id}", response_model=BenchmarkRun)
 async def get_benchmark(run_id: UUID, benchmarks: BenchmarkDependency) -> BenchmarkRun:
     return await benchmarks.get_benchmark(run_id)
+
+
+@router.get("/benchmarks/{run_id}/cases", response_model=list[BenchmarkCaseSummary])
+async def list_benchmark_cases(
+    run_id: UUID,
+    benchmarks: BenchmarkDependency,
+) -> list[BenchmarkCaseSummary]:
+    return await benchmarks.list_cases(run_id)
 
 
 @router.get(

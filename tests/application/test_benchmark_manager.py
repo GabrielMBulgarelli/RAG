@@ -5,6 +5,7 @@ import threading
 import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 from uuid import UUID, uuid4
 
 import pytest
@@ -18,6 +19,7 @@ from modules.application.benchmark_manager import (
 from modules.application.errors import ApplicationError, BenchmarkNotFoundError
 from modules.application.models import (
     BenchmarkCaseDetail,
+    BenchmarkCaseOutcome,
     BenchmarkEvent,
     BenchmarkEventType,
     BenchmarkMetadata,
@@ -694,6 +696,96 @@ def test_case_and_run_snapshots_are_durable_before_broadcast_and_last_case_wins(
 
         await response_text(stream)
         await manager.close()
+
+    asyncio.run(scenario())
+
+
+def test_case_summaries_include_success_expectation_and_runtime_failures(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        settings = make_settings(tmp_path)
+        run = persisted_run(
+            settings,
+            status=BenchmarkRunStatus.COMPLETED,
+            completed_at=datetime.now(timezone.utc),
+        )
+        cases = [
+            BenchmarkCaseDetail(
+                case_id="success",
+                system="dense",
+                question="Successful question",
+                expected_answer=None,
+                generated_answer="Answer",
+                expected_evidence=[],
+                retrieved_evidence=[],
+                metric_observations=[],
+                failure_classification=None,
+                public_trace=[],
+                sanitized_raw_result=None,
+            ),
+            BenchmarkCaseDetail(
+                case_id="expectation",
+                system="full-rag",
+                question="Expectation question",
+                expected_answer="Expected",
+                generated_answer="Different",
+                expected_evidence=[],
+                retrieved_evidence=[],
+                metric_observations=[],
+                failure_classification="citation_mismatch",
+                public_trace=[],
+                sanitized_raw_result={"failure_labels": ["citation_mismatch"]},
+            ),
+            BenchmarkCaseDetail(
+                case_id="runtime",
+                system="full-rag",
+                question="Runtime question",
+                expected_answer=None,
+                generated_answer=None,
+                expected_evidence=[],
+                retrieved_evidence=[],
+                metric_observations=[],
+                failure_classification="runtime_error, non_termination",
+                public_trace=[],
+                sanitized_raw_result={
+                    "failure_labels": ["runtime_error", "non_termination"]
+                },
+            ),
+        ]
+        cases_path = settings.benchmark_results_dir / str(run.run_id) / "cases.jsonl"
+        cases_path.write_text(
+            "".join(case.model_dump_json() + "\n" for case in cases),
+            encoding="utf-8",
+        )
+        manager = BenchmarkManager(
+            settings=settings,
+            coordinator=WorkspaceOperationCoordinator(),
+            executor=IdleExecutor(),
+        )
+        manager._write_summary(run)
+        await manager.start()
+
+        with patch.object(
+            manager,
+            "_read_cases",
+            wraps=manager._read_cases,
+        ) as read_cases:
+            summaries = await manager.list_cases(run.run_id)
+
+        assert read_cases.call_count == 1
+
+        assert [(item.case_id, item.system, item.outcome) for item in summaries] == [
+            ("success", "dense", BenchmarkCaseOutcome.SUCCESSFUL),
+            ("expectation", "full-rag", BenchmarkCaseOutcome.EXPECTATION_FAILURE),
+            ("runtime", "full-rag", BenchmarkCaseOutcome.RUNTIME_FAILURE),
+        ]
+        assert [item.question for item in summaries] == [
+            "Successful question",
+            "Expectation question",
+            "Runtime question",
+        ]
+        assert summaries[2].failure_classification == "runtime_error, non_termination"
 
     asyncio.run(scenario())
 

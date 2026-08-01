@@ -3,6 +3,7 @@ import { vi } from "vitest";
 import type { WorkspaceApi } from "../api/client";
 import type {
   BenchmarkCaseDetail,
+  BenchmarkCaseSummary,
   BenchmarkRun,
   BenchmarkStartResponse,
   DiagnosticsSnapshot,
@@ -99,16 +100,24 @@ export const benchmarkRun: BenchmarkRun = {
         sample_count: index < 3 ? 0 : 20,
         note: index < 3 ? "Retrieval-only system." : null,
       })),
+    }],
+  }, {
+    id: "execution",
+    title: "Execution",
+    system_ids: ["full-rag"],
+    detail: "Runtime behavior.",
+    metrics: [{
+      name: "p95_latency_seconds",
+      label: "P95 latency",
+      observations: [{ system: "full-rag", value: 1.25, status: "measured", sample_count: 20, note: null }],
     }, {
-      name: "latency_p95_ms",
-      label: "Latency P95",
-      observations: [{
-        system: "full-rag",
-        value: 1250.25,
-        status: "measured",
-        sample_count: 20,
-        note: null,
-      }],
+      name: "runtime_error_count",
+      label: "Runtime error count",
+      observations: [{ system: "full-rag", value: 2, status: "measured", sample_count: 20, note: null }],
+    }, {
+      name: "runtime_error_rate",
+      label: "Runtime error rate",
+      observations: [{ system: "full-rag", value: 0.1, status: "measured", sample_count: 20, note: null }],
     }],
   }],
   failures: [{
@@ -119,6 +128,26 @@ export const benchmarkRun: BenchmarkRun = {
   }],
   error: null,
 };
+
+export const benchmarkCases: BenchmarkCaseSummary[] = [{
+  case_id: "case-success",
+  system: "dense",
+  question: "Which document matched?",
+  outcome: "successful",
+  failure_classification: null,
+}, {
+  case_id: "case / 1",
+  system: "full-rag",
+  question: "Which policy changed?",
+  outcome: "expectation_failure",
+  failure_classification: "citation_mismatch",
+}, {
+  case_id: "case-runtime",
+  system: "full-rag",
+  question: "Did execution finish?",
+  outcome: "runtime_failure",
+  failure_classification: "runtime_error",
+}];
 
 export const benchmarkCase: BenchmarkCaseDetail = {
   case_id: "case / 1",
@@ -311,6 +340,7 @@ export function createMockApi(
     startBenchmark: vi.fn().mockResolvedValue(benchmarkStart),
     getBenchmark: vi.fn().mockResolvedValue(benchmarkRun),
     getLatestBenchmark: vi.fn().mockResolvedValue(benchmarkRun),
+    getBenchmarkCases: vi.fn().mockResolvedValue(benchmarkCases),
     getBenchmarkCase: vi.fn().mockResolvedValue(benchmarkCase),
     cancelBenchmark: vi.fn().mockResolvedValue({
       ...benchmarkRun,

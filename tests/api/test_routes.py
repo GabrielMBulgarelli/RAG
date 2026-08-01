@@ -13,6 +13,8 @@ from modules.api.dependencies import (
 )
 from modules.application.models import (
     BenchmarkCaseDetail,
+    BenchmarkCaseOutcome,
+    BenchmarkCaseSummary,
     BenchmarkMetadata,
     BenchmarkProgress,
     BenchmarkRun,
@@ -273,6 +275,18 @@ class FakeBenchmarks:
         self.calls.append(("get_benchmark", run_id))
         return benchmark_run()
 
+    async def list_cases(self, run_id: UUID) -> list[BenchmarkCaseSummary]:
+        self.calls.append(("list_cases", run_id))
+        return [
+            BenchmarkCaseSummary(
+                case_id="case-1",
+                system="dense",
+                question="What is the limit?",
+                outcome=BenchmarkCaseOutcome.SUCCESSFUL,
+                failure_classification=None,
+            )
+        ]
+
     async def get_case(self, run_id: UUID, case_id: str, system_id: str) -> BenchmarkCaseDetail:
         self.calls.append(("get_case", (run_id, case_id, system_id)))
         return BenchmarkCaseDetail(
@@ -398,6 +412,14 @@ def test_benchmark_endpoints_delegate_with_static_routing_and_response_semantics
         assert latest.status_code == 200
         assert latest.json()["run_id"] == str(RUN_ID)
         assert client.get(f"/api/benchmarks/{RUN_ID}").json()["status"] == "running"
+        cases = client.get(f"/api/benchmarks/{RUN_ID}/cases")
+        assert cases.json() == [{
+            "case_id": "case-1",
+            "system": "dense",
+            "question": "What is the limit?",
+            "outcome": "successful",
+            "failure_classification": None,
+        }]
         case = client.get(f"/api/benchmarks/{RUN_ID}/cases/case-1/systems/dense")
         assert case.json()["case_id"] == "case-1"
 
@@ -425,6 +447,9 @@ def test_benchmark_endpoints_delegate_with_static_routing_and_response_semantics
         assert schemas["/api/benchmarks/latest"]["get"]["responses"]["200"]["content"][
             "application/json"
         ]["schema"]["$ref"].endswith("/BenchmarkRun")
+        assert schemas["/api/benchmarks/{run_id}/cases"]["get"]["responses"]["200"][
+            "content"
+        ]["application/json"]["schema"]["type"] == "array"
         assert schemas["/api/benchmarks/{run_id}/cases/{case_id}/systems/{system_id}"]["get"][
             "responses"
         ]["200"]["content"]["application/json"]["schema"]["$ref"].endswith("/BenchmarkCaseDetail")
@@ -433,11 +458,12 @@ def test_benchmark_endpoints_delegate_with_static_routing_and_response_semantics
         "start_benchmark",
         "latest_benchmark",
         "get_benchmark",
+        "list_cases",
         "get_case",
         "stream_events",
         "stream_events",
         "cancel_benchmark",
         "download_benchmark",
     ]
-    assert benchmarks.calls[4][1] == (RUN_ID, None)
-    assert benchmarks.calls[5][1] == (RUN_ID, 0)
+    assert benchmarks.calls[5][1] == (RUN_ID, None)
+    assert benchmarks.calls[6][1] == (RUN_ID, 0)

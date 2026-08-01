@@ -9,6 +9,8 @@ import {
 import type { BenchmarkController } from "../benchmark/useBenchmark";
 import type { WorkspaceController } from "./useWorkspace";
 
+const benchmarkPreparationCommand = "uv run python scripts/prepare_multihop_eval.py --index";
+
 export type OverlayState =
   | { kind: "diagnostics" }
   | { kind: "document-details"; document: DocumentRecord }
@@ -80,6 +82,20 @@ function CheckGroup({
   title: string;
   checks: DiagnosticCheck[];
 }) {
+  const detail = (value: string) => {
+    const commandOffset = value.indexOf(benchmarkPreparationCommand);
+    if (commandOffset < 0) {
+      return value;
+    }
+    return (
+      <>
+        {value.slice(0, commandOffset)}
+        <code>{benchmarkPreparationCommand}</code>
+        {value.slice(commandOffset + benchmarkPreparationCommand.length)}
+      </>
+    );
+  };
+
   return (
     <section className="check-group">
       <h3>{title}</h3>
@@ -89,7 +105,7 @@ function CheckGroup({
             <span className={`state-dot state-dot--${check.state}`} aria-hidden="true" />
             <div>
               <strong>{check.name}</strong>
-              <p>{check.detail}</p>
+              <p>{detail(check.detail)}</p>
             </div>
             <span className="state-label">{check.state.replaceAll("_", " ")}</span>
           </article>

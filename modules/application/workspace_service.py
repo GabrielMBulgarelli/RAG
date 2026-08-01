@@ -95,7 +95,19 @@ class _Graph(Protocol):
 VectorDBFactory = Callable[[], _VectorDB]
 GraphFactory = Callable[[_VectorDB, str], _Graph]
 RuntimeProbe = Callable[[], RuntimeProbeResult]
-DatasetReadyProbe = Callable[[], bool]
+BENCHMARK_PREPARATION_COMMAND = "uv run python scripts/prepare_multihop_eval.py --index"
+
+
+@dataclass(frozen=True)
+class BenchmarkPreparationStatus:
+    checks: tuple[DiagnosticCheck, ...]
+
+    @property
+    def ready(self) -> bool:
+        return bool(self.checks) and all(check.state == "ready" for check in self.checks)
+
+
+DatasetReadyProbe = Callable[[], BenchmarkPreparationStatus]
 CompletedBenchmarkProbe = Callable[[], Awaitable[bool]]
 
 
@@ -238,7 +250,9 @@ class WorkspaceService:
         return IngestionManifest.model_validate_json(path.read_text(encoding="utf-8"))
 
     async def get_runtime(self) -> RuntimeSnapshot:
-        probe, manifest = await asyncio.gather(self._probe(), self._manifest())
+        probe, manifest, benchmark_preparation = await asyncio.gather(
+            self._probe(), self._manifest(), self._benchmark_preparation()
+        )
         available = sorted(
             {
                 _normalize_model_name(model)
@@ -278,7 +292,9 @@ class WorkspaceService:
                 can_upload=probe.reachable
                 and _normalize_model_name(self.settings.embedding_model) in installed
                 and idle,
-                can_run_benchmark=(self._benchmark_available and loaded and idle),
+                can_run_benchmark=(
+                    self._benchmark_available and benchmark_preparation.ready and loaded and idle
+                ),
             ),
             active_operation=active,
             corpus=self._corpus(manifest),
@@ -311,8 +327,92 @@ class WorkspaceService:
         return await self.get_runtime()
 
     @staticmethod
-    def _default_dataset_ready_probe() -> bool:
-        return (PROJECT_ROOT / "evals" / "multihop" / "cases.jsonl").is_file()
+    def _default_dataset_ready_probe() -> BenchmarkPreparationStatus:
+        multihop_dir = PROJECT_ROOT / "evals" / "multihop"
+        runtime_dir = PROJECT_ROOT / "evals" / "runtime"
+        required_files = (multihop_dir / "cases.jsonl", multihop_dir / "source_map.json")
+        files_ready = all(path.is_file() for path in required_files)
+
+        manifest: IngestionManifest | None = None
+        manifest_path = runtime_dir / "manifest.json"
+        try:
+            if manifest_path.is_file():
+                manifest = IngestionManifest.model_validate_json(
+                    manifest_path.read_text(encoding="utf-8")
+                )
+        except (OSError, ValueError):
+            manifest = None
+        manifest_ready = manifest is not None and bool(manifest.documents)
+
+        chunk_count = 0
+        chroma_dir = runtime_dir / "chroma"
+        if (chroma_dir / "chroma.sqlite3").is_file():
+            benchmark_settings = config.model_copy(
+                update={
+                    "sources_dir": multihop_dir / "corpus",
+                    "data_dir": runtime_dir,
+                    "chroma_dir": chroma_dir,
+                    "manifest_path": manifest_path,
+                }
+            )
+            try:
+                chunk_count = VectorDBManager(settings=benchmark_settings).chunk_count()
+            except Exception:
+                chunk_count = 0
+
+        command_detail = f"Run {BENCHMARK_PREPARATION_COMMAND}."
+        return BenchmarkPreparationStatus(
+            checks=(
+                DiagnosticCheck(
+                    area="evaluation",
+                    name="Benchmark files",
+                    state="ready" if files_ready else "blocked",
+                    detail=(
+                        "Benchmark cases and source mapping are available."
+                        if files_ready
+                        else f"Benchmark cases or source mapping are missing. {command_detail}"
+                    ),
+                ),
+                DiagnosticCheck(
+                    area="evaluation",
+                    name="Benchmark manifest",
+                    state="ready" if manifest_ready else "blocked",
+                    detail=(
+                        f"Benchmark manifest contains {len(manifest.documents)} documents."
+                        if manifest_ready and manifest is not None
+                        else f"Benchmark manifest is missing or empty. {command_detail}"
+                    ),
+                ),
+                DiagnosticCheck(
+                    area="evaluation",
+                    name="Benchmark index",
+                    state="ready" if chunk_count > 0 else "blocked",
+                    detail=(
+                        f"Benchmark index contains {chunk_count} chunks."
+                        if chunk_count > 0
+                        else f"Benchmark index is missing or empty. {command_detail}"
+                    ),
+                ),
+            )
+        )
+
+    async def _benchmark_preparation(self) -> BenchmarkPreparationStatus:
+        try:
+            return await asyncio.to_thread(self._dataset_ready_probe)
+        except Exception:
+            return BenchmarkPreparationStatus(
+                checks=(
+                    DiagnosticCheck(
+                        area="evaluation",
+                        name="Benchmark preparation",
+                        state="blocked",
+                        detail=(
+                            "Benchmark preparation could not be verified. "
+                            f"Run {BENCHMARK_PREPARATION_COMMAND}."
+                        ),
+                    ),
+                )
+            )
 
     @staticmethod
     async def _no_completed_benchmark() -> bool:
@@ -378,23 +478,13 @@ class WorkspaceService:
                     detail="The local index could not be inspected.",
                 )
             ]
-        try:
-            dataset_ready = await asyncio.to_thread(self._dataset_ready_probe)
-        except Exception:
-            dataset_ready = False
+        benchmark_preparation = await self._benchmark_preparation()
         try:
             completed_benchmark_available = await self._completed_benchmark_probe()
         except Exception:
             completed_benchmark_available = False
         evaluation_checks = [
-            DiagnosticCheck(
-                area="evaluation",
-                name="Benchmark dataset",
-                state="ready" if dataset_ready else "blocked",
-                detail="Benchmark dataset is ready."
-                if dataset_ready
-                else "Prepare the benchmark dataset.",
-            ),
+            *benchmark_preparation.checks,
             DiagnosticCheck(
                 area="evaluation",
                 name="Latest completed Full RAG Benchmark artifact",

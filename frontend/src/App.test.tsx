@@ -325,6 +325,30 @@ describe("single workspace", () => {
     expect(screen.queryByRole("dialog", { name: "System diagnostics" })).not.toBeInTheDocument();
   });
 
+  it("presents the benchmark preparation command in blocked diagnostics", async () => {
+    const command = "uv run python scripts/prepare_multihop_eval.py --index";
+    const api = createMockApi({
+      getDiagnostics: vi.fn().mockResolvedValue({
+        ...diagnostics,
+        state: "blocked",
+        evaluation_checks: [{
+          area: "evaluation",
+          name: "Benchmark files",
+          state: "blocked",
+          detail: `Benchmark files are missing. Run ${command}.`,
+        }],
+      }),
+    });
+    const user = userEvent.setup();
+    render(<App api={api} />);
+
+    await user.click(await screen.findByRole("button", { name: "System diagnostics" }));
+    const dialog = await screen.findByRole("dialog", { name: "System diagnostics" });
+
+    expect(within(dialog).getByText(command, { selector: "code" })).toBeVisible();
+    expect(within(dialog).getByText("blocked")).toBeVisible();
+  });
+
   it("clears only after success and downloads exports without navigation", async () => {
     const api = createMockApi({
       getDocuments: vi.fn().mockResolvedValue(documentList),

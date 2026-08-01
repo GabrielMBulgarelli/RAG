@@ -9,6 +9,7 @@ from uuid import uuid4
 
 import pytest
 
+import modules.application.workspace_service as workspace_service_module
 from modules.api.dependencies import UploadedFile as ApiUploadedFile
 from modules.application.errors import (
     DocumentNotFoundError,
@@ -20,13 +21,19 @@ from modules.application.errors import (
 )
 from modules.application.models import (
     ConversationExportRequest,
+    DiagnosticCheck,
     ModelLoadRequest,
     OperationKind,
     QueryRequest,
     UploadedFile,
 )
 from modules.application.operation_coordinator import WorkspaceOperationCoordinator
-from modules.application.workspace_service import RuntimeProbeResult, WorkspaceService
+from modules.application.workspace_service import (
+    BENCHMARK_PREPARATION_COMMAND,
+    BenchmarkPreparationStatus,
+    RuntimeProbeResult,
+    WorkspaceService,
+)
 from modules.config import Settings
 from modules.models import IngestionManifest, ManifestDocument, ReconciliationResult
 from modules.vector_db_operations import (
@@ -188,6 +195,21 @@ def indexed_document(*chunk_ids: str) -> ManifestDocument:
         chunk_size=700,
         chunk_overlap=100,
         size_bytes=5,
+    )
+
+
+def benchmark_preparation(*, ready: bool) -> BenchmarkPreparationStatus:
+    return BenchmarkPreparationStatus(
+        checks=(
+            DiagnosticCheck(
+                area="evaluation",
+                name="Benchmark preparation",
+                state="ready" if ready else "blocked",
+                detail="Benchmark is prepared."
+                if ready
+                else f"Run {BENCHMARK_PREPARATION_COMMAND}.",
+            ),
+        )
     )
 
 
@@ -356,6 +378,7 @@ def test_loaded_runtime_can_benchmark_embedded_corpus_without_workspace_document
             reachable=True,
             models=(settings.llm_model, settings.embedding_model),
         ),
+        dataset_ready_probe=lambda: benchmark_preparation(ready=True),
     )
 
     # Act
@@ -366,6 +389,26 @@ def test_loaded_runtime_can_benchmark_embedded_corpus_without_workspace_document
     assert runtime.corpus.document_count == 0
     assert runtime.capabilities.can_run_benchmark is True
     assert service.active_chat_model == settings.llm_model
+
+
+def test_loaded_runtime_keeps_benchmark_disabled_until_preparation_is_complete(
+    tmp_path: Path,
+) -> None:
+    settings = make_settings(tmp_path)
+    service = WorkspaceService(
+        settings=settings,
+        vector_db_factory=FakeVectorDB,
+        graph_factory=lambda _vector_db, _model: FakeGraph(),
+        runtime_probe=lambda: RuntimeProbeResult(
+            reachable=True,
+            models=(settings.llm_model, settings.embedding_model),
+        ),
+        dataset_ready_probe=lambda: benchmark_preparation(ready=False),
+    )
+
+    asyncio.run(service.load_model(ModelLoadRequest(chat_model=settings.llm_model)))
+
+    assert asyncio.run(service.get_runtime()).capabilities.can_run_benchmark is False
 
 
 def test_model_load_publishes_only_after_full_success(tmp_path: Path) -> None:
@@ -424,7 +467,7 @@ def test_diagnostics_cover_runtime_index_and_evaluation_states(tmp_path: Path) -
         vector_db_factory=lambda: review_manager,
         graph_factory=lambda _vector_db, _model: FakeGraph(),
         runtime_probe=lambda: RuntimeProbeResult(reachable=False, models=()),
-        dataset_ready_probe=lambda: False,
+        dataset_ready_probe=lambda: benchmark_preparation(ready=False),
         completed_benchmark_probe=no_completed_benchmark,
     )
 
@@ -443,7 +486,7 @@ def test_diagnostics_cover_runtime_index_and_evaluation_states(tmp_path: Path) -
             reachable=True,
             models=(settings.llm_model, settings.embedding_model),
         ),
-        dataset_ready_probe=lambda: True,
+        dataset_ready_probe=lambda: benchmark_preparation(ready=True),
         completed_benchmark_probe=completed_benchmark,
     )
 
@@ -459,6 +502,63 @@ def test_diagnostics_cover_runtime_index_and_evaluation_states(tmp_path: Path) -
     assert ready_snapshot.evaluation_checks[1].detail == (
         "A complete Full RAG Benchmark artifact is available."
     )
+
+
+def test_benchmark_preparation_diagnostics_require_files_manifest_and_index(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(workspace_service_module, "PROJECT_ROOT", tmp_path)
+    multihop_dir = tmp_path / "evals" / "multihop"
+    runtime_dir = tmp_path / "evals" / "runtime"
+
+    missing_files = WorkspaceService._default_dataset_ready_probe()
+    files_check = next(check for check in missing_files.checks if check.name == "Benchmark files")
+    assert files_check.state == "blocked"
+    assert BENCHMARK_PREPARATION_COMMAND in files_check.detail
+
+    multihop_dir.mkdir(parents=True)
+    (multihop_dir / "cases.jsonl").write_text("{}\n", encoding="utf-8")
+    (multihop_dir / "source_map.json").write_text("{}\n", encoding="utf-8")
+    missing_manifest = WorkspaceService._default_dataset_ready_probe()
+    manifest_check = next(
+        check for check in missing_manifest.checks if check.name == "Benchmark manifest"
+    )
+    assert manifest_check.state == "blocked"
+    assert BENCHMARK_PREPARATION_COMMAND in manifest_check.detail
+
+    runtime_dir.mkdir(parents=True)
+    manifest_path = runtime_dir / "manifest.json"
+    manifest_path.write_text(IngestionManifest().model_dump_json(), encoding="utf-8")
+    empty_manifest = WorkspaceService._default_dataset_ready_probe()
+    manifest_check = next(
+        check for check in empty_manifest.checks if check.name == "Benchmark manifest"
+    )
+    assert manifest_check.state == "blocked"
+
+    manifest_path.write_text(
+        IngestionManifest(documents={"document-1": indexed_document("chunk-1")}).model_dump_json(),
+        encoding="utf-8",
+    )
+    missing_index = WorkspaceService._default_dataset_ready_probe()
+    index_check = next(check for check in missing_index.checks if check.name == "Benchmark index")
+    assert index_check.state == "blocked"
+    assert BENCHMARK_PREPARATION_COMMAND in index_check.detail
+
+    class PopulatedBenchmarkIndex:
+        def __init__(self, *, settings: Settings) -> None:
+            self.settings = settings
+
+        def chunk_count(self) -> int:
+            return 1
+
+    (runtime_dir / "chroma").mkdir()
+    (runtime_dir / "chroma" / "chroma.sqlite3").touch()
+    monkeypatch.setattr(workspace_service_module, "VectorDBManager", PopulatedBenchmarkIndex)
+
+    prepared = WorkspaceService._default_dataset_ready_probe()
+    assert prepared.ready is True
+    assert all(check.state == "ready" for check in prepared.checks)
 
 
 @pytest.mark.parametrize(
@@ -502,7 +602,7 @@ def test_diagnostics_explain_actionable_corrupt_index_states(
         vector_db_factory=lambda: manager,
         graph_factory=lambda _vector_db, _model: FakeGraph(),
         runtime_probe=lambda: RuntimeProbeResult(reachable=True, models=()),
-        dataset_ready_probe=lambda: True,
+        dataset_ready_probe=lambda: benchmark_preparation(ready=True),
     )
 
     snapshot = asyncio.run(service.get_diagnostics())
@@ -524,7 +624,7 @@ def test_diagnostics_report_an_invalid_manifest_without_exposing_its_path(
         vector_db_factory=InvalidManifestVectorDB,
         graph_factory=lambda _vector_db, _model: FakeGraph(),
         runtime_probe=lambda: RuntimeProbeResult(reachable=True, models=()),
-        dataset_ready_probe=lambda: True,
+        dataset_ready_probe=lambda: benchmark_preparation(ready=True),
     )
 
     snapshot = asyncio.run(service.get_diagnostics())

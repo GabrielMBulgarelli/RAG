@@ -81,8 +81,22 @@ seven systems: three retrieval-only baselines, three fixed single-call RAG
 baselines, and the bounded full RAG workflow. Results use the Full RAG Benchmark
 artifact, retain
 explicit not-applicable metric states, persist across restarts, and expose
-case details without replacing the workspace. The same evaluator is available
-from the CLI:
+case details without replacing the workspace.
+
+Prepare the benchmark corpus and its index before the first benchmark run:
+
+```bash
+uv run python scripts/prepare_multihop_eval.py --index
+```
+
+The benchmark files and index are separate from the uploaded-document index, so
+this command does not alter documents uploaded through the application. Run it
+once for the current benchmark indexing settings, and run it again if those
+settings change. System diagnostics report missing benchmark files, an empty
+manifest, or an unpopulated benchmark index; benchmark execution remains disabled
+until all three checks are ready.
+
+The benchmark can also be run from the CLI:
 
 ```bash
 uv run python -m modules.evaluation \

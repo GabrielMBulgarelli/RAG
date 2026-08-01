@@ -20,10 +20,12 @@ from modules.application.models import (
     BenchmarkCaseMetricObservation,
     BenchmarkEventType,
     BenchmarkFailure,
+    BenchmarkGraphConfiguration,
     BenchmarkMetadata,
     BenchmarkMetric,
     BenchmarkMetricObservation,
     BenchmarkProgress,
+    BenchmarkReproducibility,
     BenchmarkSection,
     BenchmarkSystem,
     TraceEvent,
@@ -32,6 +34,7 @@ from modules.config import Settings, config
 from modules.evaluation import (
     CountingModel,
     _require_ollama,
+    dataset_content_hash,
     filter_cases,
     load_cases,
     map_retrieved_evidence,
@@ -69,6 +72,7 @@ from modules.evaluation_models import (
     MetricObservation,
     SystemName,
 )
+from modules.evaluation_reporting import _git_commit
 from modules.rag_graph import RAGGraph
 from modules.retrieval import Retriever
 from modules.vector_db import VectorDBManager
@@ -161,6 +165,8 @@ _SECTION_METRICS = {
 
 
 class EvaluationRuntime(Protocol):
+    def dataset_cases(self) -> list[EvaluationCase]: ...
+
     def prepare(self, chat_model: str) -> list[EvaluationCase]: ...
 
     def run_case(self, *, case: EvaluationCase, system: SystemName) -> CaseResult: ...
@@ -174,6 +180,9 @@ class LocalEvaluationRuntime:
         self._retriever: Retriever | None = None
         self._model: CountingModel | None = None
         self._graph: RAGGraph | None = None
+
+    def dataset_cases(self) -> list[EvaluationCase]:
+        return load_cases(MULTIHOP_ROOT / "cases.jsonl")
 
     def prepare(self, chat_model: str) -> list[EvaluationCase]:
         manager = VectorDBManager(multihop_settings())
@@ -359,24 +368,38 @@ class FullRagBenchmarkExecutor:
         self._settings = settings
 
     def _canonical_reproducibility(self) -> dict[str, JsonValue]:
-        values: dict[str, JsonValue] = {
-            "benchmark_name": "full_rag_benchmark",
-            "case_ids": list(CANONICAL_BENCHMARK_CASE_IDS),
-            "expected_result_count": CANONICAL_BENCHMARK_RESULT_COUNT,
-            "chat_model": self._chat_model_provider(),
-            "embedding_model": self._embedding_model,
-            "temperature": self._settings.temperature,
-            "fixed_rag_prompt_id": FIXED_RAG_PROMPT_ID,
-            "chunk_size": self._settings.chunk_size,
-            "chunk_overlap": self._settings.chunk_overlap,
-            "retrieval_limit": CANONICAL_RETRIEVAL_LIMIT,
-            "semantic_candidates": self._settings.semantic_candidates,
-            "sparse_candidates": self._settings.sparse_candidates,
-            "maximum_context_chunks": self._settings.max_context_chunks,
-            "retry_limit": self._settings.max_retries,
-            "subquery_limit": self._settings.max_subqueries,
-            "request_timeout_seconds": CANONICAL_REQUEST_TIMEOUT_SECONDS,
-        }
+        graph_configuration = BenchmarkGraphConfiguration(
+            max_candidates=self._settings.max_candidates,
+            maximum_context_chunks=self._settings.max_context_chunks,
+            retry_limit=self._settings.max_retries,
+            subquery_limit=self._settings.max_subqueries,
+        )
+        canonical_case_ids = set(CANONICAL_BENCHMARK_CASE_IDS)
+        dataset_cases = [
+            case for case in self._runtime.dataset_cases() if case.id in canonical_case_ids
+        ]
+        values = BenchmarkReproducibility(
+            benchmark_name="full_rag_benchmark",
+            git_commit=_git_commit(),
+            dataset_identifier="yixuantt/MultiHopRAG",
+            dataset_hash=dataset_content_hash(dataset_cases),
+            case_ids=list(CANONICAL_BENCHMARK_CASE_IDS),
+            expected_result_count=CANONICAL_BENCHMARK_RESULT_COUNT,
+            chat_model=self._chat_model_provider(),
+            embedding_model=self._embedding_model,
+            temperature=self._settings.temperature,
+            fixed_rag_prompt_id=FIXED_RAG_PROMPT_ID,
+            graph_configuration=graph_configuration,
+            chunk_size=self._settings.chunk_size,
+            chunk_overlap=self._settings.chunk_overlap,
+            retrieval_limit=CANONICAL_RETRIEVAL_LIMIT,
+            semantic_candidates=self._settings.semantic_candidates,
+            sparse_candidates=self._settings.sparse_candidates,
+            maximum_context_chunks=self._settings.max_context_chunks,
+            retry_limit=self._settings.max_retries,
+            subquery_limit=self._settings.max_subqueries,
+            request_timeout_seconds=CANONICAL_REQUEST_TIMEOUT_SECONDS,
+        ).model_dump(mode="json")
         expected = {
             "chat_model": CANONICAL_CHAT_MODEL,
             "embedding_model": CANONICAL_EMBEDDING_MODEL,
@@ -391,6 +414,15 @@ class FullRagBenchmarkExecutor:
             "subquery_limit": CANONICAL_SUBQUERY_LIMIT,
             "request_timeout_seconds": CANONICAL_REQUEST_TIMEOUT_SECONDS,
         }
+        if graph_configuration.model_dump(mode="json") != {
+            "max_candidates": 20,
+            "maximum_context_chunks": CANONICAL_MAX_CONTEXT_CHUNKS,
+            "retry_limit": CANONICAL_RETRY_LIMIT,
+            "subquery_limit": CANONICAL_SUBQUERY_LIMIT,
+        }:
+            raise ValueError(
+                "The Full RAG Benchmark requires the canonical benchmark configuration."
+            )
         if any(values[name] != expected_value for name, expected_value in expected.items()):
             raise ValueError(
                 "The Full RAG Benchmark requires the canonical benchmark configuration."

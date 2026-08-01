@@ -76,6 +76,7 @@ __all__ = [
     "SystemName",
     "aggregate_metrics",
     "citation_precision",
+    "dataset_content_hash",
     "evaluation_result_kind",
     "failure_labels",
     "filter_cases",
@@ -108,6 +109,21 @@ class EvaluationCancelled(RuntimeError):
 
 class EvaluationTimeout(TimeoutError):
     """Raised when an agentic evaluation case exceeds its wall-clock budget."""
+
+
+def dataset_content_hash(cases: Sequence[EvaluationCase]) -> str:
+    """Hash benchmark cases and their embedded source evidence canonically."""
+    content = [
+        case.model_dump(mode="json")
+        for case in sorted(cases, key=lambda item: item.id)
+    ]
+    serialized = json.dumps(
+        content,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(serialized).hexdigest()
 
 
 def _process_query_with_deadline(  # lanorme: ignore[KWARG-001,TYPE-001] -- Mirrors dynamic graph payload
@@ -565,7 +581,6 @@ def run_evaluation(  # lanorme: ignore[PARAM-001,SIZE-002,COMPLEXITY-001,KWARG-0
     if not selected:
         raise ValueError("Select at least one evaluation system.")
     selected_chat_model = normalize_model_name(chat_model or config.llm_model)
-    raw = dataset.read_bytes()
     all_cases = load_cases(dataset)
     if dataset_name == "multihop":
         manager = VectorDBManager(multihop_settings())
@@ -627,7 +642,7 @@ def run_evaluation(  # lanorme: ignore[PARAM-001,SIZE-002,COMPLEXITY-001,KWARG-0
         run_id=run_id,
         timestamp=now.isoformat(),
         git_commit=_git_commit(),
-        dataset_hash=hashlib.sha256(raw).hexdigest(),
+        dataset_hash=dataset_content_hash(cases),
         evaluated_split=split,
         systems=list(selected),
         chat_model=selected_chat_model,

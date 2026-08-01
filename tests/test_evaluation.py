@@ -53,6 +53,48 @@ def test_evaluation_facade_preserves_decomposed_public_api() -> None:
     assert write_experiment is decomposed_write_experiment
 
 
+def test_dataset_content_hash_uses_case_and_source_content(tmp_path: Path) -> None:
+    case = evaluation_models.EvaluationCase(
+        id="case-1",
+        split="development",
+        category="comparison",
+        question="Which policy changed?",
+        answerable=True,
+        relevant_chunk_ids=[],
+        relevant_document_ids=[],
+        expected_answer="The updated policy",
+        expected_route="complex_search",
+        expected_strategy="hybrid",
+        expected_retry=False,
+        expected_conflict=False,
+        gold_evidence=[
+            evaluation_models.BenchmarkEvidence(
+                benchmark_document_id="doc-1",
+                evidence_text="The source passage used by the benchmark.",
+            )
+        ],
+    )
+    first = tmp_path / "first.jsonl"
+    second = tmp_path / "renamed.jsonl"
+    serialized = case.model_dump_json() + "\n"
+    first.write_text(serialized, encoding="utf-8")
+    second.write_text(serialized, encoding="utf-8")
+    first.touch()
+
+    first_hash = evaluation.dataset_content_hash(evaluation.load_cases(first))
+    second_hash = evaluation.dataset_content_hash(evaluation.load_cases(second))
+    changed_source = case.model_copy(
+        update={
+            "gold_evidence": [
+                case.gold_evidence[0].model_copy(update={"evidence_text": "Changed source"})
+            ]
+        }
+    )
+
+    assert first_hash == second_hash
+    assert evaluation.dataset_content_hash([changed_source]) != first_hash
+
+
 def test_retrieved_evidence_mapping_prefers_excerpt_and_normalizes_content() -> None:
     long_excerpt = "  Preferred\n\ttext  " + (" word" * 80)
     bounded_excerpt = " ".join(long_excerpt.split())[:300]

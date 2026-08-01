@@ -4,11 +4,14 @@ from uuid import uuid4
 import pytest
 from pydantic import JsonValue
 
+from modules import evaluation
+from modules.application import full_rag_benchmark
 from modules.application.benchmark_manager import BenchmarkCancellation
 from modules.application.full_rag_benchmark import FullRagBenchmarkExecutor
 from modules.application.models import (
     BenchmarkCaseDetail,
     BenchmarkEventType,
+    BenchmarkMetadata,
     BenchmarkProgress,
 )
 from modules.evaluation_models import (
@@ -48,6 +51,9 @@ class FakeRuntime:
 
     def prepare(self, chat_model: str) -> list[EvaluationCase]:
         del chat_model
+        return self.cases
+
+    def dataset_cases(self) -> list[EvaluationCase]:
         return self.cases
 
     def run_case(self, *, case: EvaluationCase, system: SystemName) -> CaseResult:
@@ -114,9 +120,12 @@ class CancellingReporter(RecordingReporter):
             self._cancellation.request()
 
 
-def test_executor_runs_exactly_seven_systems_and_builds_presenter_sections() -> None:
+def test_executor_runs_exactly_seven_systems_and_builds_presenter_sections(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # Arrange
     runtime = FakeRuntime(list(reversed(canonical_cases())))
+    monkeypatch.setattr(full_rag_benchmark, "_git_commit", lambda: "abc123")
     executor = FullRagBenchmarkExecutor(
         runtime=runtime,
         chat_model_provider=lambda: "qwen3.5:9b",
@@ -133,6 +142,35 @@ def test_executor_runs_exactly_seven_systems_and_builds_presenter_sections() -> 
     assert metadata.reproducibility["benchmark_name"] == "full_rag_benchmark"
     assert metadata.reproducibility["case_ids"] == list(CANONICAL_BENCHMARK_CASE_IDS)
     assert metadata.reproducibility["expected_result_count"] == 140
+    assert metadata.reproducibility == {
+        "benchmark_name": "full_rag_benchmark",
+        "git_commit": "abc123",
+        "dataset_identifier": "yixuantt/MultiHopRAG",
+        "dataset_hash": evaluation.dataset_content_hash(runtime.dataset_cases()),
+        "case_ids": list(CANONICAL_BENCHMARK_CASE_IDS),
+        "expected_result_count": 140,
+        "chat_model": "qwen3.5:9b",
+        "embedding_model": "nomic-embed-text",
+        "temperature": 0.0,
+        "fixed_rag_prompt_id": "fixed_rag_grounded_answer",
+        "graph_configuration": {
+            "max_candidates": 20,
+            "maximum_context_chunks": 6,
+            "retry_limit": 1,
+            "subquery_limit": 4,
+        },
+        "chunk_size": 700,
+        "chunk_overlap": 100,
+        "retrieval_limit": 5,
+        "semantic_candidates": 10,
+        "sparse_candidates": 10,
+        "maximum_context_chunks": 6,
+        "retry_limit": 1,
+        "subquery_limit": 4,
+        "request_timeout_seconds": 30.0,
+    }
+    assert "case_limit" not in metadata.reproducibility
+    assert BenchmarkMetadata.model_validate_json(metadata.model_dump_json()) == metadata
     assert runtime.calls == [
         (case_id, system)
         for system in SYSTEMS

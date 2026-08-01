@@ -1838,6 +1838,10 @@ def test_download_contains_only_public_run_artifacts(tmp_path: Path) -> None:
                 "summary.json",
             ]
             summary = json.loads(archive.read("summary.json"))
+            downloaded_run = BenchmarkRun.model_validate_json(archive.read("run.json"))
+            assert downloaded_run.metadata == completed.metadata
+            assert downloaded_run.metadata.started_at is not None
+            assert downloaded_run.metadata.completed_at is not None
             assert summary == {
                 "benchmark_name": "full_rag_benchmark",
                 "case_ids": [],

@@ -22,6 +22,11 @@ FastAPI exposes the typed `/api` contract and serves the built React application
 from `/`. The workspace opens when Ollama is unavailable and explains which
 actions are blocked.
 
+![Local Document RAG desktop workspace](docs/assets/dashboard/ask-documents.png)
+
+Responsive layouts and benchmark overlays are collected in the
+[visual verification gallery](docs/visual-verification.md).
+
 ## RAG workflow
 
 - Upload, index, list, and delete PDF or TXT sources.

@@ -18,4 +18,7 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      - run: bash scripts/verify.sh
+      - name: Verify workspace
+        run: bash scripts/verify.sh
+        env:
+          PLAYWRIGHT_INSTALL_WITH_DEPS: "1"

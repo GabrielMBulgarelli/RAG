@@ -168,6 +168,7 @@ export function ConversationPanel({ workspace }: ConversationPanelProps) {
           <textarea
             id="question"
             rows={3}
+            disabled={!canQuery}
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={handleComposerKeyDown}

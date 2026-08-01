@@ -17,6 +17,7 @@ export function createViteConfig(apiTarget = DEFAULT_API_TARGET): UserConfig {
     },
     test: {
       environment: "jsdom",
+      include: ["src/**/*.{test,spec}.{ts,tsx}"],
       setupFiles: "./src/test/setup.ts",
       restoreMocks: true,
     },

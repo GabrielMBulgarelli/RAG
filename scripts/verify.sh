@@ -19,6 +19,14 @@ npm --prefix frontend run typecheck
 npm --prefix frontend run build
 npm --prefix frontend audit --audit-level=low
 
+echo "==> Responsive browser tests"
+if [[ "${PLAYWRIGHT_INSTALL_WITH_DEPS:-0}" == "1" ]]; then
+  npm --prefix frontend exec playwright install --with-deps chromium
+else
+  npm --prefix frontend exec playwright install chromium
+fi
+npm --prefix frontend run test:e2e
+
 echo "==> Ruff"
 uv run ruff check .
 uv run ruff format --check .

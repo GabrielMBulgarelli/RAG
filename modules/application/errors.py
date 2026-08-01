@@ -70,6 +70,21 @@ class RuntimeUnavailableError(ApplicationError):
         )
 
 
+class IndexStateError(ApplicationError):
+    def __init__(self, *, reason: str) -> None:
+        actions = {
+            "manifest_invalid": (
+                "Restore or remove the invalid manifest, then rebuild the local index."
+            ),
+            "collection_unavailable": "Rebuild the local index.",
+        }
+        super().__init__(
+            code="index_error",
+            message="The persisted index is unavailable.",
+            details={"reason": reason, "action": actions[reason]},
+        )
+
+
 class BenchmarkNotFoundError(ApplicationError):
     def __init__(self) -> None:
         super().__init__(

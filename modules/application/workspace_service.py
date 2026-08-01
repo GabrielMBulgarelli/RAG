@@ -16,6 +16,7 @@ from starlette.responses import Response
 
 from modules.application.errors import (
     DocumentNotFoundError,
+    IndexStateError,
     InvalidUploadError,
     RuntimeUnavailableError,
     UploadLimitExceededApplicationError,
@@ -227,12 +228,12 @@ class WorkspaceService:
     async def _manifest(self) -> IngestionManifest:
         try:
             return await asyncio.to_thread(self._read_manifest_file)
-        except Exception:
-            return IngestionManifest()
+        except Exception as exc:
+            raise IndexStateError(reason="manifest_invalid") from exc
 
     def _read_manifest_file(self) -> IngestionManifest:
         path = self.settings.manifest_path
-        if not path.is_file():
+        if not path.exists():
             return IngestionManifest()
         return IngestionManifest.model_validate_json(path.read_text(encoding="utf-8"))
 
@@ -366,6 +367,8 @@ class WorkspaceService:
                 self._index_diagnostics, manager
             )
             index_checks = self._index_checks(manifest, reconciliation, chunks)
+        except IndexStateError as exc:
+            index_checks = [self._index_error_check(exc)]
         except Exception:
             index_checks = [
                 DiagnosticCheck(
@@ -395,11 +398,7 @@ class WorkspaceService:
             DiagnosticCheck(
                 area="evaluation",
                 name="Latest completed Full RAG Benchmark artifact",
-                state=(
-                    "ready"
-                    if completed_benchmark_available
-                    else "not_loaded"
-                ),
+                state=("ready" if completed_benchmark_available else "not_loaded"),
                 detail="A complete Full RAG Benchmark artifact is available."
                 if completed_benchmark_available
                 else "No complete Full RAG Benchmark artifact is stored.",
@@ -408,10 +407,10 @@ class WorkspaceService:
         all_checks = [*runtime_checks, *index_checks, *evaluation_checks]
         states = {check.state for check in all_checks}
         state = (
-            "blocked"
-            if "blocked" in states
-            else "error"
+            "error"
             if "error" in states
+            else "blocked"
+            if "blocked" in states
             else "review"
             if "review" in states
             else "ready"
@@ -429,11 +428,42 @@ class WorkspaceService:
             stale=self.coordinator.snapshot() is not None,
         )
 
-    @staticmethod
+    @classmethod
     def _index_diagnostics(
+        cls,
         manager: _VectorDB,
     ) -> tuple[IngestionManifest, ReconciliationResult, int]:
-        return manager.manifest(), manager.reconcile_index(), manager.chunk_count()
+        manifest = cls._manager_manifest(manager)
+        try:
+            return manifest, manager.reconcile_index(), manager.chunk_count()
+        except Exception as exc:
+            raise IndexStateError(reason="collection_unavailable") from exc
+
+    @staticmethod
+    def _manager_manifest(manager: _VectorDB) -> IngestionManifest:
+        try:
+            return manager.manifest()
+        except Exception as exc:
+            raise IndexStateError(reason="manifest_invalid") from exc
+
+    @staticmethod
+    def _index_error_check(error: IndexStateError) -> DiagnosticCheck:
+        if error.details["reason"] == "manifest_invalid":
+            return DiagnosticCheck(
+                area="index",
+                name="Manifest",
+                state="error",
+                detail=(
+                    "The manifest is malformed or unreadable. Restore or remove it, "
+                    "then rebuild the local index."
+                ),
+            )
+        return DiagnosticCheck(
+            area="index",
+            name="Chroma collection",
+            state="error",
+            detail="Chroma data could not be read. Rebuild the local index.",
+        )
 
     @staticmethod
     def _index_checks(
@@ -441,19 +471,20 @@ class WorkspaceService:
         reconciliation: ReconciliationResult,
         chunks: int,
     ) -> list[DiagnosticCheck]:
-        values = [
-            ("Missing Chroma chunks", reconciliation.missing_chunk_ids, "blocked"),
-            ("Orphan Chroma chunks", reconciliation.orphan_chunk_ids, "review"),
-            ("Duplicate IDs", reconciliation.duplicate_chunk_ids, "blocked"),
-            ("Missing source files", reconciliation.missing_source_files, "review"),
-            ("Index configuration", reconciliation.incompatible_document_ids, "blocked"),
-        ]
+        expected_chunks = sum(document.chunk_count for document in manifest.documents.values())
+        missing_collection = expected_chunks > 0 and chunks == 0
+        missing_chunks = len(reconciliation.missing_chunk_ids)
+        incompatible_documents = len(reconciliation.incompatible_document_ids)
         checks = [
             DiagnosticCheck(
                 area="index",
                 name="Chroma collection",
-                state="ready",
-                detail=f"{chunks} chunks.",
+                state="blocked" if missing_collection else "ready",
+                detail=(
+                    "No Chroma data was found for the manifest. Rebuild the local index."
+                    if missing_collection
+                    else f"{chunks} chunks."
+                ),
             ),
             DiagnosticCheck(
                 area="index",
@@ -461,6 +492,35 @@ class WorkspaceService:
                 state="ready",
                 detail=f"Valid; {len(manifest.documents)} documents.",
             ),
+            DiagnosticCheck(
+                area="index",
+                name="Indexed chunks",
+                state="blocked" if missing_chunks else "ready",
+                detail=(
+                    f"{missing_chunks} manifest "
+                    f"{'chunk is' if missing_chunks == 1 else 'chunks are'} missing from "
+                    "Chroma. Rebuild the local index."
+                    if missing_chunks
+                    else "All manifest chunks are present."
+                ),
+            ),
+            DiagnosticCheck(
+                area="index",
+                name="Index configuration",
+                state="blocked" if incompatible_documents else "ready",
+                detail=(
+                    f"{incompatible_documents} "
+                    f"{'document uses' if incompatible_documents == 1 else 'documents use'} "
+                    "different index settings. Rebuild the local index."
+                    if incompatible_documents
+                    else "Index settings match the current configuration."
+                ),
+            ),
+        ]
+        values = [
+            ("Orphan Chroma chunks", reconciliation.orphan_chunk_ids, "review"),
+            ("Duplicate IDs", reconciliation.duplicate_chunk_ids, "blocked"),
+            ("Missing source files", reconciliation.missing_source_files, "review"),
         ]
         checks.extend(
             DiagnosticCheck(
@@ -475,7 +535,9 @@ class WorkspaceService:
 
     async def list_documents(self) -> DocumentList:
         try:
-            manifest = await asyncio.to_thread(self._manager().manifest)
+            manifest = await asyncio.to_thread(self._manager_manifest, self._manager())
+        except IndexStateError:
+            raise
         except Exception as exc:
             raise RuntimeUnavailableError(operation="list_documents") from exc
         return self._document_list(manifest)

@@ -12,6 +12,7 @@ import pytest
 from modules.api.dependencies import UploadedFile as ApiUploadedFile
 from modules.application.errors import (
     DocumentNotFoundError,
+    IndexStateError,
     InvalidUploadError,
     OperationBusyError,
     RuntimeUnavailableError,
@@ -41,11 +42,13 @@ class FakeVectorDB:
         *,
         setup_error: Exception | None = None,
         reconciliation: ReconciliationResult | None = None,
+        stored_chunk_count: int | None = None,
     ) -> None:
         self.setup_error = setup_error
         self.setup_calls = 0
         self._manifest = IngestionManifest()
         self.reconciliation = reconciliation or ReconciliationResult()
+        self.stored_chunk_count = stored_chunk_count
         self.worker_threads: list[int] = []
 
     def setup(self) -> object:
@@ -61,6 +64,8 @@ class FakeVectorDB:
         return self.reconciliation
 
     def chunk_count(self) -> int:
+        if self.stored_chunk_count is not None:
+            return self.stored_chunk_count
         return sum(record.chunk_count for record in self._manifest.documents.values())
 
     def index_upload_batch(self, files: tuple[UploadedFile, ...]) -> list[ManifestDocument]:
@@ -170,6 +175,22 @@ def make_settings(tmp_path: Path) -> Settings:
     )
 
 
+def indexed_document(*chunk_ids: str) -> ManifestDocument:
+    return ManifestDocument(
+        document_id="document-1",
+        relative_path="document-1/guide.txt",
+        filename="guide.txt",
+        content_hash="content-hash",
+        chunk_ids=list(chunk_ids),
+        page_count=1,
+        chunk_count=len(chunk_ids),
+        embedding_model="embedding",
+        chunk_size=700,
+        chunk_overlap=100,
+        size_bytes=5,
+    )
+
+
 def test_uploaded_file_is_an_immutable_application_value_object() -> None:
     uploaded = UploadedFile(filename="guide.txt", content_type="text/plain", content=b"guide")
 
@@ -245,6 +266,51 @@ def test_runtime_capabilities_follow_readiness_and_coordinator(
         "can_upload": False,
         "can_run_benchmark": False,
     }
+
+
+def test_missing_manifest_reports_an_empty_corpus(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    service = WorkspaceService(
+        settings=settings,
+        vector_db_factory=FakeVectorDB,
+        graph_factory=lambda _vector_db, _model: FakeGraph(),
+        runtime_probe=lambda: RuntimeProbeResult(reachable=True, models=()),
+    )
+
+    runtime = asyncio.run(service.get_runtime())
+
+    assert runtime.corpus.status == "empty"
+    assert runtime.corpus.document_count == 0
+
+
+@pytest.mark.parametrize("manifest_contents", ["not-json", None])
+def test_invalid_existing_manifest_raises_a_public_index_error(
+    tmp_path: Path,
+    manifest_contents: str | None,
+) -> None:
+    settings = make_settings(tmp_path)
+    settings.manifest_path.parent.mkdir(parents=True)
+    if manifest_contents is None:
+        settings.manifest_path.mkdir()
+    else:
+        settings.manifest_path.write_text(manifest_contents, encoding="utf-8")
+    service = WorkspaceService(
+        settings=settings,
+        vector_db_factory=FakeVectorDB,
+        graph_factory=lambda _vector_db, _model: FakeGraph(),
+        runtime_probe=lambda: RuntimeProbeResult(reachable=True, models=()),
+    )
+
+    with pytest.raises(IndexStateError) as error:
+        asyncio.run(service.get_runtime())
+
+    assert error.value.code == "index_error"
+    assert error.value.details == {
+        "reason": "manifest_invalid",
+        "action": "Restore or remove the invalid manifest, then rebuild the local index.",
+    }
+    assert str(settings.manifest_path) not in error.value.message
+    assert str(settings.manifest_path) not in str(error.value.details)
 
 
 def test_runtime_keeps_benchmark_disabled_when_no_executor_is_configured(
@@ -393,6 +459,89 @@ def test_diagnostics_cover_runtime_index_and_evaluation_states(tmp_path: Path) -
     assert ready_snapshot.evaluation_checks[1].detail == (
         "A complete Full RAG Benchmark artifact is available."
     )
+
+
+@pytest.mark.parametrize(
+    ("manager", "check_name", "detail"),
+    [
+        (
+            FakeVectorDB(
+                reconciliation=ReconciliationResult(missing_chunk_ids=["chunk-1"]),
+                stored_chunk_count=0,
+            ),
+            "Chroma collection",
+            "No Chroma data was found for the manifest. Rebuild the local index.",
+        ),
+        (
+            FakeVectorDB(
+                reconciliation=ReconciliationResult(missing_chunk_ids=["chunk-2"]),
+                stored_chunk_count=1,
+            ),
+            "Indexed chunks",
+            "1 manifest chunk is missing from Chroma. Rebuild the local index.",
+        ),
+        (
+            FakeVectorDB(
+                reconciliation=ReconciliationResult(incompatible_document_ids=["document-1"]),
+                stored_chunk_count=2,
+            ),
+            "Index configuration",
+            "1 document uses different index settings. Rebuild the local index.",
+        ),
+    ],
+)
+def test_diagnostics_explain_actionable_corrupt_index_states(
+    tmp_path: Path,
+    manager: FakeVectorDB,
+    check_name: str,
+    detail: str,
+) -> None:
+    manager._manifest.documents["document-1"] = indexed_document("chunk-1", "chunk-2")
+    service = WorkspaceService(
+        settings=make_settings(tmp_path),
+        vector_db_factory=lambda: manager,
+        graph_factory=lambda _vector_db, _model: FakeGraph(),
+        runtime_probe=lambda: RuntimeProbeResult(reachable=True, models=()),
+        dataset_ready_probe=lambda: True,
+    )
+
+    snapshot = asyncio.run(service.get_diagnostics())
+
+    check = next(item for item in snapshot.index_checks if item.name == check_name)
+    assert check.state == "blocked"
+    assert check.detail == detail
+
+
+def test_diagnostics_report_an_invalid_manifest_without_exposing_its_path(
+    tmp_path: Path,
+) -> None:
+    class InvalidManifestVectorDB(FakeVectorDB):
+        def manifest(self) -> IngestionManifest:
+            raise ValueError(f"invalid manifest at {tmp_path}/private/manifest.json")
+
+    service = WorkspaceService(
+        settings=make_settings(tmp_path),
+        vector_db_factory=InvalidManifestVectorDB,
+        graph_factory=lambda _vector_db, _model: FakeGraph(),
+        runtime_probe=lambda: RuntimeProbeResult(reachable=True, models=()),
+        dataset_ready_probe=lambda: True,
+    )
+
+    snapshot = asyncio.run(service.get_diagnostics())
+
+    assert snapshot.state == "error"
+    assert [check.model_dump() for check in snapshot.index_checks] == [
+        {
+            "area": "index",
+            "name": "Manifest",
+            "state": "error",
+            "detail": (
+                "The manifest is malformed or unreadable. Restore or remove it, "
+                "then rebuild the local index."
+            ),
+        }
+    ]
+    assert str(tmp_path) not in snapshot.index_checks[0].detail
 
 
 def test_document_upload_delete_mapping_worker_thread_and_busy_guard(

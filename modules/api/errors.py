@@ -18,6 +18,7 @@ APPLICATION_ERROR_STATUS = {
     "invalid_upload": 400,
     "invalid_request": 400,
     "runtime_unavailable": 503,
+    "index_error": 503,
     "benchmark_unavailable": 503,
 }
 

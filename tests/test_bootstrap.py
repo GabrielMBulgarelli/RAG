@@ -1,3 +1,4 @@
+import importlib.util
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -34,6 +35,12 @@ def test_production_container_composes_workspace_with_real_benchmarks(tmp_path: 
         container.workspace._completed_benchmark_probe
         == container.benchmarks.has_completed_benchmark
     )
+
+
+def test_production_composition_has_no_placeholder_benchmark_module() -> None:
+    obsolete_module = "modules.application." + "unavailable_" + "benchmarks"
+
+    assert importlib.util.find_spec(obsolete_module) is None
 
 
 def test_production_benchmark_endpoint_starts_a_durable_run(tmp_path: Path) -> None:

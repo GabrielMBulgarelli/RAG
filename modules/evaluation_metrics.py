@@ -57,11 +57,11 @@ def p95(values: Sequence[float]) -> float:
     return ordered[lower] + fraction * (ordered[min(lower + 1, len(ordered) - 1)] - ordered[lower])
 
 
-def citation_precision(cited: Sequence[str], retrieved: Sequence[str]) -> float | None:
+def citation_precision(cited: Sequence[str], relevant: Sequence[str]) -> float | None:
     if not cited:
         return None
-    retrieved_ids = set(retrieved)
-    return sum(chunk_id in retrieved_ids for chunk_id in cited) / len(cited)
+    relevant_ids = set(relevant)
+    return sum(chunk_id in relevant_ids for chunk_id in cited) / len(cited)
 
 
 def gold_citation_coverage(cited: Sequence[str], relevant: Sequence[str]) -> float | None:
@@ -135,6 +135,12 @@ def _ratio_observation(numerator: int, denominator: int, note: str) -> MetricObs
     return _measured(numerator / denominator, denominator, note)
 
 
+def _count_observation(count: int, denominator: int, note: str) -> MetricObservation:
+    if not denominator:
+        return _no_eligible(note)
+    return _measured(float(count), denominator, note)
+
+
 def aggregate_metrics(
     cases: Sequence[EvaluationCase],
     results: Sequence[CaseResult],
@@ -151,8 +157,8 @@ def aggregate_metrics(
     produces_answers = evaluated_system in ANSWER_SYSTEMS
     produces_workflow_decisions = evaluated_system == FULL_RAG_SYSTEM
 
-    route = [(case, result) for case, result in full_rag if result.route is not None]
-    strategy = [(case, result) for case, result in full_rag if result.strategy is not None]
+    route = full_rag
+    strategy = full_rag
     retry_tp = sum(case.expected_retry and result.retry_count > 0 for case, result in full_rag)
     retry_fp = sum(not case.expected_retry and result.retry_count > 0 for case, result in full_rag)
     retry_fn = sum(case.expected_retry and result.retry_count == 0 for case, result in full_rag)
@@ -171,10 +177,23 @@ def aggregate_metrics(
         (case, result) for case, result in answering if case.answerable and case.relevant_chunk_ids
     ]
     emitted_citations = [
-        (chunk_id, set(result.retrieved_chunk_ids))
-        for _, result in answering
+        (chunk_id, set(case.relevant_chunk_ids))
+        for case, result in answering
         for chunk_id in result.cited_chunk_ids
     ]
+    classifications = [set(failure_labels(case, result)) for case, result in paired]
+    classification_groups = {
+        "runtime_error_count": {"runtime_error"},
+        "retrieval_miss_count": {"retrieval_miss"},
+        "citation_failure_count": {"invalid_citation", "citation_coverage_miss"},
+        "over_abstention_count": {"over_abstention"},
+        "failed_abstention_count": {"failed_abstention"},
+        "non_termination_count": {"non_termination"},
+        "route_failure_count": {"route_error"},
+        "strategy_failure_count": {"strategy_error"},
+        "retry_failure_count": {"retry_error"},
+        "conflict_failure_count": {"conflict_miss"},
+    }
 
     retrieval_note = "Cases with expected chunk evidence."
     response_only = "Retrieval-only systems do not produce answers or answer-level signals."
@@ -231,7 +250,22 @@ def aggregate_metrics(
             [float(result.retrieval_rounds) for _, result in paired],
             "All evaluated cases.",
         ),
+        "runtime_error_rate": _ratio_observation(
+            sum(result.runtime_error is not None for _, result in paired),
+            len(paired),
+            "All evaluated cases.",
+        ),
     }
+    metrics.update(
+        {
+            name: _count_observation(
+                sum(bool(labels & group) for labels in classifications),
+                len(paired),
+                "Cases with this failure classification.",
+            )
+            for name, group in classification_groups.items()
+        }
+    )
 
     if not produces_answers:
         metrics.update(
@@ -277,7 +311,11 @@ def aggregate_metrics(
                 "Answerable cases with expected chunk evidence.",
             ),
             "abstention_accuracy": _ratio_observation(
-                sum(result.abstained == (not case.answerable) for case, result in answering),
+                sum(
+                    result.runtime_error is None
+                    and result.abstained == (not case.answerable)
+                    for case, result in answering
+                ),
                 len(answering),
                 "All answer-producing cases.",
             ),
@@ -287,20 +325,31 @@ def aggregate_metrics(
                 "Unanswerable answer-producing cases.",
             ),
             "answerable_response_rate": _ratio_observation(
-                sum(not result.abstained for _, result in answerable),
+                sum(
+                    result.runtime_error is None and not result.abstained
+                    for _, result in answerable
+                ),
                 len(answerable),
                 "Answerable answer-producing cases.",
             ),
             "normalized_answer_exact_match": _mean_observation(
                 [
-                    normalized_exact_match(result.answer, case.expected_answer or "")
+                    (
+                        normalized_exact_match(result.answer, case.expected_answer or "")
+                        if result.runtime_error is None
+                        else 0.0
+                    )
                     for case, result in answer_pairs
                 ],
                 "Answerable cases with an expected answer.",
             ),
             "answer_token_f1": _mean_observation(
                 [
-                    token_f1(result.answer, case.expected_answer or "")
+                    (
+                        token_f1(result.answer, case.expected_answer or "")
+                        if result.runtime_error is None
+                        else 0.0
+                    )
                     for case, result in answer_pairs
                 ],
                 "Answerable cases with an expected answer.",
@@ -314,7 +363,7 @@ def aggregate_metrics(
                 _ratio_observation(
                     sum(result.route == case.expected_route for case, result in route),
                     len(route),
-                    "Full RAG cases with a recorded route.",
+                    "All Full RAG cases.",
                 )
                 if produces_workflow_decisions
                 else _not_applicable(workflow_only)
@@ -323,7 +372,7 @@ def aggregate_metrics(
                 _ratio_observation(
                     sum(result.strategy == case.expected_strategy for case, result in strategy),
                     len(strategy),
-                    "Full RAG cases with a recorded retrieval strategy.",
+                    "All Full RAG cases.",
                 )
                 if produces_workflow_decisions
                 else _not_applicable(workflow_only)
@@ -386,9 +435,9 @@ def failure_labels(case: EvaluationCase, result: CaseResult) -> list[str]:
         if not case.answerable and not result.abstained:
             labels.add("failed_abstention")
     if result.system == FULL_RAG_SYSTEM:
-        if result.route is not None and result.route != case.expected_route:
+        if result.route != case.expected_route:
             labels.add("route_error")
-        if result.strategy is not None and result.strategy != case.expected_strategy:
+        if result.strategy != case.expected_strategy:
             labels.add("strategy_error")
         if (result.retry_count > 0) != case.expected_retry:
             labels.add("retry_error")

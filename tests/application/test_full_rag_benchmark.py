@@ -219,6 +219,21 @@ def test_executor_sanitizes_runtime_failures_and_continues() -> None:
     assert result.failures[0].case_id == CANONICAL_BENCHMARK_CASE_IDS[0]
     assert result.failures[0].system == "bm25"
     assert result.failures[0].detail == "Case execution failed."
+    execution_metrics = {metric.name: metric for metric in result.sections[2].metrics}
+    runtime_error_count = next(
+        observation
+        for observation in execution_metrics["runtime_error_count"].observations
+        if observation.system == "bm25"
+    )
+    runtime_error_rate = next(
+        observation
+        for observation in execution_metrics["runtime_error_rate"].observations
+        if observation.system == "bm25"
+    )
+    assert runtime_error_count.value == 20
+    assert runtime_error_count.sample_count == 20
+    assert runtime_error_rate.value == 1.0
+    assert runtime_error_rate.sample_count == 20
     failed_cases = [
         case
         for event_type, _data, case in reporter.events

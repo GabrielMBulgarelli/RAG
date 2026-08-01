@@ -186,6 +186,20 @@ def test_fixed_rag_measures_answers_but_only_full_rag_measures_workflow_decision
     assert_observation(full, "route_accuracy", value=1.0, status="measured", sample_count=1)
 
 
+def test_missing_full_rag_decisions_are_included_as_incorrect() -> None:
+    metrics = aggregate_metrics(
+        [case(id="complete"), case(id="missing")],
+        [
+            result(case_id="complete"),
+            result(case_id="missing", route=None, strategy=None),
+        ],
+        system="full-rag",
+    )
+
+    assert_observation(metrics, "route_accuracy", value=0.5, status="measured", sample_count=2)
+    assert_observation(metrics, "strategy_accuracy", value=0.5, status="measured", sample_count=2)
+
+
 def test_retry_precision_and_recall_edge_cases() -> None:
     negatives = [case(id="n", expected_retry=False)]
     metrics = aggregate_metrics(negatives, [result(case_id="n")])
@@ -217,6 +231,20 @@ def test_citation_metrics() -> None:
     assert gold_citation_coverage(["a"], ["a", "b"]) == 0.5
     assert gold_citation_coverage([], []) is None
     assert token_f1("Sam Altman [C1]", "Sam Altman") == 1.0
+
+
+def test_citation_precision_uses_relevant_evidence_without_weakening_validation() -> None:
+    benchmark = case(relevant_chunk_ids=["a", "b"])
+    metrics = aggregate_metrics(
+        [benchmark],
+        [result(retrieved_chunk_ids=["a", "x"], cited_chunk_ids=["a", "x"])],
+    )
+
+    assert_observation(metrics, "citation_precision", value=0.5, status="measured", sample_count=2)
+    assert "invalid_citation" in failure_labels(
+        benchmark,
+        result(retrieved_chunk_ids=["a", "x"], cited_chunk_ids=["a", "unknown"]),
+    )
 
 
 def test_abstention_conflict_and_termination_metrics() -> None:
@@ -878,6 +906,72 @@ def test_runtime_and_failed_abstention_labels() -> None:
         "failed_abstention",
         "runtime_error",
     ]
+
+
+def test_runtime_errors_are_failed_responses_for_answer_metrics() -> None:
+    metrics = aggregate_metrics(
+        [case(expected_answer="expected answer")],
+        [
+            result(
+                answer="expected answer",
+                abstained=False,
+                runtime_error="RuntimeError",
+            )
+        ],
+    )
+
+    assert_observation(metrics, "runtime_error_count", value=1.0, status="measured", sample_count=1)
+    assert_observation(metrics, "runtime_error_rate", value=1.0, status="measured", sample_count=1)
+    assert_observation(metrics, "abstention_accuracy", value=0.0, status="measured", sample_count=1)
+    assert_observation(metrics, "answerable_response_rate", value=0.0, status="measured", sample_count=1)
+    assert_observation(
+        metrics,
+        "normalized_answer_exact_match",
+        value=0.0,
+        status="measured",
+        sample_count=1,
+    )
+    assert_observation(metrics, "answer_token_f1", value=0.0, status="measured", sample_count=1)
+
+
+def test_failure_classifications_are_aggregated_once_per_case() -> None:
+    metrics = aggregate_metrics(
+        [
+            case(id="many", expected_retry=True, expected_conflict=True),
+            case(id="failed-abstention", answerable=False, relevant_chunk_ids=[]),
+        ],
+        [
+            result(
+                case_id="many",
+                route=None,
+                strategy=None,
+                retrieved_chunk_ids=["x"],
+                cited_chunk_ids=["unknown"],
+                retry_count=0,
+                conflict_detected=False,
+                terminated=False,
+                abstained=True,
+                runtime_error="RuntimeError",
+            ),
+            result(case_id="failed-abstention", abstained=False),
+        ],
+        system="full-rag",
+    )
+
+    for name in (
+        "runtime_error_count",
+        "retrieval_miss_count",
+        "citation_failure_count",
+        "over_abstention_count",
+        "failed_abstention_count",
+        "non_termination_count",
+        "route_failure_count",
+        "strategy_failure_count",
+        "retry_failure_count",
+        "conflict_failure_count",
+    ):
+        assert_observation(metrics, name, value=1.0, status="measured", sample_count=2)
+    assert_observation(metrics, "runtime_error_rate", value=0.5, status="measured", sample_count=2)
 
 
 def test_agentic_runtime_error_is_recorded_without_aborting() -> None:

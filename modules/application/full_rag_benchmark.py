@@ -104,6 +104,17 @@ _METRIC_LABELS = {
     "retry_recall": "Retry recall",
     "conflict_recall": "Conflict recall",
     "conflict_false_positive_rate": "Conflict false-positive rate",
+    "runtime_error_count": "Runtime error count",
+    "runtime_error_rate": "Runtime error rate",
+    "retrieval_miss_count": "Retrieval miss count",
+    "citation_failure_count": "Citation failure count",
+    "over_abstention_count": "Over-abstention count",
+    "failed_abstention_count": "Failed abstention count",
+    "non_termination_count": "Non-termination count",
+    "route_failure_count": "Route failure count",
+    "strategy_failure_count": "Strategy failure count",
+    "retry_failure_count": "Retry failure count",
+    "conflict_failure_count": "Conflict failure count",
 }
 _SECTION_METRICS = {
     "retrieval": (
@@ -133,6 +144,17 @@ _SECTION_METRICS = {
         "retry_recall",
         "conflict_recall",
         "conflict_false_positive_rate",
+        "runtime_error_count",
+        "runtime_error_rate",
+        "retrieval_miss_count",
+        "citation_failure_count",
+        "over_abstention_count",
+        "failed_abstention_count",
+        "non_termination_count",
+        "route_failure_count",
+        "strategy_failure_count",
+        "retry_failure_count",
+        "conflict_failure_count",
     ),
 }
 

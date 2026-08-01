@@ -2,40 +2,62 @@
 
 ## Product
 
-Local Document RAG is a desktop-first, locally hosted workbench for indexing PDF and text files, asking grounded questions, reviewing cited evidence, running the existing evaluation suite, and diagnosing the local Ollama setup. It is both a working AI tool and an applied-engineering portfolio project.
+Local Document RAG is a desktop-first, locally hosted workbench for indexing
+PDF and TXT files, asking grounded questions, reviewing cited evidence, running
+the seven-system Full RAG Benchmark, and diagnosing the local Ollama and index
+state. It is both a working AI tool and an applied-engineering portfolio
+project.
 
 ## Users and goals
 
-- Developers, technical reviewers, and hiring teams should be able to understand the application and its engineering depth quickly.
-- A local user should be able to index and manage documents, ask questions, distinguish supported answers from limited answers or abstentions, and inspect the cited evidence.
-- Advanced retrieval and evaluation details must remain available without dominating the primary workflow.
+- A local user can add and manage documents, load a model, ask questions,
+  distinguish supported answers from limited answers or abstentions, and
+  inspect the evidence.
+- Developers and technical reviewers can inspect retrieval decisions, public
+  traces, persisted benchmark results, and reproducibility metadata.
+- Advanced controls remain available without competing with the conversation.
 
 ## Experience principles
 
-1. Calm and technical: restrained indigo and slate tones, clear hierarchy, and minimal decoration.
-2. Evidence first: answer state and cited sources are visually prominent; technical trace details are secondary and collapsible.
-3. Local readiness is understandable: model and index state use plain language and actionable controls.
-4. Safe actions: destructive operations require explicit confirmation and remain visually distinct.
-5. Responsive containment: the page never overflows the viewport; wide data tables scroll within their own region.
+1. **One workspace:** the sidebar, conversation, inspector, and overlays share
+   one continuous route.
+2. **Evidence first:** answer state and cited sources are prominent; retrieval
+   and execution detail is secondary and collapsible.
+3. **Actionable readiness:** model, uploaded-index, and benchmark-preparation
+   states use plain language and identify the next command or action.
+4. **Safe operations:** destructive actions require confirmation, and benchmark
+   cancellation preserves completed work while the active request exits.
+5. **Responsive containment:** the page stays within the viewport and wide
+   result regions scroll inside their container.
 
 ## Accessibility target
 
 - Target WCAG 2.2 AA.
-- Normal text must meet a 4.5:1 contrast ratio; large text and non-text UI boundaries must meet 3:1.
-- Interactive controls use a practical minimum height of 44 CSS pixels with visible keyboard focus.
-- Dynamic status messages are programmatically announced without moving focus.
-- Layout, labels, and status meaning must not depend on color alone.
-- Reduced-motion preferences are respected.
+- Normal text has at least 4.5:1 contrast; large text and non-text boundaries
+  have at least 3:1 contrast.
+- Interactive controls have a practical minimum height of 44 CSS pixels and a
+  visible keyboard focus indicator.
+- Dynamic status messages are announced without moving focus.
+- Labels and state meaning do not depend on color alone.
+- Dialogs contain focus, close predictably, and restore focus to the invoking
+  control. Reduced-motion preferences are respected.
 
 ## Visual direction
 
-- Preserve Gradio and its native interaction patterns.
-- Use an explicit, theme-independent surface and text palette for custom alerts and status blocks.
-- Use a 4/8-pixel spacing rhythm, with compact control interiors and clearer separation between sections.
-- Avoid neon gradients, glass effects, excessive cards, decorative dashboard chrome, and animation that does not communicate state.
+- Use restrained indigo and slate tones with explicit surface and text colors.
+- Follow a 4/8-pixel spacing rhythm and keep control interiors compact.
+- Keep the conversation visually dominant; use overlays for diagnostics,
+  benchmark progress and results, case inspection, and confirmations.
+- Avoid decorative dashboard chrome, glass effects, neon gradients, excessive
+  cards, and motion that does not communicate state.
 
-## Technical constraints
+## Technical boundaries
 
-- The interface must load without Ollama or AI models.
-- Existing ingestion, retrieval, evaluation, diagnostics, export, and deletion behavior must remain intact.
-- No frontend framework migration, external service, production capability, or new evaluation program is introduced.
+- React owns presentation and browser interaction.
+- FastAPI owns application services, typed HTTP responses, persistence, and
+  production delivery of the built frontend.
+- The interface loads without Ollama and exposes limited-readiness guidance.
+- Uploaded documents and benchmark data use separate indexes.
+- Benchmark work uses the fixed 20-case development set across seven systems.
+- No external hosted service or in-application benchmark download/indexing flow
+  is part of the current product.

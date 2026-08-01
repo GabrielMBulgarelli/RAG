@@ -1,43 +1,45 @@
 # Local Document RAG
 
 A local-first Retrieval-Augmented Generation workbench for asking questions
-about PDF and TXT documents with inspectable evidence. The application combines
-hybrid retrieval, bounded multi-step reasoning, citation validation, and local
-model inference.
+about PDF and TXT documents with inspectable evidence. A React interface and a
+FastAPI backend run as one local application, using Ollama for chat and
+embedding models.
 
-## Interface
+## Application workspace
 
-![Single-workspace document RAG interface](docs/assets/dashboard/ask-documents.png)
+The application has one continuous route at `/`:
 
-The React interface is one continuous workspace:
+- The sidebar owns uploads, indexed-document management, model state,
+  benchmark actions, and system diagnostics.
+- The conversation is the primary surface. It keeps the composer, cited
+  answers, clear action, and export action together.
+- The collapsible inspector shows sources, retrieval details, query decisions,
+  and the execution trace for the selected answer.
+- Benchmark progress, benchmark results, case details, diagnostics, and
+  confirmations open as overlays without replacing the workspace.
 
-- A compact sidebar owns upload, indexed-document management, runtime state,
-  and secondary actions.
-- The conversation remains the dominant surface, with its composer, citations,
-  clear action, and export action always available.
-- A collapsible inspector shows sources and detailed retrieval, query, and
-  trace information.
-- Benchmark results, case details, diagnostics, and confirmations use overlays
-  rather than route-level pages.
+FastAPI exposes the typed `/api` contract and serves the built React application
+from `/`. The workspace opens when Ollama is unavailable and explains which
+actions are blocked.
 
-The FastAPI process owns the workspace services, exposes the typed `/api`
-contract, and serves the built React application from `/`.
+## RAG workflow
 
-## Highlights
+- Upload, index, list, and delete PDF or TXT sources.
+- Combine semantic search and BM25 with Reciprocal Rank Fusion, deterministic
+  diversity selection, and stable chunk provenance.
+- Route simple questions directly, decompose multi-hop questions, run
+  independent retrieval work concurrently, and allow at most one targeted
+  retry.
+- Grade evidence, filter irrelevant context, validate citations, and abstain
+  when the indexed sources do not support an answer.
+- Inspect cited excerpts, filenames, pages, retrieval scores, and public trace
+  events. Conversation exports omit private reasoning.
 
-- **Local document workflow:** upload, index, inspect, update, and delete PDF
-  or TXT sources.
-- **Hybrid retrieval:** combines semantic search and BM25 with Reciprocal Rank
-  Fusion, deterministic diversity selection, and stable chunk provenance.
-- **Bounded RAG orchestration:** routes simple questions directly, decomposes
-  multi-hop questions, searches independent subqueries concurrently, and
-  permits at most one targeted retry.
-- **Evidence-aware answers:** grades support, filters irrelevant context,
-  validates citations, and abstains when evidence is insufficient.
-- **Inspectable results:** exposes cited excerpts, source pages, retrieval
-  scores, public traces, and privacy-safe conversation exports.
-- **Graceful local startup:** the workspace opens without Ollama and reports
-  limited readiness until the configured models are available.
+Uploaded-document state is stored under `sources/` and `data/`. A missing
+`data/manifest.json` represents an empty corpus. If the manifest cannot be read,
+the Chroma data is missing, chunks are absent, or the saved index settings do
+not match the active settings, diagnostics report an actionable index error
+instead of treating the corpus as empty.
 
 ## Requirements
 
@@ -56,47 +58,75 @@ cd RAG
 
 uv python install 3.12
 uv sync
-
-cd frontend
-npm ci
-npm run build
-cd ..
+npm --prefix frontend ci
+npm --prefix frontend run build
 
 ollama pull qwen3.5:9b
 ollama pull nomic-embed-text
 ollama serve
 ```
 
-Start the application:
+In another terminal, start the application:
 
 ```bash
 uv run python -m modules.run
 ```
 
-Open [http://127.0.0.1:7860](http://127.0.0.1:7860). The workspace remains
-available in limited-readiness mode when Ollama is offline.
+Open [http://127.0.0.1:7860](http://127.0.0.1:7860). When Ollama is offline,
+the workspace remains available with blocked-state guidance.
 
-The benchmark overlay runs the embedded MultiHopRAG development suite across
-seven systems: three retrieval-only baselines, three fixed single-call RAG
-baselines, and the bounded full RAG workflow. Results use the Full RAG Benchmark
-artifact, retain
-explicit not-applicable metric states, persist across restarts, and expose
-case details without replacing the workspace.
+## Full RAG Benchmark
 
-Prepare the benchmark corpus and its index before the first benchmark run:
+The benchmark uses the canonical 20-case MultiHopRAG development set and seven
+systems:
+
+| Group | Systems |
+| --- | --- |
+| Retrieval only | `dense`, `bm25`, `hybrid` |
+| Fixed single-call RAG | `dense-rag`, `bm25-rag`, `hybrid-rag` |
+| Bounded workflow | `full-rag` |
+
+Prepare its files and populated index before the first run:
 
 ```bash
 uv run python scripts/prepare_multihop_eval.py --index
 ```
 
-The benchmark files and index are separate from the uploaded-document index, so
-this command does not alter documents uploaded through the application. Run it
-once for the current benchmark indexing settings, and run it again if those
-settings change. System diagnostics report missing benchmark files, an empty
-manifest, or an unpopulated benchmark index; benchmark execution remains disabled
-until all three checks are ready.
+The benchmark corpus under `evals/` is separate from documents uploaded through
+the application. Preparation does not alter the uploaded-document index.
+Diagnostics check the benchmark cases, source mapping, manifest, Chroma data,
+and chunk population. The **Run benchmark** action remains disabled until those
+checks pass and the models are loaded.
 
-The benchmark can also be run from the CLI:
+Each run records its commit, dataset identifier and hash, exact case IDs,
+models, temperature, prompt identity, graph settings, chunking settings,
+retrieval and context limits, retry and subquery limits, request timeout, and
+execution timestamps. Run data is stored in
+`evals/results/full_rag/<run-id>/` as `run.json`, `summary.json`, `cases.jsonl`,
+and `events.jsonl`. A completed run can be reopened with **View latest results**
+after a browser refresh or application restart, or downloaded as a ZIP archive.
+
+Results contain these tabs:
+
+- **Summary** shows run progress, recorded metadata, failure aggregates, and
+  runtime-failure aggregates.
+- **Retrieval**, **Grounding**, and **Execution** show their stable metric
+  sections and only the systems named by each section.
+- **Cases** lists successful, expectation-failure, and runtime-failure results.
+- **Failures** groups recorded failures and opens the affected case.
+
+Case inspection shows the question, outcome, metric observations, execution
+trace, and structured evidence cards. Every evidence card includes chunk ID,
+document ID, filename, page, and a bounded readable excerpt; raw diagnostics
+remain expandable.
+
+Cancellation is cooperative. Requesting cancellation prevents later cases and
+model calls from starting, preserves completed case data, and keeps querying
+disabled until the active request exits and the benchmark reaches a terminal
+state. An Ollama request already in progress may finish before cancellation
+completes.
+
+The same evaluation can be run from the command line:
 
 ```bash
 uv run python -m modules.evaluation \
@@ -106,15 +136,27 @@ uv run python -m modules.evaluation \
   --model qwen3.5:9b
 ```
 
-## Quality checks
+## API
 
-```bash
-./scripts/verify.sh
-```
-
-The gate installs locked backend and frontend dependencies, runs frontend
-tests/typechecking/build/audit, checks Python formatting and types, runs the
-offline backend suite, and verifies offline diagnostics.
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/runtime` | Read model, corpus, capability, and active-operation state. |
+| `POST` | `/api/runtime/models` | Load the selected local chat model and workspace services. |
+| `GET` | `/api/diagnostics` | Read runtime, uploaded-index, and benchmark-preparation checks. |
+| `GET` | `/api/documents` | List indexed uploaded documents. |
+| `POST` | `/api/documents` | Upload and index PDF or TXT files. |
+| `DELETE` | `/api/documents/{document_id}` | Remove an indexed document. |
+| `POST` | `/api/query` | Ask a question in a conversation session. |
+| `DELETE` | `/api/conversations/{session_id}` | Clear a conversation. |
+| `POST` | `/api/conversations/export` | Export a privacy-safe conversation record. |
+| `POST` | `/api/benchmarks` | Start the seven-system benchmark. |
+| `GET` | `/api/benchmarks/latest` | Reopen the latest completed run. |
+| `GET` | `/api/benchmarks/{run_id}` | Read a run snapshot. |
+| `GET` | `/api/benchmarks/{run_id}/events` | Stream progress with server-sent events. |
+| `POST` | `/api/benchmarks/{run_id}/cancel` | Request cooperative cancellation. |
+| `GET` | `/api/benchmarks/{run_id}/cases` | List case and system outcomes. |
+| `GET` | `/api/benchmarks/{run_id}/cases/{case_id}/systems/{system_id}` | Inspect one case result. |
+| `GET` | `/api/benchmarks/{run_id}/download` | Download the persisted run archive. |
 
 ## Configuration
 
@@ -129,20 +171,48 @@ RAG_SERVER_PORT=7860
 ```
 
 Retrieval budgets, chunking, retry limits, paths, and server settings are
-validated in [`modules/config.py`](modules/config.py) before runtime clients
-are constructed.
+validated in [`modules/config.py`](modules/config.py) before runtime clients are
+constructed.
+
+## Verification
+
+Run the repository gate:
+
+```bash
+./scripts/verify.sh
+```
+
+It installs locked dependencies, runs Vitest, TypeScript checks, the production
+frontend build, the frontend dependency audit, Ruff, Pyright, Lanorme, and the
+backend suite excluding tests marked for live Ollama. The final diagnostics
+step runs only when the standalone diagnostics module is present.
+
+Useful focused commands are:
+
+```bash
+npm --prefix frontend test -- --run
+npm --prefix frontend run typecheck
+npm --prefix frontend run build
+uv run pytest -m "not ollama" --no-cov
+uv run ruff check .
+uv run ruff format --check .
+uv run pyright
+```
+
+The user-facing completion contract is in
+[`ACCEPTANCE_CRITERIA.md`](ACCEPTANCE_CRITERIA.md).
 
 ## Project structure
 
 ```text
-frontend/                   # React single-workspace interface
+frontend/                   # React workspace and benchmark overlays
 modules/
 ├── api/                    # FastAPI routes, lifecycle, and error mapping
-├── application/            # Presentation-neutral workspace services
-├── app.py                  # FastAPI/React production launcher
+├── application/            # Workspace and benchmark services
+├── app.py                  # FastAPI and built-frontend launcher
 ├── bootstrap.py            # Production dependency composition
 ├── citations.py            # Answer and citation validation
-├── evaluation.py           # Seven-system Full RAG Benchmark CLI
+├── evaluation.py           # Seven-system benchmark CLI
 ├── rag_graph.py            # Bounded retrieval and answer workflow
 ├── retrieval.py            # Semantic, BM25, fusion, and selection
 ├── vector_db.py            # Ingestion, manifest, and Chroma lifecycle
@@ -152,21 +222,12 @@ scripts/
 ├── prepare_multihop_eval.py
 └── verify.sh
 
-tests/                      # Offline unit and integration coverage
+tests/                      # Backend unit and integration coverage
 ```
-
-## What this project demonstrates
-
-- Practical RAG design beyond a basic vector-search demo.
-- Deterministic safeguards around probabilistic model behavior.
-- Retrieval and answer evaluation with explicit metric applicability.
-- Local model integration with graceful failure handling.
-- Typed Python, automated quality gates, and an accessible task-oriented UI.
 
 ## Acknowledgments
 
 The project began from the
 [AI Workshop 2025 GenAI Session](https://github.com/Antonio-Tresol/ai_workshop_2025_gen_ai_session)
-and has since expanded with document lifecycle management, hybrid retrieval,
-bounded orchestration, citation validation, evaluation, and a redesigned local
-interface.
+and has expanded with document lifecycle management, hybrid retrieval, bounded
+orchestration, citation validation, evaluation, and a React/FastAPI workspace.

@@ -40,6 +40,7 @@ export function App({ api = defaultApi, onRunBenchmark }: AppProps) {
   const benchmark = useBenchmark(api);
   const workspace = useWorkspace(api, benchmark.busy ? "benchmark" : null);
   const [overlay, setOverlay] = useState<OverlayState>(null);
+  const [latestBenchmarkEmpty, setLatestBenchmarkEmpty] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
   const overlayBeforeDiagnosticsRef = useRef<OverlayState>(null);
@@ -81,12 +82,22 @@ export function App({ api = defaultApi, onRunBenchmark }: AppProps) {
   };
 
   const runBenchmark = () => {
+    setLatestBenchmarkEmpty(false);
     if (onRunBenchmark) {
       onRunBenchmark();
       return;
     }
     setOverlay({ kind: "benchmark-progress" });
     void benchmark.start();
+  };
+
+  const viewLatestBenchmark = async () => {
+    setLatestBenchmarkEmpty(false);
+    if (await benchmark.loadLatest()) {
+      setOverlay({ kind: "benchmark-results" });
+      return;
+    }
+    setLatestBenchmarkEmpty(true);
   };
 
   useEffect(() => {
@@ -168,6 +179,13 @@ export function App({ api = defaultApi, onRunBenchmark }: AppProps) {
           onDocumentDetails={openDocumentDetails}
           onDiagnostics={openDiagnostics}
           onRunBenchmark={runBenchmark}
+          onViewLatestBenchmark={() => void viewLatestBenchmark()}
+          latestBenchmarkLoading={benchmark.latestLoading}
+          latestBenchmarkMessage={benchmark.latestError ?? (
+            latestBenchmarkEmpty
+              ? "No completed Full RAG Benchmark result is available."
+              : null
+          )}
         />
         {drawerOpen ? (
           <button

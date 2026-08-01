@@ -2,7 +2,7 @@ import { StrictMode, type PropsWithChildren } from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { WorkspaceApi } from "../api/client";
+import { ApiClientError, type WorkspaceApi } from "../api/client";
 import type {
   BenchmarkCaseDetail,
   BenchmarkEvent,
@@ -61,6 +61,101 @@ function waitForAbort(signal: AbortSignal): Promise<void> {
 describe("benchmark controller", () => {
   beforeEach(() => {
     vi.mocked(URL.createObjectURL).mockClear();
+  });
+
+  it("loads the latest completed run and resets loading after success", async () => {
+    const latest = deferred<BenchmarkRun>();
+    const api = createMockApi({
+      getLatestBenchmark: vi.fn().mockReturnValue(latest.promise),
+    });
+    const hook = renderHook(() => useBenchmark(api));
+    let loaded = false;
+
+    act(() => {
+      void hook.result.current.loadLatest().then((result) => {
+        loaded = result;
+      });
+    });
+    expect(hook.result.current.latestLoading).toBe(true);
+
+    await act(async () => {
+      latest.resolve(benchmarkRun);
+      await latest.promise;
+    });
+
+    expect(loaded).toBe(true);
+    expect(api.getLatestBenchmark).toHaveBeenCalledTimes(1);
+    expect(hook.result.current.run).toEqual(benchmarkRun);
+    expect(hook.result.current.latestLoading).toBe(false);
+    expect(hook.result.current.latestError).toBeNull();
+  });
+
+  it("treats a missing latest run as an empty result", async () => {
+    const api = createMockApi({
+      getLatestBenchmark: vi.fn().mockRejectedValue(new ApiClientError({
+        code: "benchmark_not_found",
+        message: "Benchmark not found.",
+        details: {},
+      }, 404)),
+    });
+    const hook = renderHook(() => useBenchmark(api));
+
+    let loaded = true;
+    await act(async () => {
+      loaded = await hook.result.current.loadLatest();
+    });
+
+    expect(loaded).toBe(false);
+    expect(hook.result.current.run).toBeNull();
+    expect(hook.result.current.latestLoading).toBe(false);
+    expect(hook.result.current.latestError).toBeNull();
+  });
+
+  it("reports a latest-run server failure and resets loading", async () => {
+    const api = createMockApi({
+      getLatestBenchmark: vi.fn().mockRejectedValue(new ApiClientError({
+        code: "runtime_unavailable",
+        message: "Stored benchmark results are unavailable.",
+        details: {},
+      }, 503)),
+    });
+    const hook = renderHook(() => useBenchmark(api));
+
+    let loaded = true;
+    await act(async () => {
+      loaded = await hook.result.current.loadLatest();
+    });
+
+    expect(loaded).toBe(false);
+    expect(hook.result.current.latestLoading).toBe(false);
+    expect(hook.result.current.latestError).toBe(
+      "Stored benchmark results are unavailable.",
+    );
+  });
+
+  it("retains the latest run for case inspection and download", async () => {
+    const api = createMockApi();
+    const hook = renderHook(() => useBenchmark(api));
+
+    await act(async () => {
+      expect(await hook.result.current.loadLatest()).toBe(true);
+    });
+    await act(async () => {
+      expect(await hook.result.current.openCase(
+        benchmarkRun.run_id,
+        benchmarkCase.case_id,
+        benchmarkCase.system,
+      )).toBe(true);
+      expect(await hook.result.current.download()).toBe(true);
+    });
+
+    expect(api.getBenchmarkCase).toHaveBeenCalledWith(
+      benchmarkRun.run_id,
+      benchmarkCase.case_id,
+      benchmarkCase.system,
+    );
+    expect(hook.result.current.caseDetail).toEqual(benchmarkCase);
+    expect(api.downloadBenchmark).toHaveBeenCalledWith(benchmarkRun.run_id);
   });
 
   it("starts atomically, publishes durable progress, and begins replay at zero", async () => {

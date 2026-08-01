@@ -17,6 +17,9 @@ interface SidebarProps {
   onDocumentDetails: (document: DocumentRecord) => void;
   onDiagnostics: () => void;
   onRunBenchmark?: () => void;
+  onViewLatestBenchmark?: () => void;
+  latestBenchmarkLoading: boolean;
+  latestBenchmarkMessage: string | null;
 }
 
 export function Sidebar({
@@ -28,6 +31,9 @@ export function Sidebar({
   onDocumentDetails,
   onDiagnostics,
   onRunBenchmark,
+  onViewLatestBenchmark,
+  latestBenchmarkLoading,
+  latestBenchmarkMessage,
 }: SidebarProps) {
   const compactClosed = compact && !open;
   const runtime = workspace.runtime;
@@ -196,8 +202,20 @@ export function Sidebar({
         >
           Run benchmark
         </button>
+        <button
+          className="button button--quiet"
+          type="button"
+          disabled={busy || latestBenchmarkLoading || !onViewLatestBenchmark}
+          aria-describedby={latestBenchmarkMessage ? "latest-benchmark-message" : undefined}
+          onClick={onViewLatestBenchmark}
+        >
+          {latestBenchmarkLoading ? "Loading latest results…" : "View latest results"}
+        </button>
         {benchmarkReason ? (
           <p id="benchmark-reason" className="control-note">{benchmarkReason}</p>
+        ) : null}
+        {latestBenchmarkMessage ? (
+          <p id="latest-benchmark-message" className="control-note">{latestBenchmarkMessage}</p>
         ) : null}
         <button className="button button--quiet" type="button" onClick={onDiagnostics}>
           System diagnostics

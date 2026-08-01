@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { DownloadFile, WorkspaceApi } from "../api/client";
+import { ApiClientError, type DownloadFile, type WorkspaceApi } from "../api/client";
 import type {
   BenchmarkCaseDetail,
   BenchmarkEvent,
@@ -71,6 +71,8 @@ export function useBenchmark(api: WorkspaceApi) {
   const [caseDetail, setCaseDetail] = useState<BenchmarkCaseDetail | null>(null);
   const [caseLoading, setCaseLoading] = useState(false);
   const [caseError, setCaseError] = useState<string | null>(null);
+  const [latestLoading, setLatestLoading] = useState(false);
+  const [latestError, setLatestError] = useState<string | null>(null);
 
   const mountedRef = useRef(false);
   const apiRef = useRef(api);
@@ -85,6 +87,7 @@ export function useBenchmark(api: WorkspaceApi) {
   const caseTokenRef = useRef<symbol | null>(null);
   const downloadTokenRef = useRef<symbol | null>(null);
   const downloadInFlightRef = useRef(false);
+  const latestTokenRef = useRef<symbol | null>(null);
   const connectRef = useRef<(token: RunToken) => void>(() => undefined);
 
   const isCurrent = useCallback((token: RunToken): boolean => (
@@ -224,6 +227,7 @@ export function useBenchmark(api: WorkspaceApi) {
       caseTokenRef.current = null;
       downloadTokenRef.current = null;
       downloadInFlightRef.current = false;
+      latestTokenRef.current = null;
     };
   }, []);
 
@@ -241,6 +245,7 @@ export function useBenchmark(api: WorkspaceApi) {
     caseTokenRef.current = null;
     downloadTokenRef.current = null;
     downloadInFlightRef.current = false;
+    latestTokenRef.current = null;
     setRun(null);
     setStartInFlight(false);
     setCancelInFlight(false);
@@ -254,13 +259,19 @@ export function useBenchmark(api: WorkspaceApi) {
     setCaseDetail(null);
     setCaseLoading(false);
     setCaseError(null);
+    setLatestLoading(false);
+    setLatestError(null);
     return () => {
       streamAbortRef.current?.abort();
     };
   }, [api]);
 
   const start = useCallback(async (): Promise<boolean> => {
-    if (startRef.current || (runRef.current && !isTerminal(runRef.current))) {
+    if (
+      startRef.current
+      || latestTokenRef.current
+      || (runRef.current && !isTerminal(runRef.current))
+    ) {
       return false;
     }
     startRef.current = true;
@@ -269,6 +280,7 @@ export function useBenchmark(api: WorkspaceApi) {
     setConnectionError(null);
     setCancelError(null);
     setDownloadError(null);
+    setLatestError(null);
     tokenRef.current = null;
     refreshRef.current = null;
     caseTokenRef.current = null;
@@ -331,6 +343,66 @@ export function useBenchmark(api: WorkspaceApi) {
       }
     }
   }, [api, publishRun]);
+
+  const loadLatest = useCallback(async (): Promise<boolean> => {
+    if (
+      latestTokenRef.current
+      || startRef.current
+      || (runRef.current && !isTerminal(runRef.current))
+    ) {
+      return false;
+    }
+    const requestToken = Symbol("latest-benchmark");
+    const generation = generationRef.current;
+    const requestApi = api;
+    latestTokenRef.current = requestToken;
+    setLatestLoading(true);
+    setLatestError(null);
+    setStartError(null);
+    setConnectionError(null);
+    setCancelError(null);
+    setDownloadError(null);
+    streamAbortRef.current?.abort();
+    streamAbortRef.current = null;
+    tokenRef.current = null;
+    refreshRef.current = null;
+    caseTokenRef.current = null;
+    setCaseDetail(null);
+    setCaseLoading(false);
+    setCaseError(null);
+    downloadTokenRef.current = null;
+    downloadInFlightRef.current = false;
+    setDownloadInFlight(false);
+    runRef.current = null;
+    setRun(null);
+
+    const isLatestRequest = () => (
+      mountedRef.current
+      && generationRef.current === generation
+      && apiRef.current === requestApi
+      && latestTokenRef.current === requestToken
+    );
+
+    try {
+      const latest = await requestApi.getLatestBenchmark();
+      if (!isLatestRequest()) {
+        return false;
+      }
+      runRef.current = latest;
+      setRun(latest);
+      return true;
+    } catch (error) {
+      if (isLatestRequest() && !(error instanceof ApiClientError && error.status === 404)) {
+        setLatestError(errorMessage(error));
+      }
+      return false;
+    } finally {
+      if (isLatestRequest()) {
+        latestTokenRef.current = null;
+        setLatestLoading(false);
+      }
+    }
+  }, [api]);
 
   const retryConnection = useCallback(() => {
     const token = tokenRef.current;
@@ -469,7 +541,7 @@ export function useBenchmark(api: WorkspaceApi) {
   }, [api]);
 
   const active = Boolean(run && !isTerminal(run));
-  const busy = startInFlight || active;
+  const busy = startInFlight || latestLoading || active;
 
   return {
     run,
@@ -485,8 +557,11 @@ export function useBenchmark(api: WorkspaceApi) {
     caseDetail,
     caseLoading,
     caseError,
+    latestLoading,
+    latestError,
     busy,
     start,
+    loadLatest,
     retryConnection,
     cancel,
     openCase,
@@ -495,4 +570,7 @@ export function useBenchmark(api: WorkspaceApi) {
   };
 }
 
-export type BenchmarkController = ReturnType<typeof useBenchmark>;
+export type BenchmarkController = Omit<
+  ReturnType<typeof useBenchmark>,
+  "latestLoading" | "latestError" | "loadLatest"
+>;

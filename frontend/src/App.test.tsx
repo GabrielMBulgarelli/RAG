@@ -377,6 +377,7 @@ describe("single workspace", () => {
     expect(screen.getByLabelText("Upload documents")).toBeDisabled();
     const benchmark = screen.getByRole("button", { name: "Run benchmark" });
     expect(benchmark).toBeDisabled();
+    expect(screen.getByRole("button", { name: "View latest results" })).toBeDisabled();
     expect(screen.getByText(/wait for the active workspace operation/i)).toBeVisible();
     expect(screen.queryByText(/workflow is not connected/i)).not.toBeInTheDocument();
   });
@@ -413,6 +414,45 @@ describe("single workspace", () => {
     await user.click(await screen.findByRole("button", { name: "Run benchmark" }));
 
     expect(onRunBenchmark).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens the latest result after a fresh app mount", async () => {
+    const firstApi = createMockApi();
+    const firstUser = userEvent.setup();
+    const first = render(<App api={firstApi} />);
+
+    await firstUser.click(await screen.findByRole("button", { name: "View latest results" }));
+    expect(await screen.findByRole("dialog", { name: "RAG Benchmark" })).toBeVisible();
+    expect(firstApi.getLatestBenchmark).toHaveBeenCalledTimes(1);
+
+    first.unmount();
+
+    const secondApi = createMockApi();
+    const secondUser = userEvent.setup();
+    render(<App api={secondApi} />);
+    await secondUser.click(await screen.findByRole("button", { name: "View latest results" }));
+
+    expect(await screen.findByRole("dialog", { name: "RAG Benchmark" })).toBeVisible();
+    expect(secondApi.getLatestBenchmark).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows an explicit empty state when no completed result is stored", async () => {
+    const api = createMockApi({
+      getLatestBenchmark: vi.fn().mockRejectedValue(new ApiClientError({
+        code: "benchmark_not_found",
+        message: "Benchmark not found.",
+        details: {},
+      }, 404)),
+    });
+    const user = userEvent.setup();
+    render(<App api={api} />);
+
+    await user.click(await screen.findByRole("button", { name: "View latest results" }));
+
+    expect(screen.getByText(
+      "No completed Full RAG Benchmark result is available.",
+    )).toBeVisible();
+    expect(screen.queryByRole("dialog", { name: "RAG Benchmark" })).not.toBeInTheDocument();
   });
 
   it("opens durable benchmark progress immediately without unmounting the workspace", async () => {

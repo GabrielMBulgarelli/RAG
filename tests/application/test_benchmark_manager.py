@@ -743,6 +743,24 @@ def persisted_run(
     )
     (run_dir / "events.jsonl").write_text(terminal_event, encoding="utf-8")
     (run_dir / "cases.jsonl").write_text("", encoding="utf-8")
+    (run_dir / "summary.json").write_text(
+        json.dumps(
+            {
+                "benchmark_name": "full_rag_benchmark",
+                "result_kind": "custom_evaluation",
+                "run_id": str(run_id),
+                "status": status.value,
+                "case_ids": [],
+                "expected_result_count": run.progress.total_cases,
+                "completed_result_count": 0,
+                "sections": [section.model_dump(mode="json") for section in run.sections],
+                "failure_aggregates": {},
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     return run
 
 
@@ -1707,9 +1725,8 @@ def test_download_contains_only_public_run_artifacts(tmp_path: Path) -> None:
         await manager.start()
         started = await manager.start_benchmark()
         executor.release.set()
-        await wait_for_terminal(manager, started.run_id)
+        completed = await wait_for_terminal(manager, started.run_id)
         run_dir = settings.benchmark_results_dir / str(started.run_id)
-        (run_dir / "summary.json").write_text('{"public":true}', encoding="utf-8")
         (run_dir / "secret.txt").write_text("private", encoding="utf-8")
         nested = run_dir / "nested"
         nested.mkdir()
@@ -1724,7 +1741,18 @@ def test_download_contains_only_public_run_artifacts(tmp_path: Path) -> None:
                 "run.json",
                 "summary.json",
             ]
-            assert archive.read("summary.json") == b'{"public":true}'
+            summary = json.loads(archive.read("summary.json"))
+            assert summary == {
+                "benchmark_name": "full_rag_benchmark",
+                "case_ids": [],
+                "completed_result_count": 0,
+                "expected_result_count": 1,
+                "failure_aggregates": {},
+                "result_kind": "custom_evaluation",
+                "run_id": str(started.run_id),
+                "sections": [section.model_dump(mode="json") for section in completed.sections],
+                "status": "completed",
+            }
         assert response.media_type == "application/zip"
         assert response.headers["content-disposition"] == (
             f'attachment; filename="benchmark-{started.run_id}.zip"'
@@ -1739,8 +1767,132 @@ def test_download_contains_only_public_run_artifacts(tmp_path: Path) -> None:
             (run_dir / "summary.json").symlink_to(outside)
         except OSError:
             return
-        without_symlink = await manager.download_benchmark(started.run_id)
-        with zipfile.ZipFile(io.BytesIO(bytes(without_symlink.body))) as archive:
-            assert "summary.json" not in archive.namelist()
+        with pytest.raises(BenchmarkNotFoundError):
+            await manager.download_benchmark(started.run_id)
+
+        (run_dir / "summary.json").unlink()
+        with pytest.raises(BenchmarkNotFoundError):
+            await manager.download_benchmark(started.run_id)
+
+    asyncio.run(scenario())
+
+
+def test_completed_benchmark_probe_tracks_queued_terminal_states_and_restart(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        settings = make_settings(tmp_path)
+        executor = CompletingExecutor()
+        manager = BenchmarkManager(settings=settings, executor=executor, heartbeat_interval=60)
+        await manager.start()
+
+        execute_gate = asyncio.Event()
+        original_execute = manager._execute
+
+        async def delayed_execute(active) -> None:
+            await execute_gate.wait()
+            await original_execute(active)
+
+        manager._execute = delayed_execute
+        queued = await manager.start_benchmark()
+        assert (await manager.get_benchmark(queued.run_id)).status is BenchmarkRunStatus.QUEUED
+        assert await manager.has_completed_benchmark() is False
+        execute_gate.set()
+        executor.release.set()
+        await wait_for_terminal(manager, queued.run_id)
+        assert await manager.has_completed_benchmark() is True
+
+        manager._execute = original_execute
+        reopened = BenchmarkManager(settings=settings, executor=IdleExecutor())
+        await reopened.start()
+        assert (await reopened.latest_benchmark()).run_id == queued.run_id
+        assert await reopened.has_completed_benchmark() is True
+
+        incomplete_settings = make_settings(tmp_path / "incomplete")
+        holding = HoldingExecutor()
+        incomplete = BenchmarkManager(settings=incomplete_settings, executor=holding)
+        await incomplete.start()
+        started = await incomplete.start_benchmark()
+        await holding.entered.wait()
+        assert await incomplete.has_completed_benchmark() is False
+
+        await incomplete.cancel_benchmark(started.run_id)
+        holding.release.set()
+        await wait_for_terminal(incomplete, started.run_id)
+        assert await incomplete.has_completed_benchmark() is False
+
+        completing = CompletingExecutor()
+        completed_manager = BenchmarkManager(settings=settings, executor=completing)
+        await completed_manager.start()
+        completed_start = await completed_manager.start_benchmark()
+        completing.release.set()
+        completed = await wait_for_terminal(completed_manager, completed_start.run_id)
+        assert completed.status is BenchmarkRunStatus.COMPLETED
+        assert await completed_manager.has_completed_benchmark() is True
+
+        final_reopen = BenchmarkManager(settings=settings, executor=IdleExecutor())
+        await final_reopen.start()
+        assert (await final_reopen.latest_benchmark()).run_id == completed_start.run_id
+        assert await final_reopen.has_completed_benchmark() is True
+
+    asyncio.run(scenario())
+
+
+def test_completed_benchmark_scan_skips_corrupt_run_and_companion_files(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        settings = make_settings(tmp_path)
+        first_executor = CompletingExecutor()
+        manager = BenchmarkManager(settings=settings, executor=first_executor)
+        await manager.start()
+        first = await manager.start_benchmark()
+        first_executor.release.set()
+        await wait_for_terminal(manager, first.run_id)
+
+        second_executor = CompletingExecutor()
+        manager._executor = second_executor
+        second = await manager.start_benchmark()
+        second_executor.release.set()
+        await wait_for_terminal(manager, second.run_id)
+
+        second_dir = settings.benchmark_results_dir / str(second.run_id)
+        (second_dir / "summary.json").write_text("{not-json", encoding="utf-8")
+        assert (await manager.latest_benchmark()).run_id == first.run_id
+
+        first_dir = settings.benchmark_results_dir / str(first.run_id)
+        (first_dir / "cases.jsonl").write_text("{not-json\n", encoding="utf-8")
+        assert await manager.has_completed_benchmark() is False
+        with pytest.raises(BenchmarkNotFoundError):
+            await manager.latest_benchmark()
+
+    asyncio.run(scenario())
+
+
+def test_failed_run_writes_a_downloadable_summary(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        settings = make_settings(tmp_path)
+        manager = BenchmarkManager(settings=settings, executor=FailingExecutor())
+        await manager.start()
+        started = await manager.start_benchmark()
+        failed = await wait_for_terminal(manager, started.run_id)
+
+        assert failed.status is BenchmarkRunStatus.FAILED
+        assert await manager.has_completed_benchmark() is False
+        summary = json.loads(
+            (settings.benchmark_results_dir / str(started.run_id) / "summary.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert summary["status"] == "failed"
+        assert summary["run_id"] == str(started.run_id)
+        response = await manager.download_benchmark(started.run_id)
+        with zipfile.ZipFile(io.BytesIO(bytes(response.body))) as archive:
+            assert sorted(archive.namelist()) == [
+                "cases.jsonl",
+                "events.jsonl",
+                "run.json",
+                "summary.json",
+            ]
 
     asyncio.run(scenario())

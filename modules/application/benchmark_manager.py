@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import os
 import shutil
 import zipfile
-from collections import deque
+from collections import Counter, deque
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -42,6 +43,11 @@ from modules.application.operation_coordinator import (
     WorkspaceOperationCoordinator,
 )
 from modules.config import Settings, config
+from modules.evaluation_models import (
+    CANONICAL_BENCHMARK_CASE_IDS,
+    CANONICAL_BENCHMARK_RESULT_COUNT,
+    SYSTEMS,
+)
 
 _TERMINAL_STATUSES = {
     BenchmarkRunStatus.CANCELLED,
@@ -236,6 +242,83 @@ class BenchmarkManager:
         temporary.write_text(run.model_dump_json(indent=2), encoding="utf-8")
         BenchmarkRun.model_validate_json(temporary.read_text(encoding="utf-8"))
         os.replace(temporary, target)
+        self._write_summary(run)
+
+    @staticmethod
+    def _is_standard_benchmark(
+        run: BenchmarkRun,
+        cases: Sequence[BenchmarkCaseDetail],
+    ) -> bool:
+        expected_pairs = {
+            (case_id, system) for case_id in CANONICAL_BENCHMARK_CASE_IDS for system in SYSTEMS
+        }
+        actual_pairs = {(case.case_id, case.system) for case in cases}
+        return (
+            run.status is BenchmarkRunStatus.COMPLETED
+            and run.metadata.reproducibility.get("benchmark_name") == "full_rag_benchmark"
+            and run.metadata.reproducibility.get("case_ids")
+            == list(CANONICAL_BENCHMARK_CASE_IDS)
+            and run.metadata.reproducibility.get("expected_result_count")
+            == CANONICAL_BENCHMARK_RESULT_COUNT
+            and len(cases) == CANONICAL_BENCHMARK_RESULT_COUNT
+            and len(actual_pairs) == CANONICAL_BENCHMARK_RESULT_COUNT
+            and actual_pairs == expected_pairs
+        )
+
+    def _summary_payload(
+        self,
+        run: BenchmarkRun,
+        cases: Sequence[BenchmarkCaseDetail],
+    ) -> dict[str, object]:
+        expected = run.metadata.reproducibility.get("expected_result_count")
+        expected_result_count = (
+            expected
+            if isinstance(expected, int) and not isinstance(expected, bool)
+            else run.progress.total_cases
+        )
+        return {
+            "benchmark_name": "full_rag_benchmark",
+            "result_kind": (
+                "standard_benchmark" if self._is_standard_benchmark(run, cases) else "custom_evaluation"
+            ),
+            "run_id": str(run.run_id),
+            "status": run.status.value,
+            "case_ids": list(dict.fromkeys(case.case_id for case in cases)),
+            "expected_result_count": expected_result_count,
+            "completed_result_count": len(cases),
+            "sections": [section.model_dump(mode="json") for section in run.sections],
+            "failure_aggregates": dict(
+                sorted(Counter(failure.classification for failure in run.failures).items())
+            ),
+        }
+
+    def _write_summary(self, run: BenchmarkRun) -> None:
+        cases_path = self._artifact_path(run.run_id, "cases.jsonl")
+        cases = self._read_cases(run.run_id) if cases_path.is_file() else []
+        target = self._artifact_path(run.run_id, "summary.json")
+        temporary = self._artifact_path(run.run_id, "summary.tmp")
+        temporary.write_text(
+            json.dumps(self._summary_payload(run, cases), indent=2) + "\n",
+            encoding="utf-8",
+        )
+        json.loads(temporary.read_text(encoding="utf-8"))
+        os.replace(temporary, target)
+
+    def _validate_summary(
+        self,
+        run: BenchmarkRun,
+        cases: Sequence[BenchmarkCaseDetail],
+    ) -> None:
+        try:
+            summary = json.loads(
+                self._artifact_path(run.run_id, "summary.json", must_exist=True).read_text(
+                    encoding="utf-8"
+                )
+            )
+        except Exception as exc:
+            raise BenchmarkNotFoundError() from exc
+        if summary != self._summary_payload(run, cases):
+            raise BenchmarkNotFoundError()
 
     def _append_event(self, event: BenchmarkEvent) -> None:
         path = self._artifact_path(event.run_id, "events.jsonl")
@@ -272,7 +355,8 @@ class BenchmarkManager:
     def _read_run(self, run_id: UUID) -> BenchmarkRun:
         run = self._read_run_snapshot(run_id)
         self._read_events(run_id)
-        self._read_cases(run_id)
+        cases = self._read_cases(run_id)
+        self._validate_summary(run, cases)
         return run
 
     def _read_events(self, run_id: UUID) -> list[BenchmarkEvent]:
@@ -492,9 +576,9 @@ class BenchmarkManager:
                 cancellation=BenchmarkCancellation(),
             )
             await asyncio.to_thread(run_dir.mkdir, parents=True, exist_ok=False)
-            await asyncio.to_thread(self._write_run, run)
             await asyncio.to_thread((run_dir / "events.jsonl").touch)
             await asyncio.to_thread((run_dir / "cases.jsonl").touch)
+            await asyncio.to_thread(self._write_run, run)
             self._active = active
             active.task = asyncio.create_task(
                 self._execute(active),
@@ -730,33 +814,36 @@ class BenchmarkManager:
                 return active.run.model_copy(deep=True)
         return (await asyncio.to_thread(self._read_run, run_id)).model_copy(deep=True)
 
-    async def latest_benchmark(self) -> BenchmarkRun:
-        def load() -> BenchmarkRun:
-            completed: list[BenchmarkRun] = []
-            if not self.settings.benchmark_results_dir.is_dir():
-                raise BenchmarkNotFoundError()
-            for run_dir in self.settings.benchmark_results_dir.iterdir():
-                if not run_dir.is_dir():
-                    continue
-                try:
-                    run = self._read_run(UUID(run_dir.name))
-                except (ValueError, BenchmarkNotFoundError):
-                    continue
-                if (
-                    run.status is BenchmarkRunStatus.COMPLETED
-                    and run.metadata.completed_at is not None
-                ):
-                    completed.append(run)
-            if not completed:
-                raise BenchmarkNotFoundError()
-            return max(
-                completed,
-                key=lambda item: (
-                    item.metadata.completed_at or datetime.min.replace(tzinfo=timezone.utc)
-                ),
-            )
+    def _latest_completed_run(self) -> BenchmarkRun:
+        completed: list[BenchmarkRun] = []
+        if not self.settings.benchmark_results_dir.is_dir():
+            raise BenchmarkNotFoundError()
+        for run_dir in self.settings.benchmark_results_dir.iterdir():
+            if run_dir.is_symlink() or not run_dir.is_dir():
+                continue
+            try:
+                run = self._read_run(UUID(run_dir.name))
+            except (ValueError, BenchmarkNotFoundError):
+                continue
+            if run.status is BenchmarkRunStatus.COMPLETED and run.metadata.completed_at is not None:
+                completed.append(run)
+        if not completed:
+            raise BenchmarkNotFoundError()
+        return max(
+            completed,
+            key=lambda item: item.metadata.completed_at
+            or datetime.min.replace(tzinfo=timezone.utc),
+        )
 
-        return (await asyncio.to_thread(load)).model_copy(deep=True)
+    async def latest_benchmark(self) -> BenchmarkRun:
+        return (await asyncio.to_thread(self._latest_completed_run)).model_copy(deep=True)
+
+    async def has_completed_benchmark(self) -> bool:
+        try:
+            await asyncio.to_thread(self._latest_completed_run)
+        except BenchmarkNotFoundError:
+            return False
+        return True
 
     async def cancel_benchmark(self, run_id: UUID) -> BenchmarkRun:
         active = self._active
@@ -807,22 +894,22 @@ class BenchmarkManager:
         return (await asyncio.to_thread(load)).model_copy(deep=True)
 
     async def download_benchmark(self, run_id: UUID) -> Response:
-        await self.get_benchmark(run_id)
+        await asyncio.to_thread(self._read_run, run_id)
 
         def build() -> bytes:
             output = io.BytesIO()
             with zipfile.ZipFile(output, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
-                for name in (
+                artifacts = [
+                    self._artifact_path(run_id, name, must_exist=True)
+                    for name in (
                     "run.json",
-                    "events.jsonl",
-                    "cases.jsonl",
                     "summary.json",
-                ):
-                    try:
-                        artifact = self._artifact_path(run_id, name, must_exist=True)
-                    except BenchmarkNotFoundError:
-                        continue
-                    archive.writestr(name, artifact.read_bytes())
+                    "cases.jsonl",
+                    "events.jsonl",
+                    )
+                ]
+                for artifact in artifacts:
+                    archive.writestr(artifact.name, artifact.read_bytes())
             return output.getvalue()
 
         payload = await asyncio.to_thread(build)

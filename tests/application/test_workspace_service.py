@@ -25,11 +25,7 @@ from modules.application.models import (
     UploadedFile,
 )
 from modules.application.operation_coordinator import WorkspaceOperationCoordinator
-from modules.application.workspace_service import (
-    EvaluationProbeResult,
-    RuntimeProbeResult,
-    WorkspaceService,
-)
+from modules.application.workspace_service import RuntimeProbeResult, WorkspaceService
 from modules.config import Settings
 from modules.models import IngestionManifest, ManifestDocument, ReconciliationResult
 from modules.vector_db_operations import (
@@ -349,6 +345,12 @@ def test_model_load_publishes_only_after_full_success(tmp_path: Path) -> None:
 
 
 def test_diagnostics_cover_runtime_index_and_evaluation_states(tmp_path: Path) -> None:
+    async def no_completed_benchmark() -> bool:
+        return False
+
+    async def completed_benchmark() -> bool:
+        return True
+
     settings = make_settings(tmp_path)
     review_manager = FakeVectorDB(reconciliation=ReconciliationResult(orphan_chunk_ids=["orphan"]))
     blocked = WorkspaceService(
@@ -356,18 +358,12 @@ def test_diagnostics_cover_runtime_index_and_evaluation_states(tmp_path: Path) -
         vector_db_factory=lambda: review_manager,
         graph_factory=lambda _vector_db, _model: FakeGraph(),
         runtime_probe=lambda: RuntimeProbeResult(reachable=False, models=()),
-        evaluation_probe=lambda: EvaluationProbeResult(
-            dataset_ready=False,
-            latest_complete_full_rag_benchmark_artifact_available=False,
-        ),
+        dataset_ready_probe=lambda: False,
+        completed_benchmark_probe=no_completed_benchmark,
     )
 
     blocked_snapshot = asyncio.run(blocked.get_diagnostics())
 
-    assert set(EvaluationProbeResult.__dataclass_fields__) == {
-        "dataset_ready",
-        "latest_complete_full_rag_benchmark_artifact_available",
-    }
     assert blocked_snapshot.state == "blocked"
     assert {check.area for check in blocked_snapshot.runtime_checks} == {"runtime"}
     assert any(check.state == "review" for check in blocked_snapshot.index_checks)
@@ -381,10 +377,8 @@ def test_diagnostics_cover_runtime_index_and_evaluation_states(tmp_path: Path) -
             reachable=True,
             models=(settings.llm_model, settings.embedding_model),
         ),
-        evaluation_probe=lambda: EvaluationProbeResult(
-            dataset_ready=True,
-            latest_complete_full_rag_benchmark_artifact_available=True,
-        ),
+        dataset_ready_probe=lambda: True,
+        completed_benchmark_probe=completed_benchmark,
     )
 
     ready_snapshot = asyncio.run(ready.get_diagnostics())

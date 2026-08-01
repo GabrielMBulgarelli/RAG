@@ -6,7 +6,7 @@ import asyncio
 import json
 import urllib.error
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Protocol, cast
@@ -45,10 +45,6 @@ from modules.application.models import (
 )
 from modules.application.operation_coordinator import WorkspaceOperationCoordinator
 from modules.config import PROJECT_ROOT, Settings, config
-from modules.evaluation_models import (
-    CaseResult,
-    is_complete_full_rag_benchmark_artifact,
-)
 from modules.models import IngestionManifest, ManifestDocument, ReconciliationResult
 from modules.rag_graph import RAGGraph, make_chat_model
 from modules.vector_db import VectorDBManager
@@ -62,12 +58,6 @@ from modules.vector_db_operations import (
 class RuntimeProbeResult:
     reachable: bool
     models: tuple[str, ...]
-
-
-@dataclass(frozen=True)
-class EvaluationProbeResult:
-    dataset_ready: bool
-    latest_complete_full_rag_benchmark_artifact_available: bool
 
 
 class _VectorDB(Protocol):
@@ -104,7 +94,8 @@ class _Graph(Protocol):
 VectorDBFactory = Callable[[], _VectorDB]
 GraphFactory = Callable[[_VectorDB, str], _Graph]
 RuntimeProbe = Callable[[], RuntimeProbeResult]
-EvaluationProbe = Callable[[], EvaluationProbeResult]
+DatasetReadyProbe = Callable[[], bool]
+CompletedBenchmarkProbe = Callable[[], Awaitable[bool]]
 
 
 def _normalize_model_name(name: str) -> str:
@@ -146,7 +137,8 @@ class WorkspaceService:
         vector_db_factory: VectorDBFactory | None = None,
         graph_factory: GraphFactory | None = None,
         runtime_probe: RuntimeProbe | None = None,
-        evaluation_probe: EvaluationProbe | None = None,
+        dataset_ready_probe: DatasetReadyProbe | None = None,
+        completed_benchmark_probe: CompletedBenchmarkProbe | None = None,
         benchmark_available: bool = True,
     ) -> None:
         self.settings = settings or config
@@ -156,7 +148,8 @@ class WorkspaceService:
         )
         self._graph_factory = graph_factory or _default_graph_factory
         self._runtime_probe = runtime_probe or (lambda: _default_runtime_probe(self.settings))
-        self._evaluation_probe = evaluation_probe or self._default_evaluation_probe
+        self._dataset_ready_probe = dataset_ready_probe or self._default_dataset_ready_probe
+        self._completed_benchmark_probe = completed_benchmark_probe or self._no_completed_benchmark
         self._benchmark_available = benchmark_available
         self._vector_db: _VectorDB | None = None
         self._graph: _Graph | None = None
@@ -317,31 +310,12 @@ class WorkspaceService:
         return await self.get_runtime()
 
     @staticmethod
-    def _latest_evaluation_exists() -> bool:
-        results_root = PROJECT_ROOT / "evals" / "results" / "multihop"
-        for summary_path in results_root.rglob("summary.json"):
-            try:
-                summary = json.loads(summary_path.read_text(encoding="utf-8"))
-                cases_path = summary_path.parent / "cases.jsonl"
-                results = [
-                    CaseResult.model_validate_json(line)
-                    for line in cases_path.read_text(encoding="utf-8").splitlines()
-                    if line.strip()
-                ]
-                if cases_path.is_file() and is_complete_full_rag_benchmark_artifact(
-                    summary, results
-                ):
-                    return True
-            except (OSError, json.JSONDecodeError, ValueError):
-                continue
-        return False
+    def _default_dataset_ready_probe() -> bool:
+        return (PROJECT_ROOT / "evals" / "multihop" / "cases.jsonl").is_file()
 
-    @classmethod
-    def _default_evaluation_probe(cls) -> EvaluationProbeResult:
-        return EvaluationProbeResult(
-            dataset_ready=(PROJECT_ROOT / "evals" / "multihop" / "cases.jsonl").is_file(),
-            latest_complete_full_rag_benchmark_artifact_available=(cls._latest_evaluation_exists()),
-        )
+    @staticmethod
+    async def _no_completed_benchmark() -> bool:
+        return False
 
     async def get_diagnostics(self) -> DiagnosticsSnapshot:
         probe = await self._probe()
@@ -402,19 +376,20 @@ class WorkspaceService:
                 )
             ]
         try:
-            evaluation = await asyncio.to_thread(self._evaluation_probe)
+            dataset_ready = await asyncio.to_thread(self._dataset_ready_probe)
         except Exception:
-            evaluation = EvaluationProbeResult(
-                dataset_ready=False,
-                latest_complete_full_rag_benchmark_artifact_available=False,
-            )
+            dataset_ready = False
+        try:
+            completed_benchmark_available = await self._completed_benchmark_probe()
+        except Exception:
+            completed_benchmark_available = False
         evaluation_checks = [
             DiagnosticCheck(
                 area="evaluation",
                 name="Benchmark dataset",
-                state="ready" if evaluation.dataset_ready else "blocked",
+                state="ready" if dataset_ready else "blocked",
                 detail="Benchmark dataset is ready."
-                if evaluation.dataset_ready
+                if dataset_ready
                 else "Prepare the benchmark dataset.",
             ),
             DiagnosticCheck(
@@ -422,11 +397,11 @@ class WorkspaceService:
                 name="Latest completed Full RAG Benchmark artifact",
                 state=(
                     "ready"
-                    if evaluation.latest_complete_full_rag_benchmark_artifact_available
+                    if completed_benchmark_available
                     else "not_loaded"
                 ),
                 detail="A complete Full RAG Benchmark artifact is available."
-                if evaluation.latest_complete_full_rag_benchmark_artifact_available
+                if completed_benchmark_available
                 else "No complete Full RAG Benchmark artifact is stored.",
             ),
         ]

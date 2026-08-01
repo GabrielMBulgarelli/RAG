@@ -10,19 +10,25 @@ from modules.config import Settings, config
 
 def create_application_container(settings: Settings = config) -> ApplicationContainer:
     coordinator = WorkspaceOperationCoordinator()
+    workspace: WorkspaceService | None = None
+    benchmarks = BenchmarkManager(
+        executor=FullRagBenchmarkExecutor(
+            settings=settings,
+            chat_model_provider=lambda: (
+                workspace.active_chat_model if workspace is not None else None
+            )
+            or settings.llm_model,
+        ),
+        settings=settings,
+        coordinator=coordinator,
+    )
     workspace = WorkspaceService(
         settings=settings,
         coordinator=coordinator,
+        completed_benchmark_probe=benchmarks.has_completed_benchmark,
         benchmark_available=True,
     )
     return ApplicationContainer(
         workspace=workspace,
-        benchmarks=BenchmarkManager(
-            executor=FullRagBenchmarkExecutor(
-                settings=settings,
-                chat_model_provider=lambda: workspace.active_chat_model or settings.llm_model,
-            ),
-            settings=settings,
-            coordinator=coordinator,
-        ),
+        benchmarks=benchmarks,
     )

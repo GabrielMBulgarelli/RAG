@@ -34,6 +34,7 @@ from modules.evaluation import (
     _require_ollama,
     filter_cases,
     load_cases,
+    map_retrieved_evidence,
     multihop_settings,
     preflight_multihop,
     required_models_for_systems,
@@ -318,8 +319,10 @@ def _case_detail(*, case: EvaluationCase, result: CaseResult) -> BenchmarkCaseDe
         expected_answer=case.expected_answer,
         generated_answer=result.answer or None,
         expected_evidence=expected_evidence,
-        retrieved_evidence=result.retrieved_evidence
-        or [{"chunk_id": chunk_id} for chunk_id in result.retrieved_chunk_ids],
+        retrieved_evidence=map_retrieved_evidence(
+            result.retrieved_evidence
+            or [{"chunk_id": chunk_id} for chunk_id in result.retrieved_chunk_ids]
+        ),
         metric_observations=[
             BenchmarkCaseMetricObservation(
                 name=name,

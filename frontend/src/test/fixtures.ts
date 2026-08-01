@@ -160,8 +160,20 @@ export const benchmarkCase: BenchmarkCaseDetail = {
     { document_id: "expected-2", text: "Expected second." },
   ],
   retrieved_evidence: [
-    { chunk_id: "chunk-2", text: "Retrieved first." },
-    { chunk_id: "chunk-1", text: "Retrieved second." },
+    {
+      chunk_id: "chunk-2",
+      document_id: "retrieved-doc-2",
+      filename: "guide.pdf",
+      page: 2,
+      excerpt: "Retrieved first.",
+    },
+    {
+      chunk_id: "chunk-1",
+      document_id: "retrieved-doc-1",
+      filename: "manual.pdf",
+      page: 7,
+      excerpt: "Retrieved second.",
+    },
   ],
   metric_observations: [
     {

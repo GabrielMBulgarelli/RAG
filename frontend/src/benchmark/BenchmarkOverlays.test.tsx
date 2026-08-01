@@ -286,7 +286,17 @@ describe("benchmark overlays", () => {
     const retrieved = screen.getByRole("list", { name: "Retrieved evidence" });
     const evidence = within(retrieved).getAllByRole("listitem");
     expect(evidence[0]).toHaveTextContent("Retrieved first.");
+    expect(evidence[0]).toHaveTextContent("guide.pdf");
+    expect(evidence[0]).toHaveTextContent("Page 2");
+    expect(within(evidence[0]).getByText("Chunk")).toBeVisible();
+    expect(within(evidence[0]).getByText("chunk-2")).toBeVisible();
+    expect(within(evidence[0]).getByText("Document")).toBeVisible();
+    expect(within(evidence[0]).getByText("retrieved-doc-2")).toBeVisible();
     expect(evidence[1]).toHaveTextContent("Retrieved second.");
+    expect(within(retrieved).queryByText(/\"chunk_id\"/)).not.toBeInTheDocument();
+    const rawEvidence = screen.getByText("Raw evidence diagnostics");
+    await user.click(rawEvidence);
+    expect(rawEvidence.parentElement).toHaveTextContent('\"chunk_id\": \"chunk-2\"');
     const drawer = screen.getByRole("dialog", { name: /Case case/ });
     expect(within(drawer).getByText("Recall at 5")).toBeVisible();
     expect(within(drawer).getByText("Answer token F1")).toBeVisible();

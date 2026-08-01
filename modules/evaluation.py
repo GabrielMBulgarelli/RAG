@@ -8,7 +8,7 @@ import json
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -81,6 +81,7 @@ __all__ = [
     "filter_cases",
     "gold_citation_coverage",
     "is_complete_full_rag_benchmark_artifact",
+    "map_retrieved_evidence",
     "mrr_at_k",
     "ndcg_at_k",
     "normalized_exact_match",
@@ -176,7 +177,7 @@ def _retrieval_result(
         abstained=not bool(hits),
         latency_seconds=elapsed,
         retrieval_rounds=1,
-        retrieved_evidence=_retrieved_evidence(hits),
+        retrieved_evidence=map_retrieved_evidence(hits),
     )
     result.failure_labels = failure_labels(case, result)
     return result
@@ -213,17 +214,24 @@ def _fixed_rag_hits(
     raise ValueError(f"Unsupported fixed RAG system: {system}")
 
 
-def _retrieved_evidence(hits: Sequence[RetrievalHit]) -> list[dict[str, JsonValue]]:
-    return [
-        {
-            "chunk_id": hit.chunk_id,
-            "document_id": hit.document_id,
-            "filename": hit.filename,
-            "page": hit.page,
-            "excerpt": " ".join(hit.content.split())[:300],
-        }
-        for hit in hits[:5]
-    ]
+def map_retrieved_evidence(
+    hits: Sequence[RetrievalHit | Mapping[str, object]],
+) -> list[dict[str, JsonValue]]:
+    evidence: list[dict[str, JsonValue]] = []
+    for raw_hit in hits[:5]:
+        hit = raw_hit.model_dump(mode="json") if isinstance(raw_hit, RetrievalHit) else raw_hit
+        text = hit.get("excerpt") or hit.get("content") or ""
+        page = hit.get("page")
+        evidence.append(
+            {
+                "chunk_id": str(hit.get("chunk_id") or ""),
+                "document_id": str(hit.get("document_id") or ""),
+                "filename": str(hit.get("filename") or ""),
+                "page": page if isinstance(page, int) else None,
+                "excerpt": " ".join(str(text).split())[:300],
+            }
+        )
+    return evidence
 
 
 def _message_text(value: object) -> str:
@@ -292,7 +300,7 @@ Evidence:
             retrieval_rounds=1,
             answer=answer,
             validation_violations=[item.value for item in validation.violations],
-            retrieved_evidence=_retrieved_evidence(hits),
+            retrieved_evidence=map_retrieved_evidence(hits),
         )
     except Exception as exc:  # noqa: BLE001 - evaluation must preserve per-case failures
         result = CaseResult(
@@ -373,14 +381,7 @@ def run_agentic_case(  # lanorme: ignore[KWARG-001,SIZE-002] -- Stable evaluator
         validation_violations=validation.get("violations", []),
         initial_validation_violations=validation.get("initial_violations", []),
         repair_validation_violations=validation.get("repair_violations", []),
-        retrieved_evidence=[
-            {
-                key: hit[key]
-                for key in ("chunk_id", "document_id", "filename", "page", "excerpt")
-                if key in hit
-            }
-            for hit in payload.get("retrieval_hits", [])[:5]
-        ],
+        retrieved_evidence=map_retrieved_evidence(payload.get("retrieval_hits", [])),
         public_trace=[
             {
                 key: event.get(key)

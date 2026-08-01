@@ -21,6 +21,7 @@ from modules.evaluation import (
     failure_labels,
     filter_cases,
     gold_citation_coverage,
+    map_retrieved_evidence,
     mrr_at_k,
     ndcg_at_k,
     normalized_exact_match,
@@ -50,6 +51,47 @@ def test_evaluation_facade_preserves_decomposed_public_api() -> None:
     assert EvaluationCase is DecomposedEvaluationCase
     assert aggregate_metrics is decomposed_aggregate_metrics
     assert write_experiment is decomposed_write_experiment
+
+
+def test_retrieved_evidence_mapping_prefers_excerpt_and_normalizes_content() -> None:
+    long_excerpt = "  Preferred\n\ttext  " + (" word" * 80)
+    bounded_excerpt = " ".join(long_excerpt.split())[:300]
+
+    evidence = map_retrieved_evidence(
+        [
+            {
+                "chunk_id": "chunk-1",
+                "document_id": "doc-1",
+                "filename": "guide.pdf",
+                "page": 4,
+                "excerpt": long_excerpt,
+                "content": "Ignored content",
+            },
+            {
+                "chunk_id": "chunk-2",
+                "document_id": "doc-2",
+                "filename": "manual.pdf",
+                "page": 9,
+                "content": "  Content-only\n evidence\t remains readable.  ",
+            },
+        ]
+    )
+
+    assert evidence[0] == {
+        "chunk_id": "chunk-1",
+        "document_id": "doc-1",
+        "filename": "guide.pdf",
+        "page": 4,
+        "excerpt": bounded_excerpt,
+    }
+    assert len(bounded_excerpt) == 300
+    assert evidence[1] == {
+        "chunk_id": "chunk-2",
+        "document_id": "doc-2",
+        "filename": "manual.pdf",
+        "page": 9,
+        "excerpt": "Content-only evidence remains readable.",
+    }
 
 
 def test_full_rag_benchmark_has_exact_retrieval_fixed_rag_and_full_rag_system_order() -> None:
@@ -923,7 +965,9 @@ def test_runtime_errors_are_failed_responses_for_answer_metrics() -> None:
     assert_observation(metrics, "runtime_error_count", value=1.0, status="measured", sample_count=1)
     assert_observation(metrics, "runtime_error_rate", value=1.0, status="measured", sample_count=1)
     assert_observation(metrics, "abstention_accuracy", value=0.0, status="measured", sample_count=1)
-    assert_observation(metrics, "answerable_response_rate", value=0.0, status="measured", sample_count=1)
+    assert_observation(
+        metrics, "answerable_response_rate", value=0.0, status="measured", sample_count=1
+    )
     assert_observation(
         metrics,
         "normalized_answer_exact_match",

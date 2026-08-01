@@ -158,6 +158,15 @@ function jsonText(value: unknown): string {
   return JSON.stringify(value, null, 2);
 }
 
+function evidenceText(item: Record<string, JsonValue>, ...keys: string[]): string {
+  for (const key of keys) {
+    const value = item[key];
+    if (typeof value === "string" && value) return value;
+    if (typeof value === "number") return String(value);
+  }
+  return "Not provided";
+}
+
 function EvidenceList({
   label,
   evidence,
@@ -169,9 +178,25 @@ function EvidenceList({
     <section>
       <h4>{label}</h4>
       {evidence.length ? (
-        <ol aria-label={label}>
+        <ol className="evidence-cards" aria-label={label}>
           {evidence.map((item, index) => (
-            <li key={index}><pre>{jsonText(item)}</pre></li>
+            <li key={index}>
+              <article className="evidence-card">
+                <header>
+                  <strong>{evidenceText(item, "filename", "source", "title")}</strong>
+                  <span>Page {evidenceText(item, "page")}</span>
+                </header>
+                <dl>
+                  <div><dt>Chunk</dt><dd>{evidenceText(item, "chunk_id")}</dd></div>
+                  <div><dt>Document</dt><dd>{evidenceText(
+                    item,
+                    "document_id",
+                    "benchmark_document_id",
+                  )}</dd></div>
+                </dl>
+                <p>{evidenceText(item, "excerpt", "content", "evidence_text", "text")}</p>
+              </article>
+            </li>
           ))}
         </ol>
       ) : <p className="muted-copy">No {label.toLowerCase()} stored.</p>}
@@ -229,6 +254,13 @@ function CaseDrawer({
             <section><h4>Generated answer</h4><p>{detail.generated_answer ?? "Not provided"}</p></section>
             <EvidenceList label="Expected evidence" evidence={detail.expected_evidence} />
             <EvidenceList label="Retrieved evidence" evidence={detail.retrieved_evidence} />
+            <details>
+              <summary>Raw evidence diagnostics</summary>
+              <pre>{jsonText({
+                expected_evidence: detail.expected_evidence,
+                retrieved_evidence: detail.retrieved_evidence,
+              })}</pre>
+            </details>
             <section>
               <h4>Metric observations</h4>
               {detail.metric_observations.length ? (

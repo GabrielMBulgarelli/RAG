@@ -71,7 +71,7 @@ class FakeRuntime:
                     "document_id": "doc-1",
                     "filename": "document.pdf",
                     "page": 2,
-                    "excerpt": "Example Org changed its policy.",
+                    "content": "  Example Org\n changed\t its policy.  " + (" detail" * 80),
                 }
             ],
         )
@@ -156,6 +156,23 @@ def test_executor_runs_exactly_seven_systems_and_builds_presenter_sections() -> 
         if event_type is BenchmarkEventType.CASE_COMPLETED and case is not None
     ]
     assert len(completed) == 140
+    assert {case.system for case in completed} == set(SYSTEMS)
+    expected_excerpt = " ".join(
+        ("  Example Org\n changed\t its policy.  " + (" detail" * 80)).split()
+    )[:300]
+    assert all(
+        case.retrieved_evidence
+        == [
+            {
+                "chunk_id": "chunk-1",
+                "document_id": "doc-1",
+                "filename": "document.pdf",
+                "page": 2,
+                "excerpt": expected_excerpt,
+            }
+        ]
+        for case in completed
+    )
     assert completed[-1].metric_observations[0].name
     assert completed[-1].metric_observations[0].label
     progress = reporter.events[-1][1]

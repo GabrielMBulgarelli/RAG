@@ -98,6 +98,22 @@ class RecordingReporter:
             self.cancellation.request()
 
 
+class CancellingReporter(RecordingReporter):
+    def __init__(
+        self,
+        cancellation: BenchmarkCancellation,
+        event_type: BenchmarkEventType,
+    ) -> None:
+        super().__init__()
+        self._cancellation = cancellation
+        self._event_type = event_type
+
+    async def publish(self, event_type, data, *, progress, case=None) -> None:
+        await super().publish(event_type, data, progress=progress, case=case)
+        if event_type is self._event_type:
+            self._cancellation.request()
+
+
 def test_executor_runs_exactly_seven_systems_and_builds_presenter_sections() -> None:
     # Arrange
     runtime = FakeRuntime(list(reversed(canonical_cases())))
@@ -188,10 +204,31 @@ def test_executor_checks_cancellation_between_cases() -> None:
     )
 
     # Act
-    asyncio.run(executor.execute(uuid4(), reporter, cancellation))
+    result = asyncio.run(executor.execute(uuid4(), reporter, cancellation))
 
     # Then no second case or system starts
     assert runtime.calls == [(CANONICAL_BENCHMARK_CASE_IDS[0], "dense")]
+    assert result.sections == []
+
+
+def test_executor_stops_when_cancellation_arrives_after_case_start() -> None:
+    cancellation = BenchmarkCancellation()
+    runtime = FakeRuntime(canonical_cases())
+    reporter = CancellingReporter(cancellation, BenchmarkEventType.CASE_STARTED)
+    executor = FullRagBenchmarkExecutor(
+        runtime=runtime,
+        chat_model_provider=lambda: "qwen3.5:9b",
+        embedding_model="nomic-embed-text",
+    )
+
+    result = asyncio.run(executor.execute(uuid4(), reporter, cancellation))
+
+    assert runtime.calls == []
+    assert result.sections == []
+    assert [event[0] for event in reporter.events] == [
+        BenchmarkEventType.SYSTEM_STARTED,
+        BenchmarkEventType.CASE_STARTED,
+    ]
 
 
 def test_executor_sanitizes_runtime_failures_and_continues() -> None:

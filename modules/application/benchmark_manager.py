@@ -712,6 +712,7 @@ class BenchmarkManager:
             active,
             update={
                 "status": BenchmarkRunStatus.CANCELLED,
+                "sections": [],
                 "metadata": active.run.metadata.model_copy(
                     update={"completed_at": datetime.now(timezone.utc)}
                 ),

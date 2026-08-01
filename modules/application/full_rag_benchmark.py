@@ -207,6 +207,10 @@ class LocalEvaluationRuntime:
             return run_fixed_rag_case(case, system, self._retriever, self._model)
         return run_retrieval_case(case, system, self._retriever)
 
+    def set_cancellation_check(self, check: Callable[[], bool]) -> None:
+        if self._model is not None:
+            self._model.set_cancellation_check(check)
+
 
 def _metric(
     *,
@@ -462,6 +466,9 @@ class FullRagBenchmarkExecutor:
         self._canonical_reproducibility()
         chat_model = self._chat_model_provider()
         cases = await asyncio.to_thread(self._runtime.prepare, chat_model)
+        set_cancellation_check = getattr(self._runtime, "set_cancellation_check", None)
+        if set_cancellation_check is not None:
+            set_cancellation_check(lambda: cancellation.is_cancelled)
         case_ids = [case.id for case in cases]
         if (
             len(case_ids) != len(CANONICAL_BENCHMARK_CASE_IDS)
@@ -505,6 +512,8 @@ class FullRagBenchmarkExecutor:
                     {"case_id": case.id, "system": system},
                     progress=progress,
                 )
+                if cancellation.is_cancelled:
+                    break
                 result, failure = await self._run_and_publish_case(
                     case=case,
                     system=system,
@@ -514,6 +523,8 @@ class FullRagBenchmarkExecutor:
                 results.append(result)
                 if failure is not None:
                     failures.append(failure)
+            if cancellation.is_cancelled:
+                break
             await reporter.publish(
                 BenchmarkEventType.SYSTEM_COMPLETED,
                 {"system": system},
@@ -529,6 +540,9 @@ class FullRagBenchmarkExecutor:
                     }
                 ),
             )
+
+        if cancellation.is_cancelled:
+            return BenchmarkExecutionResult(sections=[], failures=failures)
 
         observations: dict[SystemName, dict[str, MetricObservation]] = {}
         for system in SYSTEMS:

@@ -443,6 +443,7 @@ describe("benchmark controller", () => {
     });
     expect(hook.result.current.run?.status).toBe("cancellation_requested");
     expect(hook.result.current.cancelInFlight).toBe(false);
+    expect(hook.result.current.busy).toBe(true);
 
     await act(async () => {
       await hook.result.current.cancel();

@@ -76,6 +76,9 @@ describe("benchmark overlays", () => {
     expect(screen.getByRole("progressbar")).toHaveAttribute("value", "0");
     if (status === "cancellation_requested") {
       expect(screen.getByRole("button", { name: "Cancel benchmark" })).toBeDisabled();
+      expect(screen.getByText(
+        "Cancellation requested. The active model request may finish; no additional cases will start.",
+      )).toBeVisible();
     } else {
       expect(screen.getByRole("button", { name: "Cancel benchmark" })).toBeEnabled();
     }

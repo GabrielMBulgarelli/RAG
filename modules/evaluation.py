@@ -5,17 +5,13 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import queue
-import signal
-import threading
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Sequence
-from contextlib import contextmanager
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from langchain_core.messages import HumanMessage
 from langchain_ollama import ChatOllama
@@ -38,6 +34,7 @@ from modules.evaluation_metrics import (
 )
 from modules.evaluation_models import (
     ANSWER_SYSTEMS,
+    CANONICAL_REQUEST_TIMEOUT_SECONDS,
     FIXED_RAG_PROMPT_ID,
     FIXED_RAG_SYSTEMS,
     FULL_RAG_SYSTEM,
@@ -99,37 +96,17 @@ __all__ = [
 
 
 class _CallState:
-    calls = 0
+    def __init__(self, cancellation_check: Callable[[], bool] | None = None) -> None:
+        self.calls = 0
+        self.cancellation_check = cancellation_check
+
+
+class EvaluationCancelled(RuntimeError):
+    """Raised after a cooperative benchmark cancellation is observed."""
 
 
 class EvaluationTimeout(TimeoutError):
     """Raised when an agentic evaluation case exceeds its wall-clock budget."""
-
-
-@contextmanager
-def _case_deadline(timeout_seconds: float) -> Iterator[None]:
-    if timeout_seconds <= 0:
-        raise ValueError("Case timeout must be greater than zero.")
-
-    sigalrm = getattr(signal, "SIGALRM")  # lanorme: ignore[ATTR-002] -- POSIX-only API
-    itimer_real = getattr(signal, "ITIMER_REAL")  # lanorme: ignore[ATTR-002] -- POSIX-only API
-    getitimer = getattr(signal, "getitimer")  # lanorme: ignore[ATTR-002] -- POSIX-only API
-    setitimer = getattr(signal, "setitimer")  # lanorme: ignore[ATTR-002] -- POSIX-only API
-
-    def raise_timeout(_signum: int, _frame: object) -> None:
-        raise EvaluationTimeout(f"case exceeded {timeout_seconds:g} seconds")
-
-    previous_handler = signal.getsignal(sigalrm)
-    previous_timer = getitimer(itimer_real)
-    signal.signal(sigalrm, raise_timeout)
-    setitimer(itimer_real, timeout_seconds)
-    try:
-        yield
-    finally:
-        setitimer(itimer_real, 0)
-        signal.signal(sigalrm, previous_handler)
-        if previous_timer != (0.0, 0.0):
-            setitimer(itimer_real, *previous_timer)
 
 
 def _process_query_with_deadline(  # lanorme: ignore[KWARG-001,TYPE-001] -- Mirrors dynamic graph payload
@@ -138,46 +115,37 @@ def _process_query_with_deadline(  # lanorme: ignore[KWARG-001,TYPE-001] -- Mirr
     if timeout_seconds <= 0:
         raise ValueError("Case timeout must be greater than zero.")
 
-    supports_signal_timer = threading.current_thread() is threading.main_thread() and all(
-        hasattr(signal, name) for name in ("SIGALRM", "ITIMER_REAL", "getitimer", "setitimer")
-    )
-    if supports_signal_timer:
-        with _case_deadline(timeout_seconds):
-            return graph.process_query(question, session_id)
-
-    outcome: queue.Queue[tuple[dict[str, Any] | None, Exception | None]] = queue.Queue(maxsize=1)
-
-    def process_query() -> None:
-        try:
-            outcome.put((graph.process_query(question, session_id), None))
-        except Exception as exc:  # noqa: BLE001 - caller records evaluation failures
-            outcome.put((None, exc))
-
-    threading.Thread(target=process_query, daemon=True).start()
-    try:
-        payload, error = outcome.get(timeout=timeout_seconds)
-    except queue.Empty as exc:
-        raise EvaluationTimeout(f"case exceeded {timeout_seconds:g} seconds") from exc
-    if error is not None:
-        raise error
-    assert payload is not None
-    return payload
+    return graph.process_query(question, session_id)
 
 
 class CountingModel:
     """Thin proxy counting all calls, including structured-output calls, at one boundary."""
 
-    def __init__(self, model: Any, state: _CallState | None = None):
+    def __init__(
+        self,
+        model: Any,
+        state: _CallState | None = None,
+        *,
+        cancellation_check: Callable[[], bool] | None = None,
+    ):
         self._model = model
-        self._state = state or _CallState()
+        self._state = state or _CallState(cancellation_check)
+
+    def set_cancellation_check(self, check: Callable[[], bool]) -> None:
+        self._state.cancellation_check = check
 
     @property
     def calls(self) -> int:
         return self._state.calls
 
     def invoke(self, value: object, **kwargs: object) -> Any:
+        if self._state.cancellation_check and self._state.cancellation_check():
+            raise EvaluationCancelled("benchmark cancellation requested")
         self._state.calls += 1
-        return self._model.invoke(value, **kwargs)
+        result = self._model.invoke(value, **kwargs)
+        if self._state.cancellation_check and self._state.cancellation_check():
+            raise EvaluationCancelled("benchmark cancellation requested")
+        return result
 
     def with_structured_output(self, schema: object, **kwargs: object) -> CountingModel:
         return CountingModel(self._model.with_structured_output(schema, **kwargs), self._state)
@@ -619,7 +587,7 @@ def run_evaluation(  # lanorme: ignore[PARAM-001,SIZE-002,COMPLEXITY-001,KWARG-0
                 base_url=config.ollama_base_url,
                 temperature=config.temperature,
                 num_predict=512,
-                client_kwargs={"timeout": 60.0},
+                client_kwargs={"timeout": CANONICAL_REQUEST_TIMEOUT_SECONDS},
             )
         )
         if FULL_RAG_SYSTEM in selected:

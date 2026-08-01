@@ -66,6 +66,11 @@ export function BenchmarkProgress({
           <p>Starting the durable benchmark run…</p>
         )}
         {run?.error ? <p className="inline-error" role="alert">{run.error.message}</p> : null}
+        {run?.status === "cancellation_requested" ? (
+          <p>
+            Cancellation requested. The active model request may finish; no additional cases will start.
+          </p>
+        ) : null}
         {benchmark.startError ? (
           <p className="inline-error" role="alert">{benchmark.startError}</p>
         ) : null}

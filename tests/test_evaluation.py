@@ -459,7 +459,7 @@ def test_run_evaluation_uses_normalized_run_scoped_chat_model(
         "base_url": evaluation.config.ollama_base_url,
         "temperature": evaluation.config.temperature,
         "num_predict": 512,
-        "client_kwargs": {"timeout": 60.0},
+        "client_kwargs": {"timeout": evaluation.CANONICAL_REQUEST_TIMEOUT_SECONDS},
     }
     experiment = cast(ExperimentConfig, captured["experiment"])
     assert experiment.chat_model == "qwen3:latest"
@@ -994,7 +994,7 @@ def test_agentic_runtime_error_is_recorded_without_aborting() -> None:
     assert "non_termination" in measured.failure_labels
 
 
-def test_agentic_case_enforces_end_to_end_deadline() -> None:
+def test_agentic_case_waits_for_an_active_model_request_to_exit() -> None:
     class SlowGraph:
         def process_query(self, question: str, session_id: str) -> dict[str, object]:
             time.sleep(0.1)
@@ -1010,10 +1010,30 @@ def test_agentic_case_enforces_end_to_end_deadline() -> None:
         timeout_seconds=0.01,
     )
 
-    assert measured.runtime_error == "EvaluationTimeout: case exceeded 0.01 seconds"
-    assert measured.latency_seconds < 0.08
-    assert "runtime_error" in measured.failure_labels
-    assert "non_termination" in measured.failure_labels
+    assert measured.runtime_error is None
+    assert measured.latency_seconds >= 0.08
+
+
+def test_counting_model_checks_cancellation_around_each_model_invocation() -> None:
+    cancelled = False
+    calls = 0
+
+    class FakeModel:
+        def invoke(self, value: object, **kwargs: object) -> str:
+            nonlocal cancelled, calls
+            del value, kwargs
+            calls += 1
+            cancelled = True
+            return "completed response"
+
+    model = CountingModel(FakeModel(), cancellation_check=lambda: cancelled)
+
+    with pytest.raises(evaluation.EvaluationCancelled):
+        model.invoke("first")
+    with pytest.raises(evaluation.EvaluationCancelled):
+        model.invoke("second")
+
+    assert calls == 1
 
 
 def test_validation_failure_is_counted_as_an_abstention() -> None:

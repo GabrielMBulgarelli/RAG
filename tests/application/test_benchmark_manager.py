@@ -164,7 +164,10 @@ class CancellationExecutor(IdleExecutor):
                 {"case_id": "case-2", "system": "system-a"},
                 progress=progress.model_copy(update={"current_case_id": "case-2"}),
             )
-        return BenchmarkExecutionResult(sections=[], failures=[])
+        return BenchmarkExecutionResult(
+            sections=[BenchmarkSection(id="partial", title="Partial", metrics=[])],
+            failures=[],
+        )
 
 
 class BurstExecutor(IdleExecutor):
@@ -592,6 +595,7 @@ def test_cancellation_is_idempotent_and_current_case_settles_without_next_case(
         cancelled = await wait_for_terminal(manager, started.run_id)
 
         assert cancelled.status is BenchmarkRunStatus.CANCELLED
+        assert cancelled.sections == []
         assert executor.started_cases == ["case-1"]
         case = await manager.get_case(started.run_id, "case-1", "system-a")
         assert case.generated_answer == "Generated"

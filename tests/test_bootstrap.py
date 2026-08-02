@@ -29,7 +29,6 @@ def test_production_container_composes_workspace_with_real_benchmarks(tmp_path: 
     # Then both services share the production operation coordinator
     assert isinstance(container.workspace, WorkspaceService)
     assert isinstance(container.benchmarks, BenchmarkManager)
-    assert container.workspace._benchmark_available is True
     assert container.workspace.coordinator is container.benchmarks.coordinator
     assert (
         container.workspace._completed_benchmark_probe

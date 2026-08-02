@@ -13,7 +13,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, TypedDict
 from uuid import UUID, uuid4
 
 from pydantic import JsonValue
@@ -73,6 +73,18 @@ _EXECUTOR_EVENT_TYPES = {
     BenchmarkEventType.CASE_FAILED,
     BenchmarkEventType.SYSTEM_COMPLETED,
 }
+
+
+class _BenchmarkSummary(TypedDict):
+    benchmark_name: str
+    result_kind: str
+    run_id: str
+    status: str
+    case_ids: list[str]
+    expected_result_count: int
+    completed_result_count: int
+    sections: list[dict[str, JsonValue]]
+    failure_aggregates: dict[str, int]
 
 
 class BenchmarkCancellation:
@@ -249,6 +261,7 @@ class BenchmarkManager:
     @staticmethod
     def _is_standard_benchmark(
         run: BenchmarkRun,
+        *,
         cases: Sequence[BenchmarkCaseDetail],
     ) -> bool:
         expected_pairs = {
@@ -258,8 +271,7 @@ class BenchmarkManager:
         return (
             run.status is BenchmarkRunStatus.COMPLETED
             and run.metadata.reproducibility.get("benchmark_name") == "full_rag_benchmark"
-            and run.metadata.reproducibility.get("case_ids")
-            == list(CANONICAL_BENCHMARK_CASE_IDS)
+            and run.metadata.reproducibility.get("case_ids") == list(CANONICAL_BENCHMARK_CASE_IDS)
             and run.metadata.reproducibility.get("expected_result_count")
             == CANONICAL_BENCHMARK_RESULT_COUNT
             and len(cases) == CANONICAL_BENCHMARK_RESULT_COUNT
@@ -269,9 +281,10 @@ class BenchmarkManager:
 
     def _summary_payload(
         self,
+        *,
         run: BenchmarkRun,
         cases: Sequence[BenchmarkCaseDetail],
-    ) -> dict[str, object]:
+    ) -> _BenchmarkSummary:
         expected = run.metadata.reproducibility.get("expected_result_count")
         expected_result_count = (
             expected
@@ -281,7 +294,9 @@ class BenchmarkManager:
         return {
             "benchmark_name": "full_rag_benchmark",
             "result_kind": (
-                "standard_benchmark" if self._is_standard_benchmark(run, cases) else "custom_evaluation"
+                "standard_benchmark"
+                if self._is_standard_benchmark(run, cases=cases)
+                else "custom_evaluation"
             ),
             "run_id": str(run.run_id),
             "status": run.status.value,
@@ -300,7 +315,7 @@ class BenchmarkManager:
         target = self._artifact_path(run.run_id, "summary.json")
         temporary = self._artifact_path(run.run_id, "summary.tmp")
         temporary.write_text(
-            json.dumps(self._summary_payload(run, cases), indent=2) + "\n",
+            json.dumps(self._summary_payload(run=run, cases=cases), indent=2) + "\n",
             encoding="utf-8",
         )
         json.loads(temporary.read_text(encoding="utf-8"))
@@ -308,6 +323,7 @@ class BenchmarkManager:
 
     def _validate_summary(
         self,
+        *,
         run: BenchmarkRun,
         cases: Sequence[BenchmarkCaseDetail],
     ) -> None:
@@ -319,7 +335,7 @@ class BenchmarkManager:
             )
         except Exception as exc:
             raise BenchmarkNotFoundError() from exc
-        if summary != self._summary_payload(run, cases):
+        if summary != self._summary_payload(run=run, cases=cases):
             raise BenchmarkNotFoundError()
 
     def _append_event(self, event: BenchmarkEvent) -> None:
@@ -354,11 +370,15 @@ class BenchmarkManager:
             raise BenchmarkNotFoundError()
         return run
 
-    def _read_run(self, run_id: UUID) -> BenchmarkRun:
+    def _read_run_details(self, run_id: UUID) -> tuple[BenchmarkRun, list[BenchmarkCaseDetail]]:
         run = self._read_run_snapshot(run_id)
         self._read_events(run_id)
         cases = self._read_cases(run_id)
-        self._validate_summary(run, cases)
+        self._validate_summary(run=run, cases=cases)
+        return run, cases
+
+    def _read_run(self, run_id: UUID) -> BenchmarkRun:
+        run, _ = self._read_run_details(run_id)
         return run
 
     def _read_events(self, run_id: UUID) -> list[BenchmarkEvent]:
@@ -817,25 +837,32 @@ class BenchmarkManager:
                 return active.run.model_copy(deep=True)
         return (await asyncio.to_thread(self._read_run, run_id)).model_copy(deep=True)
 
+    def _completed_run_from_directory(self, run_dir: Path) -> BenchmarkRun | None:
+        if run_dir.is_symlink() or not run_dir.is_dir():
+            return None
+        try:
+            run = self._read_run(UUID(run_dir.name))
+        except (ValueError, BenchmarkNotFoundError):
+            return None
+        if run.status is BenchmarkRunStatus.COMPLETED and run.metadata.completed_at is not None:
+            return run
+        return None
+
     def _latest_completed_run(self) -> BenchmarkRun:
         completed: list[BenchmarkRun] = []
         if not self.settings.benchmark_results_dir.is_dir():
             raise BenchmarkNotFoundError()
         for run_dir in self.settings.benchmark_results_dir.iterdir():
-            if run_dir.is_symlink() or not run_dir.is_dir():
-                continue
-            try:
-                run = self._read_run(UUID(run_dir.name))
-            except (ValueError, BenchmarkNotFoundError):
-                continue
-            if run.status is BenchmarkRunStatus.COMPLETED and run.metadata.completed_at is not None:
+            run = self._completed_run_from_directory(run_dir)
+            if run is not None:
                 completed.append(run)
         if not completed:
             raise BenchmarkNotFoundError()
         return max(
             completed,
-            key=lambda item: item.metadata.completed_at
-            or datetime.min.replace(tzinfo=timezone.utc),
+            key=lambda item: (
+                item.metadata.completed_at or datetime.min.replace(tzinfo=timezone.utc)
+            ),
         )
 
     async def latest_benchmark(self) -> BenchmarkRun:
@@ -897,41 +924,36 @@ class BenchmarkManager:
         return (await asyncio.to_thread(load)).model_copy(deep=True)
 
     async def list_cases(self, run_id: UUID) -> list[BenchmarkCaseSummary]:
+        def case_outcome(case: BenchmarkCaseDetail) -> BenchmarkCaseOutcome:
+            raw_failure_labels = (
+                case.sanitized_raw_result.get("failure_labels", [])
+                if case.sanitized_raw_result
+                else []
+            )
+            raw_labels = raw_failure_labels if isinstance(raw_failure_labels, list) else []
+            labels = {label for label in raw_labels if isinstance(label, str)} or {
+                label.strip()
+                for label in (case.failure_classification or "").split(",")
+                if label.strip()
+            }
+            if "runtime_error" in labels:
+                return BenchmarkCaseOutcome.RUNTIME_FAILURE
+            if case.failure_classification:
+                return BenchmarkCaseOutcome.EXPECTATION_FAILURE
+            return BenchmarkCaseOutcome.SUCCESSFUL
+
         def load() -> list[BenchmarkCaseSummary]:
-            run = self._read_run_snapshot(run_id)
-            self._read_events(run_id)
-            cases = self._read_cases(run_id)
-            self._validate_summary(run, cases)
-            summaries: list[BenchmarkCaseSummary] = []
-            for case in cases:
-                raw_failure_labels = (
-                    case.sanitized_raw_result.get("failure_labels", [])
-                    if case.sanitized_raw_result
-                    else []
-                )
-                raw_labels = raw_failure_labels if isinstance(raw_failure_labels, list) else []
-                labels = {
-                    label for label in raw_labels if isinstance(label, str)
-                } or {
-                    label.strip()
-                    for label in (case.failure_classification or "").split(",")
-                    if label.strip()
-                }
-                outcome = (
-                    BenchmarkCaseOutcome.RUNTIME_FAILURE
-                    if "runtime_error" in labels
-                    else BenchmarkCaseOutcome.EXPECTATION_FAILURE
-                    if case.failure_classification
-                    else BenchmarkCaseOutcome.SUCCESSFUL
-                )
-                summaries.append(BenchmarkCaseSummary(
+            _, cases = self._read_run_details(run_id)
+            return [
+                BenchmarkCaseSummary(
                     case_id=case.case_id,
                     system=case.system,
                     question=case.question,
-                    outcome=outcome,
+                    outcome=case_outcome(case),
                     failure_classification=case.failure_classification,
-                ))
-            return summaries
+                )
+                for case in cases
+            ]
 
         return await asyncio.to_thread(load)
 
@@ -944,10 +966,10 @@ class BenchmarkManager:
                 artifacts = [
                     self._artifact_path(run_id, name, must_exist=True)
                     for name in (
-                    "run.json",
-                    "summary.json",
-                    "cases.jsonl",
-                    "events.jsonl",
+                        "run.json",
+                        "summary.json",
+                        "cases.jsonl",
+                        "events.jsonl",
                     )
                 ]
                 for artifact in artifacts:

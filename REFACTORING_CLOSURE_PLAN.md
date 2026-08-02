@@ -31,7 +31,7 @@
 - Cancellation is cooperative: the active model request may finish or time out, but no later case, system, or model request may start.
 - Cancelled and failed runs remain inspectable but never become the latest completed result.
 - Do not call the branch release-ready until offline tests, Playwright checks, and the real Ollama workflow pass.
-- Follow TDD for every behavior change: add the test, observe the intended failure, implement the minimum change, and rerun the focused test.
+- Follow TDD for every behaviour change: add the test, observe the intended failure, implement the minimum change, and rerun the focused test.
 - Keep each task in a separate verified commit. Do not stage unrelated files.
 - Before each commit run `git diff --check` and inspect `git diff --stat`.
 
@@ -102,7 +102,7 @@ CompletedBenchmarkProbe = Callable[[], Awaitable[bool]]
 uv run pytest tests/application/test_benchmark_manager.py -k "completed_benchmark or download or restart or corrupt" -q --no-cov
 ```
 
-Expected: failures for the missing method, missing generated summary, or incomplete archive behavior.
+Expected: failures for the missing method, missing generated summary, or incomplete archive behaviour.
 
 - [ ] Make `BenchmarkManager` write `summary.json` from the authoritative `BenchmarkRun` plus persisted case records. Update it whenever the durable run snapshot changes, including terminal failed/cancelled states, so every stored run remains downloadable and inspectable.
 
@@ -156,7 +156,7 @@ type BenchmarkController = {
 ```
 
 - [ ] Add failing controller tests for success, 404/no-result, server failure, loading reset, and retaining the loaded run for case inspection/download.
-- [ ] Add failing app tests proving “View latest results” opens the result dialog, shows an explicit empty state, is disabled during another workspace operation, and works after a fresh app mount.
+- [ ] Add failing app tests proving “View latest results” opens the result dialogue, shows an explicit empty state, is disabled during another workspace operation, and works after a fresh app mount.
 - [ ] Implement `loadLatest()` using the existing latest-benchmark API client. Return `true` only when a result was loaded.
 - [ ] Add **View latest results** directly below **Run benchmark**.
 - [ ] On success store the run and open the existing result overlay. Do not create a second results component.
@@ -313,7 +313,7 @@ Failures
 - [ ] Remove regular-expression section/metric classification. Use exact stable IDs.
 - [ ] Render only systems in each section’s `system_ids`; retrieval-only systems must not appear as “not reported” in answer sections.
 - [ ] Summary must show principal retrieval metrics, answer token F1, citation precision, abstention accuracy, P95 latency, runtime-error count, and runtime-error rate.
-- [ ] Keep the existing case drawer nested inside the results dialog.
+- [ ] Keep the existing case drawer nested inside the results dialogue.
 - [ ] Run:
 
 ```powershell
@@ -421,7 +421,7 @@ git commit -m "feat: record benchmark reproducibility metadata"
   - missing indexed chunks → actionable error;
   - incompatible index settings → actionable error.
 - [ ] Stop swallowing manifest parse/read failures.
-- [ ] Preserve the missing-manifest empty-corpus behavior.
+- [ ] Preserve the missing-manifest empty-corpus behaviour.
 - [ ] Map each corrupt state to public, actionable diagnostics without exposing filesystem paths.
 - [ ] Run:
 
@@ -629,7 +629,7 @@ npm --prefix frontend run build
   - total duration;
   - per-system duration;
   - runtime-error count;
-  - cancellation timing/behavior;
+  - cancellation timing/behaviour;
   - Ollama version;
   - model versions/digests;
   - tested git commit.
@@ -646,7 +646,7 @@ If Ollama, model downloads, or the full benchmark cannot run, stop and report th
 
 ## Task 17: Final Release Verification
 
-- [ ] Run the full project gate:
+- [x] Run the full project gate:
 
 ```powershell
 & 'C:\Program Files\Git\bin\bash.exe' scripts/verify.sh
@@ -654,20 +654,20 @@ If Ollama, model downloads, or the full benchmark cannot run, stop and report th
 
 The script must cover locked Python installation, locked frontend installation, Vitest, TypeScript, production build, dependency audit, Ruff, Pyright, Lanorme, offline pytest, Playwright, and offline diagnostics.
 
-- [ ] Run the obsolete-term gate:
+- [x] Run the obsolete-term gate:
 
 ```powershell
 rg -n -i "gradio|schema[_ -]?version|schema[ -]?v[0-9]|legacy schema|UnavailableBenchmarkManager" README.md modules tests docs ACCEPTANCE_CRITERIA.md
 ```
 
-- [ ] Inspect repository state:
+- [x] Inspect repository state:
 
 ```powershell
 git status --short
 git log --oneline --decorate -20
 ```
 
-- [ ] Confirm:
+- [x] Confirm:
   - React/FastAPI is the only interface;
   - canonical completeness uses actual contents;
   - runtime/missing outputs cannot improve metrics;
@@ -683,7 +683,16 @@ git log --oneline --decorate -20
 
 - [ ] Push only when explicitly authorized. A successful GitHub workflow for the final commit is external release evidence and cannot be claimed from local checks alone.
 
-- [ ] Do not create an empty “verification” commit. If the final gate requires fixes, apply them surgically, rerun the affected check and the full gate, then commit the fixes.
+- [x] Do not create an empty “verification” commit. If the final gate requires fixes, apply them surgically, rerun the affected check and the full gate, then commit the fixes.
+
+### Task 17 release-readiness report
+
+- `scripts/verify.sh` completed successfully after its offline diagnostics step was made mandatory: 261 backend tests passed with 87.58% coverage, 79 frontend tests passed, and five Playwright scenarios passed across desktop, tablet, and mobile coverage.
+- Locked dependency installation, the production build, the dependency audit, Ruff lint and formatting, Pyright, Lanorme, and offline runtime diagnostics all passed. The audit reported zero vulnerabilities.
+- The obsolete-term gate found only the active vector-index manifest's `schema_version` contract. No Gradio, benchmark-format/version, legacy-schema, or removed-adapter references remain.
+- README local-link targets and documented evaluation/preparation command entry points were verified. The diff has no whitespace errors and contains no generated benchmark corpus or result assets.
+- Task 16's live record remains the external runtime evidence: Ollama `0.31.2`, `qwen3.5:9b`, exactly 140 unique persisted results, restart recovery, reopening, download, case inspection, diagnostics, cancellation, and query disabling.
+- Local release gates are clean. Push and a successful GitHub Actions run for the final commit remain pending explicit authorization.
 
 ## Completion Report Template
 

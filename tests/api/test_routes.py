@@ -413,13 +413,15 @@ def test_benchmark_endpoints_delegate_with_static_routing_and_response_semantics
         assert latest.json()["run_id"] == str(RUN_ID)
         assert client.get(f"/api/benchmarks/{RUN_ID}").json()["status"] == "running"
         cases = client.get(f"/api/benchmarks/{RUN_ID}/cases")
-        assert cases.json() == [{
-            "case_id": "case-1",
-            "system": "dense",
-            "question": "What is the limit?",
-            "outcome": "successful",
-            "failure_classification": None,
-        }]
+        assert cases.json() == [
+            {
+                "case_id": "case-1",
+                "system": "dense",
+                "question": "What is the limit?",
+                "outcome": "successful",
+                "failure_classification": None,
+            }
+        ]
         case = client.get(f"/api/benchmarks/{RUN_ID}/cases/case-1/systems/dense")
         assert case.json()["case_id"] == "case-1"
 
@@ -447,9 +449,12 @@ def test_benchmark_endpoints_delegate_with_static_routing_and_response_semantics
         assert schemas["/api/benchmarks/latest"]["get"]["responses"]["200"]["content"][
             "application/json"
         ]["schema"]["$ref"].endswith("/BenchmarkRun")
-        assert schemas["/api/benchmarks/{run_id}/cases"]["get"]["responses"]["200"][
-            "content"
-        ]["application/json"]["schema"]["type"] == "array"
+        assert (
+            schemas["/api/benchmarks/{run_id}/cases"]["get"]["responses"]["200"]["content"][
+                "application/json"
+            ]["schema"]["type"]
+            == "array"
+        )
         assert schemas["/api/benchmarks/{run_id}/cases/{case_id}/systems/{system_id}"]["get"][
             "responses"
         ]["200"]["content"]["application/json"]["schema"]["$ref"].endswith("/BenchmarkCaseDetail")

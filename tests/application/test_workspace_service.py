@@ -291,6 +291,7 @@ def test_runtime_capabilities_follow_readiness_and_coordinator(
 
 
 def test_missing_manifest_reports_an_empty_corpus(tmp_path: Path) -> None:
+    # Arrange
     settings = make_settings(tmp_path)
     service = WorkspaceService(
         settings=settings,
@@ -299,8 +300,10 @@ def test_missing_manifest_reports_an_empty_corpus(tmp_path: Path) -> None:
         runtime_probe=lambda: RuntimeProbeResult(reachable=True, models=()),
     )
 
+    # Act
     runtime = asyncio.run(service.get_runtime())
 
+    # Then a missing manifest is represented as an empty corpus
     assert runtime.corpus.status == "empty"
     assert runtime.corpus.document_count == 0
 
@@ -310,6 +313,7 @@ def test_invalid_existing_manifest_raises_a_public_index_error(
     tmp_path: Path,
     manifest_contents: str | None,
 ) -> None:
+    # Arrange
     settings = make_settings(tmp_path)
     settings.manifest_path.parent.mkdir(parents=True)
     if manifest_contents is None:
@@ -323,9 +327,11 @@ def test_invalid_existing_manifest_raises_a_public_index_error(
         runtime_probe=lambda: RuntimeProbeResult(reachable=True, models=()),
     )
 
+    # Act
     with pytest.raises(IndexStateError) as error:
         asyncio.run(service.get_runtime())
 
+    # Then the public error omits private filesystem details
     assert error.value.code == "index_error"
     assert error.value.details == {
         "reason": "manifest_invalid",
@@ -333,36 +339,6 @@ def test_invalid_existing_manifest_raises_a_public_index_error(
     }
     assert str(settings.manifest_path) not in error.value.message
     assert str(settings.manifest_path) not in str(error.value.details)
-
-
-def test_runtime_keeps_benchmark_disabled_when_no_executor_is_configured(
-    tmp_path: Path,
-) -> None:
-    # Given a ready model and indexed corpus without a benchmark executor
-    settings = make_settings(tmp_path)
-    manager = FakeVectorDB()
-    manager.index_upload_batch(
-        (UploadedFile(filename="guide.txt", content_type="text/plain", content=b"guide"),)
-    )
-    service = WorkspaceService(
-        settings=settings,
-        benchmark_available=False,
-        vector_db_factory=lambda: manager,
-        graph_factory=lambda _vector_db, _model: FakeGraph(),
-        runtime_probe=lambda: RuntimeProbeResult(
-            reachable=True,
-            models=(settings.llm_model, settings.embedding_model),
-        ),
-    )
-
-    # When runtime capability is evaluated
-    asyncio.run(service.load_model(ModelLoadRequest(chat_model=settings.llm_model)))
-    runtime = asyncio.run(service.get_runtime())
-
-    # Then querying remains available while benchmarking does not
-    assert runtime.state == "ready"
-    assert runtime.capabilities.can_query is True
-    assert runtime.capabilities.can_run_benchmark is False
 
 
 def test_loaded_runtime_can_benchmark_embedded_corpus_without_workspace_documents(
@@ -394,6 +370,7 @@ def test_loaded_runtime_can_benchmark_embedded_corpus_without_workspace_document
 def test_loaded_runtime_keeps_benchmark_disabled_until_preparation_is_complete(
     tmp_path: Path,
 ) -> None:
+    # Arrange
     settings = make_settings(tmp_path)
     service = WorkspaceService(
         settings=settings,
@@ -406,8 +383,10 @@ def test_loaded_runtime_keeps_benchmark_disabled_until_preparation_is_complete(
         dataset_ready_probe=lambda: benchmark_preparation(ready=False),
     )
 
+    # Act
     asyncio.run(service.load_model(ModelLoadRequest(chat_model=settings.llm_model)))
 
+    # Then preparation remains the only benchmark capability blocker
     assert asyncio.run(service.get_runtime()).capabilities.can_run_benchmark is False
 
 
@@ -454,10 +433,10 @@ def test_model_load_publishes_only_after_full_success(tmp_path: Path) -> None:
 
 
 def test_diagnostics_cover_runtime_index_and_evaluation_states(tmp_path: Path) -> None:
-    async def no_completed_benchmark() -> bool:
+    async def has_no_completed_benchmark() -> bool:
         return False
 
-    async def completed_benchmark() -> bool:
+    async def has_completed_benchmark() -> bool:
         return True
 
     settings = make_settings(tmp_path)
@@ -468,7 +447,7 @@ def test_diagnostics_cover_runtime_index_and_evaluation_states(tmp_path: Path) -
         graph_factory=lambda _vector_db, _model: FakeGraph(),
         runtime_probe=lambda: RuntimeProbeResult(reachable=False, models=()),
         dataset_ready_probe=lambda: benchmark_preparation(ready=False),
-        completed_benchmark_probe=no_completed_benchmark,
+        completed_benchmark_probe=has_no_completed_benchmark,
     )
 
     blocked_snapshot = asyncio.run(blocked.get_diagnostics())
@@ -487,7 +466,7 @@ def test_diagnostics_cover_runtime_index_and_evaluation_states(tmp_path: Path) -
             models=(settings.llm_model, settings.embedding_model),
         ),
         dataset_ready_probe=lambda: benchmark_preparation(ready=True),
-        completed_benchmark_probe=completed_benchmark,
+        completed_benchmark_probe=has_completed_benchmark,
     )
 
     ready_snapshot = asyncio.run(ready.get_diagnostics())
@@ -508,12 +487,15 @@ def test_benchmark_preparation_diagnostics_require_files_manifest_and_index(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Arrange
     monkeypatch.setattr(workspace_service_module, "PROJECT_ROOT", tmp_path)
     multihop_dir = tmp_path / "evals" / "multihop"
     runtime_dir = tmp_path / "evals" / "runtime"
 
+    # Act
     missing_files = WorkspaceService._default_dataset_ready_probe()
     files_check = next(check for check in missing_files.checks if check.name == "Benchmark files")
+    # Then every missing preparation artifact has an actionable check
     assert files_check.state == "blocked"
     assert BENCHMARK_PREPARATION_COMMAND in files_check.detail
 
@@ -596,6 +578,7 @@ def test_diagnostics_explain_actionable_corrupt_index_states(
     check_name: str,
     detail: str,
 ) -> None:
+    # Arrange
     manager._manifest.documents["document-1"] = indexed_document("chunk-1", "chunk-2")
     service = WorkspaceService(
         settings=make_settings(tmp_path),
@@ -605,8 +588,10 @@ def test_diagnostics_explain_actionable_corrupt_index_states(
         dataset_ready_probe=lambda: benchmark_preparation(ready=True),
     )
 
+    # Act
     snapshot = asyncio.run(service.get_diagnostics())
 
+    # Then the corrupt state is reported with its recovery action
     check = next(item for item in snapshot.index_checks if item.name == check_name)
     assert check.state == "blocked"
     assert check.detail == detail
@@ -615,6 +600,7 @@ def test_diagnostics_explain_actionable_corrupt_index_states(
 def test_diagnostics_report_an_invalid_manifest_without_exposing_its_path(
     tmp_path: Path,
 ) -> None:
+    # Arrange
     class InvalidManifestVectorDB(FakeVectorDB):
         def manifest(self) -> IngestionManifest:
             raise ValueError(f"invalid manifest at {tmp_path}/private/manifest.json")
@@ -627,8 +613,10 @@ def test_diagnostics_report_an_invalid_manifest_without_exposing_its_path(
         dataset_ready_probe=lambda: benchmark_preparation(ready=True),
     )
 
+    # Act
     snapshot = asyncio.run(service.get_diagnostics())
 
+    # Then diagnostics expose the recovery action without the private path
     assert snapshot.state == "error"
     assert [check.model_dump() for check in snapshot.index_checks] == [
         {

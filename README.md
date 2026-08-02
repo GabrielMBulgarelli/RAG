@@ -189,8 +189,8 @@ Run the repository gate:
 
 It installs locked dependencies, runs Vitest, TypeScript checks, the production
 frontend build, the frontend dependency audit, Ruff, Pyright, Lanorme, and the
-backend suite excluding tests marked for live Ollama. The final diagnostics
-step runs only when the standalone diagnostics module is present.
+backend suite excluding tests marked for live Ollama. The final step validates
+runtime diagnostics in offline mode without contacting Ollama.
 
 Useful focused commands are:
 

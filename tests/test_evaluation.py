@@ -54,6 +54,7 @@ def test_evaluation_facade_preserves_decomposed_public_api() -> None:
 
 
 def test_dataset_content_hash_uses_case_and_source_content(tmp_path: Path) -> None:
+    # Arrange
     case = evaluation_models.EvaluationCase(
         id="case-1",
         split="development",
@@ -81,6 +82,7 @@ def test_dataset_content_hash_uses_case_and_source_content(tmp_path: Path) -> No
     second.write_text(serialized, encoding="utf-8")
     first.touch()
 
+    # Act
     first_hash = evaluation.dataset_content_hash(evaluation.load_cases(first))
     second_hash = evaluation.dataset_content_hash(evaluation.load_cases(second))
     changed_source = case.model_copy(
@@ -91,14 +93,17 @@ def test_dataset_content_hash_uses_case_and_source_content(tmp_path: Path) -> No
         }
     )
 
+    # Then hashes depend on content rather than the source path
     assert first_hash == second_hash
     assert evaluation.dataset_content_hash([changed_source]) != first_hash
 
 
 def test_retrieved_evidence_mapping_prefers_excerpt_and_normalizes_content() -> None:
+    # Arrange
     long_excerpt = "  Preferred\n\ttext  " + (" word" * 80)
     bounded_excerpt = " ".join(long_excerpt.split())[:300]
 
+    # Act
     evidence = map_retrieved_evidence(
         [
             {
@@ -119,6 +124,7 @@ def test_retrieved_evidence_mapping_prefers_excerpt_and_normalizes_content() -> 
         ]
     )
 
+    # Then the preferred excerpts are normalized and bounded
     assert evidence[0] == {
         "chunk_id": "chunk-1",
         "document_id": "doc-1",
@@ -310,20 +316,23 @@ def test_retry_precision_and_recall_edge_cases() -> None:
 
 
 def test_citation_metrics() -> None:
-    assert citation_precision(["a", "unknown"], ["a", "b"]) == 0.5
-    assert citation_precision([], ["a"]) is None
+    assert citation_precision(cited=["a", "unknown"], relevant=["a", "b"]) == 0.5
+    assert citation_precision(cited=[], relevant=["a"]) is None
     assert gold_citation_coverage(["a"], ["a", "b"]) == 0.5
     assert gold_citation_coverage([], []) is None
     assert token_f1("Sam Altman [C1]", "Sam Altman") == 1.0
 
 
 def test_citation_precision_uses_relevant_evidence_without_weakening_validation() -> None:
+    # Arrange
     benchmark = case(relevant_chunk_ids=["a", "b"])
+    # Act
     metrics = aggregate_metrics(
         [benchmark],
         [result(retrieved_chunk_ids=["a", "x"], cited_chunk_ids=["a", "x"])],
     )
 
+    # Then a complete canonical artifact retains its benchmark classification
     assert_observation(metrics, "citation_precision", value=0.5, status="measured", sample_count=2)
     assert "invalid_citation" in failure_labels(
         benchmark,
@@ -683,11 +692,16 @@ def completeness_summary(
 
 
 def test_complete_reordered_full_rag_benchmark_artifact_is_accepted() -> None:
+    # Arrange
     results = list(reversed(canonical_results()))
+    # Act
     summary = completeness_summary(canonical_experiment(), results)
 
-    assert evaluation.is_complete_full_rag_benchmark_artifact(summary, results)
-    assert evaluation.evaluation_result_kind(summary, results) == "standard_benchmark"
+    # Then every incomplete artifact is classified as custom
+    assert evaluation.is_complete_full_rag_benchmark_artifact(summary=summary, results=results)
+    assert (
+        evaluation.evaluation_result_kind(summary=summary, results=results) == "standard_benchmark"
+    )
 
 
 @pytest.mark.parametrize(
@@ -711,11 +725,16 @@ def test_complete_reordered_full_rag_benchmark_artifact_is_accepted() -> None:
 def test_incomplete_full_rag_benchmark_artifact_is_custom(
     incomplete_results,
 ) -> None:
+    # Arrange
     results = incomplete_results(canonical_results())
+    # Act
     summary = completeness_summary(canonical_experiment(), results)
 
-    assert not evaluation.is_complete_full_rag_benchmark_artifact(summary, results)
-    assert evaluation.evaluation_result_kind(summary, results) == "custom_evaluation"
+    # Then all canonical case-system pairs are required
+    assert not evaluation.is_complete_full_rag_benchmark_artifact(summary=summary, results=results)
+    assert (
+        evaluation.evaluation_result_kind(summary=summary, results=results) == "custom_evaluation"
+    )
 
 
 def test_incorrect_benchmark_configuration_is_custom() -> None:
@@ -725,15 +744,18 @@ def test_incorrect_benchmark_configuration_is_custom() -> None:
         results,
     )
 
-    assert not evaluation.is_complete_full_rag_benchmark_artifact(summary, results)
+    assert not evaluation.is_complete_full_rag_benchmark_artifact(summary=summary, results=results)
 
 
 def test_exactly_140_canonical_results_are_accepted() -> None:
+    # Arrange
     results = canonical_results()
+    # Act
     summary = completeness_summary(canonical_experiment(), results)
 
+    # Then answer-quality metrics treat the runtime error as a failed response
     assert len(results) == 140
-    assert evaluation.is_complete_full_rag_benchmark_artifact(summary, results)
+    assert evaluation.is_complete_full_rag_benchmark_artifact(summary=summary, results=results)
 
 
 def test_experiment_summary_records_standard_or_custom_kind(tmp_path: Path) -> None:
@@ -993,6 +1015,7 @@ def test_runtime_and_failed_abstention_labels() -> None:
 
 
 def test_runtime_errors_are_failed_responses_for_answer_metrics() -> None:
+    # Arrange / Act
     metrics = aggregate_metrics(
         [case(expected_answer="expected answer")],
         [
@@ -1004,6 +1027,7 @@ def test_runtime_errors_are_failed_responses_for_answer_metrics() -> None:
         ],
     )
 
+    # Then the completed in-flight request determines the measured duration
     assert_observation(metrics, "runtime_error_count", value=1.0, status="measured", sample_count=1)
     assert_observation(metrics, "runtime_error_rate", value=1.0, status="measured", sample_count=1)
     assert_observation(metrics, "abstention_accuracy", value=0.0, status="measured", sample_count=1)
@@ -1081,6 +1105,7 @@ def test_agentic_runtime_error_is_recorded_without_aborting() -> None:
 
 
 def test_agentic_case_waits_for_an_active_model_request_to_exit() -> None:
+    # Arrange
     class SlowGraph:
         def process_query(self, question: str, session_id: str) -> dict[str, object]:
             time.sleep(0.1)
@@ -1089,6 +1114,7 @@ def test_agentic_case_waits_for_an_active_model_request_to_exit() -> None:
     class FakeModel:
         calls = 0
 
+    # Act
     measured = run_agentic_case(
         case(),
         cast(evaluation.RAGGraph, SlowGraph()),
@@ -1096,11 +1122,13 @@ def test_agentic_case_waits_for_an_active_model_request_to_exit() -> None:
         timeout_seconds=0.01,
     )
 
+    # Then no model call starts after cancellation
     assert measured.runtime_error is None
     assert measured.latency_seconds >= 0.08
 
 
 def test_counting_model_checks_cancellation_around_each_model_invocation() -> None:
+    # Arrange
     cancelled = False
     calls = 0
 
@@ -1114,11 +1142,13 @@ def test_counting_model_checks_cancellation_around_each_model_invocation() -> No
 
     model = CountingModel(FakeModel(), cancellation_check=lambda: cancelled)
 
+    # Act
     with pytest.raises(evaluation.EvaluationCancelled):
         model.invoke("first")
     with pytest.raises(evaluation.EvaluationCancelled):
         model.invoke("second")
 
+    # Then no model call starts after cancellation
     assert calls == 1
 
 

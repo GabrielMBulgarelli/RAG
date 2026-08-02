@@ -50,7 +50,7 @@ def write_experiment(
     }
     summary = {
         **summary_core,
-        "result_kind": evaluation_result_kind(summary_core, results),
+        "result_kind": evaluation_result_kind(summary=summary_core, results=results),
         "metrics": serialized_metrics,
     }
     (output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")

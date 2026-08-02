@@ -57,7 +57,7 @@ def p95(values: Sequence[float]) -> float:
     return ordered[lower] + fraction * (ordered[min(lower + 1, len(ordered) - 1)] - ordered[lower])
 
 
-def citation_precision(cited: Sequence[str], relevant: Sequence[str]) -> float | None:
+def citation_precision(*, cited: Sequence[str], relevant: Sequence[str]) -> float | None:
     if not cited:
         return None
     relevant_ids = set(relevant)
@@ -135,7 +135,7 @@ def _ratio_observation(numerator: int, denominator: int, note: str) -> MetricObs
     return _measured(numerator / denominator, denominator, note)
 
 
-def _count_observation(count: int, denominator: int, note: str) -> MetricObservation:
+def _count_observation(*, count: int, denominator: int, note: str) -> MetricObservation:
     if not denominator:
         return _no_eligible(note)
     return _measured(float(count), denominator, note)
@@ -259,9 +259,9 @@ def aggregate_metrics(
     metrics.update(
         {
             name: _count_observation(
-                sum(bool(labels & group) for labels in classifications),
-                len(paired),
-                "Cases with this failure classification.",
+                count=sum(bool(labels & group) for labels in classifications),
+                denominator=len(paired),
+                note="Cases with this failure classification.",
             )
             for name, group in classification_groups.items()
         }
@@ -312,8 +312,7 @@ def aggregate_metrics(
             ),
             "abstention_accuracy": _ratio_observation(
                 sum(
-                    result.runtime_error is None
-                    and result.abstained == (not case.answerable)
+                    result.runtime_error is None and result.abstained == (not case.answerable)
                     for case, result in answering
                 ),
                 len(answering),

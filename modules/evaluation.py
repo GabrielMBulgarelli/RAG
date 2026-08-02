@@ -113,10 +113,7 @@ class EvaluationTimeout(TimeoutError):
 
 def dataset_content_hash(cases: Sequence[EvaluationCase]) -> str:
     """Hash benchmark cases and their embedded source evidence canonically."""
-    content = [
-        case.model_dump(mode="json")
-        for case in sorted(cases, key=lambda item: item.id)
-    ]
+    content = [case.model_dump(mode="json") for case in sorted(cases, key=lambda item: item.id)]
     serialized = json.dumps(
         content,
         ensure_ascii=False,

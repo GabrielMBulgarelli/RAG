@@ -124,6 +124,7 @@ async def get_benchmark(run_id: UUID, benchmarks: BenchmarkDependency) -> Benchm
 
 @router.get("/benchmarks/{run_id}/cases", response_model=list[BenchmarkCaseSummary])
 async def list_benchmark_cases(
+    *,
     run_id: UUID,
     benchmarks: BenchmarkDependency,
 ) -> list[BenchmarkCaseSummary]:

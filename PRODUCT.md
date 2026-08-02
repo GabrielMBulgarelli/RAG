@@ -38,13 +38,13 @@ project.
 - Interactive controls have a practical minimum height of 44 CSS pixels and a
   visible keyboard focus indicator.
 - Dynamic status messages are announced without moving focus.
-- Labels and state meaning do not depend on color alone.
+- Labels and state meaning do not depend on colour alone.
 - Dialogs contain focus, close predictably, and restore focus to the invoking
   control. Reduced-motion preferences are respected.
 
 ## Visual direction
 
-- Use restrained indigo and slate tones with explicit surface and text colors.
+- Use restrained indigo and slate tones with explicit surface and text colours.
 - Follow a 4/8-pixel spacing rhythm and keep control interiors compact.
 - Keep the conversation visually dominant; use overlays for diagnostics,
   benchmark progress and results, case inspection, and confirmations.

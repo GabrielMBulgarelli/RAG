@@ -41,10 +41,6 @@ echo "==> Tests without live Ollama"
 uv run pytest -m "not ollama"
 
 echo "==> Offline diagnostics"
-if uv run python -c "import importlib.util; raise SystemExit(0 if importlib.util.find_spec('modules.diagnostics') else 1)"; then
-  uv run python -m modules.diagnostics --offline
-else
-  echo "modules.diagnostics does not exist yet; it becomes mandatory in the diagnostics phase."
-fi
+uv run python -c "from modules.config import config; from modules.run import collect_runtime_diagnostics; assert collect_runtime_diagnostics(config, check_ollama=False) == []"
 
 echo "==> Verification complete"

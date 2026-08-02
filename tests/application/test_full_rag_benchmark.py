@@ -267,6 +267,7 @@ def test_executor_checks_cancellation_between_cases() -> None:
 
 
 def test_executor_stops_when_cancellation_arrives_after_case_start() -> None:
+    # Arrange
     cancellation = BenchmarkCancellation()
     runtime = FakeRuntime(canonical_cases())
     reporter = CancellingReporter(cancellation, BenchmarkEventType.CASE_STARTED)
@@ -276,8 +277,10 @@ def test_executor_stops_when_cancellation_arrives_after_case_start() -> None:
         embedding_model="nomic-embed-text",
     )
 
+    # Act
     result = asyncio.run(executor.execute(uuid4(), reporter, cancellation))
 
+    # Then cancellation prevents benchmark work from starting
     assert runtime.calls == []
     assert result.sections == []
     assert [event[0] for event in reporter.events] == [

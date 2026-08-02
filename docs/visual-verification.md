@@ -7,15 +7,15 @@ not contain private documents and are independent of live Ollama validation.
 
 ## Responsive workspace
 
-### Desktop — 1440 × 1000
+### Desktop, 1440 × 1000
 
 ![Desktop workspace](assets/dashboard/ask-documents.png)
 
-### Tablet — 1024 × 768
+### Tablet, 1024 × 768
 
 ![Tablet workspace](assets/workspace/tablet-workspace.png)
 
-### Mobile sidebar — 390 × 844
+### Mobile sidebar, 390 × 844
 
 ![Mobile workspace sidebar](assets/workspace/mobile-workspace-sidebar.png)
 

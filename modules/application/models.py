@@ -317,36 +317,6 @@ class BenchmarkProgress(BaseModel):
     current_case_index: int | None = Field(default=None, ge=0)
 
 
-class BenchmarkGraphConfiguration(BaseModel):
-    max_candidates: int = Field(ge=1)
-    maximum_context_chunks: int = Field(ge=1)
-    retry_limit: int = Field(ge=0)
-    subquery_limit: int = Field(ge=1)
-
-
-class BenchmarkReproducibility(BaseModel):
-    benchmark_name: str
-    git_commit: str
-    dataset_identifier: str
-    dataset_hash: str
-    case_ids: list[str]
-    expected_result_count: int = Field(ge=0)
-    chat_model: str
-    embedding_model: str
-    temperature: float
-    fixed_rag_prompt_id: str
-    graph_configuration: BenchmarkGraphConfiguration
-    chunk_size: int = Field(ge=1)
-    chunk_overlap: int = Field(ge=0)
-    retrieval_limit: int = Field(ge=1)
-    semantic_candidates: int = Field(ge=1)
-    sparse_candidates: int = Field(ge=1)
-    maximum_context_chunks: int = Field(ge=1)
-    retry_limit: int = Field(ge=0)
-    subquery_limit: int = Field(ge=1)
-    request_timeout_seconds: float = Field(gt=0)
-
-
 class BenchmarkMetadata(BaseModel):
     dataset: str
     split: str

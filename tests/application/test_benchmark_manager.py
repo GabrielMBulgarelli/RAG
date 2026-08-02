@@ -748,9 +748,7 @@ def test_case_summaries_include_success_expectation_and_runtime_failures(
                 metric_observations=[],
                 failure_classification="runtime_error, non_termination",
                 public_trace=[],
-                sanitized_raw_result={
-                    "failure_labels": ["runtime_error", "non_termination"]
-                },
+                sanitized_raw_result={"failure_labels": ["runtime_error", "non_termination"]},
             ),
         ]
         cases_path = settings.benchmark_results_dir / str(run.run_id) / "cases.jsonl"

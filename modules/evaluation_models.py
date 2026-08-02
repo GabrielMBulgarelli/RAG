@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import Any, Literal, Self
+from collections.abc import Mapping, Sequence
+from typing import Literal, Self
 
 from pydantic import BaseModel, Field, JsonValue, model_validator
 
@@ -21,6 +21,7 @@ SystemName = Literal[
 ]
 MetricStatus = Literal["measured", "not_applicable", "no_eligible_cases"]
 EvaluationResultKind = Literal["standard_benchmark", "custom_evaluation"]
+EvaluationSummary = Mapping[str, object]
 RETRIEVAL_SYSTEMS: tuple[SystemName, ...] = ("dense", "bm25", "hybrid")
 FIXED_RAG_SYSTEMS: tuple[SystemName, ...] = ("dense-rag", "bm25-rag", "hybrid-rag")
 FULL_RAG_SYSTEM: SystemName = "full-rag"
@@ -81,19 +82,11 @@ FAILURE_ORDER = (
 MULTIHOP_ROOT = PROJECT_ROOT / "evals" / "multihop"
 
 
-def is_complete_full_rag_benchmark_artifact(
-    summary: dict[str, Any],
-    results: Sequence[CaseResult],
-) -> bool:
-    """Return whether an artifact contains the complete Full RAG Benchmark."""
-    configuration = summary.get("configuration")
+def _has_canonical_configuration(configuration: object) -> bool:
     if not isinstance(configuration, dict):
         return False
     systems = configuration.get("systems")
     if not isinstance(systems, list):
-        return False
-    case_ids = summary.get("case_ids")
-    if not isinstance(case_ids, list) or not all(isinstance(case_id, str) for case_id in case_ids):
         return False
     expected_configuration = {
         "dataset_name": STANDARD_BENCHMARK_DATASET,
@@ -111,36 +104,56 @@ def is_complete_full_rag_benchmark_artifact(
         "subquery_limit": CANONICAL_SUBQUERY_LIMIT,
         "case_timeout_seconds": CANONICAL_REQUEST_TIMEOUT_SECONDS,
     }
-    if any(
-        configuration.get(name) != expected for name, expected in expected_configuration.items()
-    ):
-        return False
+    return (
+        len(systems) == len(SYSTEMS)
+        and set(systems) == set(SYSTEMS)
+        and all(
+            configuration.get(name) == expected for name, expected in expected_configuration.items()
+        )
+    )
+
+
+def _has_canonical_results(results: Sequence[CaseResult]) -> bool:
     expected_pairs = {
         (case_id, system) for case_id in CANONICAL_BENCHMARK_CASE_IDS for system in SYSTEMS
     }
     actual_pairs = {(item.case_id, item.system) for item in results}
     return (
-        summary.get("benchmark_name") == "full_rag_benchmark"
-        and len(systems) == len(SYSTEMS)
-        and set(systems) == set(SYSTEMS)
-        and len(case_ids) == len(CANONICAL_BENCHMARK_CASE_IDS)
-        and set(case_ids) == set(CANONICAL_BENCHMARK_CASE_IDS)
-        and summary.get("expected_result_count") == CANONICAL_BENCHMARK_RESULT_COUNT
-        and summary.get("completed_result_count") == CANONICAL_BENCHMARK_RESULT_COUNT
-        and len(results) == CANONICAL_BENCHMARK_RESULT_COUNT
+        len(results) == CANONICAL_BENCHMARK_RESULT_COUNT
         and len(actual_pairs) == CANONICAL_BENCHMARK_RESULT_COUNT
         and actual_pairs == expected_pairs
     )
 
 
+def is_complete_full_rag_benchmark_artifact(
+    *,
+    summary: EvaluationSummary,
+    results: Sequence[CaseResult],
+) -> bool:
+    """Return whether an artifact contains the complete Full RAG Benchmark."""
+    case_ids = summary.get("case_ids")
+    if not isinstance(case_ids, list) or not all(isinstance(case_id, str) for case_id in case_ids):
+        return False
+    return (
+        summary.get("benchmark_name") == "full_rag_benchmark"
+        and _has_canonical_configuration(summary.get("configuration"))
+        and len(case_ids) == len(CANONICAL_BENCHMARK_CASE_IDS)
+        and set(case_ids) == set(CANONICAL_BENCHMARK_CASE_IDS)
+        and summary.get("expected_result_count") == CANONICAL_BENCHMARK_RESULT_COUNT
+        and summary.get("completed_result_count") == CANONICAL_BENCHMARK_RESULT_COUNT
+        and _has_canonical_results(results)
+    )
+
+
 def evaluation_result_kind(
-    summary: dict[str, Any],
+    *,
+    summary: EvaluationSummary,
     results: Sequence[CaseResult],
 ) -> EvaluationResultKind:
     """Classify complete Full RAG Benchmark artifacts and custom evaluations."""
     return (
         "standard_benchmark"
-        if is_complete_full_rag_benchmark_artifact(summary, results)
+        if is_complete_full_rag_benchmark_artifact(summary=summary, results=results)
         else "custom_evaluation"
     )
 

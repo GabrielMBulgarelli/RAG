@@ -608,24 +608,24 @@ npm --prefix frontend ci
 npm --prefix frontend run build
 ```
 
-- [ ] Start the production FastAPI application and open the served React build.
-- [ ] Load `qwen3.5:9b`.
-- [ ] Upload and index a real PDF or TXT document.
-- [ ] Ask a grounded question and inspect sources and trace.
-- [ ] Run all seven systems over the exact 20 canonical cases.
-- [ ] Confirm exactly 140 persisted case-system rows and all aggregate sections.
-- [ ] Inspect one successful case and one expectation failure.
-- [ ] Inspect one runtime failure if the run produces one; record “none produced” otherwise.
-- [ ] Download and inspect all four artifact files.
-- [ ] Restart the application and reopen the completed result.
-- [ ] Confirm diagnostics see that same completed result.
-- [ ] Start another run, request cancellation during a model call, and verify:
+- [x] Start the production FastAPI application and open the served React build.
+- [x] Load `qwen3.5:9b`.
+- [x] Upload and index a real PDF or TXT document.
+- [x] Ask a grounded question and inspect sources and trace.
+- [x] Run all seven systems over the exact 20 canonical cases.
+- [x] Confirm exactly 140 persisted case-system rows and all aggregate sections.
+- [x] Inspect one successful case and one expectation failure.
+- [x] Inspect one runtime failure if the run produces one; record “none produced” otherwise.
+- [x] Download and inspect all four artifact files.
+- [x] Restart the application and reopen the completed result.
+- [x] Confirm diagnostics see that same completed result.
+- [x] Start another run, request cancellation during a model call, and verify:
   - the active request finishes or times out;
   - no additional case/model call starts;
   - querying stays disabled until terminal cancellation;
   - the cancelled run remains inspectable;
   - the cancelled run is not latest completed.
-- [ ] Record in a tracked validation document:
+- [x] Record in a tracked validation document:
   - total duration;
   - per-system duration;
   - runtime-error count;
@@ -633,7 +633,7 @@ npm --prefix frontend run build
   - Ollama version;
   - model versions/digests;
   - tested git commit.
-- [ ] Commit the validation record:
+- [x] Commit the validation record:
 
 ```powershell
 git add docs

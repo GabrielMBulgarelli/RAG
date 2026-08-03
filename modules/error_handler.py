@@ -3,6 +3,8 @@ from collections.abc import Callable
 from functools import wraps
 from typing import ParamSpec, TypedDict, TypeVar
 
+from modules.config import Settings, config
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -28,13 +30,15 @@ def _connection_error() -> ErrorAnalysis:
     }
 
 
-def _model_error() -> ErrorAnalysis:
+def _model_error(message: str, settings: Settings) -> ErrorAnalysis:
+    embedding_missing = settings.embedding_model.lower() in message or "embedding" in message
+    model_kind = "embedding" if embedding_missing else "chat"
+    model_name = settings.embedding_model if embedding_missing else settings.llm_model
     return {
-        "message": "Required model not found",
+        "message": f"Required {model_kind} model not found",
         "type": "MODEL_ERROR",
         "suggestions": [
-            "Pull the required model: 'ollama pull llama3.1'",
-            "Pull embedding model: 'ollama pull nomic-embed-text'",
+            f"Pull the {model_kind} model: 'ollama pull {model_name}'",
             "Check available models: 'ollama list'",
         ],
     }
@@ -52,12 +56,12 @@ def _file_error() -> ErrorAnalysis:
     }
 
 
-def _vector_error() -> ErrorAnalysis:
+def _vector_error(settings: Settings) -> ErrorAnalysis:
     return {
         "message": "Vector database error",
         "type": "VECTOR_DB_ERROR",
         "suggestions": [
-            "Delete and recreate the chroma_db directory",
+            f"Delete and recreate the '{settings.chroma_dir}' directory",
             "Check if ChromaDB is properly installed",
             "Ensure embeddings are generated correctly",
         ],
@@ -111,14 +115,18 @@ def handle_errors(func: Callable[P, R]) -> Callable[P, R]:
     return wrapper
 
 
-def analyze_error(error: Exception) -> ErrorAnalysis:
+def analyze_error(error: Exception, settings: Settings | None = None) -> ErrorAnalysis:
     """Analyze error and provide helpful suggestions"""
     message = str(error).lower()
+    active_settings = settings or config
     classifiers: tuple[tuple[Callable[[str], bool], Callable[[], ErrorAnalysis]], ...] = (
         (lambda text: "connection" in text and "ollama" in text, _connection_error),
-        (_is_model_error, _model_error),
+        (_is_model_error, lambda: _model_error(message, active_settings)),
         (lambda text: "no such file" in text or "sources" in text, _file_error),
-        (lambda text: "chroma" in text or "vector" in text, _vector_error),
+        (
+            lambda text: "chroma" in text or "vector" in text,
+            lambda: _vector_error(active_settings),
+        ),
     )
     for matches, analysis in classifiers:
         if matches(message):

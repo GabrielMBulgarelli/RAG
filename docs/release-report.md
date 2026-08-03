@@ -1,11 +1,10 @@
 # Release Report
 
-## Completion record
+## Recorded scope
 
-This is the sole comprehensive completion record for the React/FastAPI release
-validated on August 1, 2026. It consolidates the final implementation outcomes,
-release gates, responsive evidence, and local-runtime qualification. Current
-behavioural requirements remain authoritative in
+This report records the React/FastAPI implementation outcomes, verification
+gates, responsive evidence, and local-runtime qualification validated on August
+1, 2026. Current behavioural requirements remain authoritative in
 [acceptance criteria](acceptance-criteria.md).
 
 ## Delivered outcomes
@@ -67,16 +66,14 @@ baselines enforced by the test suite.
 
 ## Live local-model evidence
 
-The scoped [live Ollama validation](live-ollama-validation.md) records the
-real local environment and a complete 140-pair benchmark execution. It used
-Ollama 0.31.2 and `qwen3.5:9b`, retained persisted result evidence, and found no
-source-code defect blocking that workflow. The live record complements this
-release report; it is not a second repository-wide completion record.
+A local Ollama environment completed seven systems across 20 cases, retaining
+persisted result evidence. The run was limited to one local model and hardware
+environment; model output and request latency produced the qualifications
+recorded in the detailed [live validation evidence](evidence/live-ollama-validation.md).
 
 ## Qualification
 
 All evidence above was produced locally. It establishes the repository state
-and local runtime behaviour observed on August 1, 2026; it does not claim that a
-remote CI service re-ran the final documentation commits. Model-dependent
-results remain subject to the hardware and runtime limits described in
+and local runtime behaviour observed on August 1, 2026. Model-dependent results
+remain subject to the hardware and runtime limits described in
 [benchmark methodology](benchmark-methodology.md).

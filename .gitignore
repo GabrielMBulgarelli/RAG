@@ -14,17 +14,13 @@ venv/
 env/
 .venv/
 
-# ChromaDB
-chroma_db/
+# Runtime data
 data/*
 !data/.gitkeep
 
 # IDE
 .vscode/
 .idea/
-.codex/
-.worktrees/
-.superpowers/
 
 # Logs
 logs/
@@ -34,15 +30,6 @@ logs/
 /evals/*
 !/evals/mvp_cases.jsonl
 /evals/results/
-
-# Agent project notes
-/ACCEPTANCE_CRITERIA.md
-/CODEX.md
-/GITIGNORE_ADDITIONS.md
-/IMPLEMENTATION_PLAN.md
-/REFERENCE_GUIDE.md
-/REQUIREMENTS.md
-/START_CODEX.md
 
 # Documentation outputs
 /docs/

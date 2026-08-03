@@ -34,7 +34,6 @@ dev = [
 [tool.ruff]
 target-version = "py312"
 line-length = 100
-exclude = ["references"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
@@ -45,22 +44,16 @@ extends = ["strict"]
 baseline = "lanorme-baseline.json"
 exclude = [
     ".cache/**",
-    ".codex/**",
     ".coverage",
     ".git/**",
-    ".worktrees/**",
-    ".worktrees\\**",
     ".mypy_cache/**",
     ".pytest_cache/**",
     ".ruff_cache/**",
-    ".superpowers/**",
-    ".superpowers\\**",
     ".venv/**",
     "**/__pycache__/**",
     "data/chroma/**",
     "evals/results/**",
     "evals/runtime/**",
-    "references/**",
 ]
 
 [tool.lanorme.stray_artifacts]
@@ -70,7 +63,6 @@ exclude = ["output"]
 pythonVersion = "3.12"
 typeCheckingMode = "basic"
 include = ["modules", "tests"]
-exclude = ["references"]
 venvPath = "."
 venv = ".venv"
 

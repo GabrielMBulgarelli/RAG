@@ -5,9 +5,9 @@
 This project is a local, desktop-first Retrieval-Augmented Generation workbench
 for importing PDF and TXT documents, asking questions with cited evidence,
 comparing retrieval and answer-generation systems, and inspecting how each
-result was produced. It is also a reproducible engineering portfolio: the
-product exposes operational state, evaluation evidence, and deliberate limits
-instead of presenting only a polished answer surface.
+result was produced. The product exposes operational state, evaluation
+evidence, and deliberate limits instead of presenting only a polished answer
+surface.
 
 ## Users and workflows
 

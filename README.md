@@ -1,7 +1,5 @@
 # Local Document RAG
 
-## Project description
-
 Local Document RAG is a local-first React and FastAPI workbench for turning PDF
 and TXT documents into inspectable, cited answers. It combines hybrid retrieval,
 bounded multi-step orchestration, evidence grading, citation validation, and
@@ -10,10 +8,6 @@ machine.
 
 The same workspace includes a reproducible seven-system benchmark for comparing
 retrieval and answer workflows on a fixed MultiHopRAG development selection.
-See the [product definition](docs/product.md) for its users, workflows,
-capabilities, readiness states, and deliberate boundaries.
-
-## Screenshot
 
 ![Local Document RAG desktop workspace](docs/assets/dashboard/ask-documents.png)
 
@@ -121,15 +115,27 @@ case-system results, and durable events under
 [benchmark methodology](docs/benchmark-methodology.md) defines the dataset,
 systems, execution rules, metrics, failure handling, and validity limits.
 
-A real local-Ollama run exercised the production build, complete benchmark
-lifecycle, persistence, downloads, and cooperative cancellation without
-simulated model responses. Its environment, results, and limitations remain in
-the scoped [live validation record](docs/live-ollama-validation.md).
+A local Ollama environment completed all seven systems across 20 cases. The run
+exercised the production build, persistence, downloads, and cancellation. Its
+model-output, timeout, hardware, and single-environment limits are documented in
+the detailed [live validation evidence](docs/evidence/live-ollama-validation.md).
+
+### Benchmark workspace showcase
+
+The benchmark workspace keeps the evaluation loop inspectable from start to
+finish: follow live progress across systems and cases, compare aggregate
+results, and open individual cases to review their evidence and outputs.
+
+![Benchmark run progress across systems and cases](docs/assets/workspace/benchmark-progress.png)
+
+![Benchmark aggregate results and system comparison](docs/assets/workspace/benchmark-results.png)
+
+![Benchmark case inspection with evidence and outputs](docs/assets/workspace/case-inspection.png)
 
 ## Architecture
 
 ```mermaid
-flowchart LR
+flowchart TD
     U["Browser user"] --> R["React workspace"]
     R -->|"Typed /api requests"| F["FastAPI routes"]
     F --> A["Application services"]
@@ -150,7 +156,9 @@ React owns interaction state and typed API consumption. FastAPI owns HTTP
 contracts and lifecycle. Application services coordinate documents,
 conversations, operations, and benchmark presentation; the bounded RAG graph
 owns retrieval and answer decisions. Chroma, manifests, and benchmark artifacts
-provide distinct persistence boundaries. The
+provide distinct persistence boundaries. See the
+[product definition](docs/product.md) for its users, workflows, capabilities,
+readiness states, and deliberate boundaries. The
 [architecture document](docs/architecture.md) records component ownership,
 data flows, coordination, cancellation, and design decisions.
 
@@ -208,9 +216,9 @@ is listed in the [roadmap](docs/roadmap.md).
   design decisions.
 - [Benchmark methodology](docs/benchmark-methodology.md): dataset, systems,
   metrics, execution rules, and validity.
-- [Live Ollama validation](docs/live-ollama-validation.md): scoped local-model
+- [Live Ollama validation](docs/evidence/live-ollama-validation.md): detailed local-model
   runtime evidence.
-- [Release report](docs/release-report.md): completion and final verification
+- [Release report](docs/release-report.md): delivered outcomes and verification
   evidence.
 - [Roadmap](docs/roadmap.md): current evidence-backed development priorities.
 
